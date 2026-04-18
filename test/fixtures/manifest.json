@@ -1,0 +1,872 @@
+{
+  "happy": {
+    "name": "happy"
+  },
+  "quote": {
+    "name": "quote"
+  },
+  "notrim": {
+    "name": "notrim"
+  },
+  "trim": {
+    "name": "trim",
+    "csvFile": "notrim",
+    "opt": {
+      "trim": true
+    }
+  },
+  "papa-one-row": {
+    "name": "papa-One row",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-two-rows": {
+    "name": "papa-Two rows",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-three-rows": {
+    "name": "papa-Three rows",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-whitespace-at-edges-of-unquoted-field": {
+    "name": "papa-Whitespace at edges of unquoted field",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field": {
+    "name": "papa-Quoted field",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-with-extra-whitespace-on-edges": {
+    "name": "papa-Quoted field with extra whitespace on edges",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-with-delimiter": {
+    "name": "papa-Quoted field with delimiter",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-with-line-break": {
+    "name": "papa-Quoted field with line break",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-fields-with-line-breaks": {
+    "name": "papa-Quoted fields with line breaks",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-fields-at-end-of-row-with-delimiter-and-line-break": {
+    "name": "papa-Quoted fields at end of row with delimiter and line break",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-with-escaped-quotes": {
+    "name": "papa-Quoted field with escaped quotes",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-with-escaped-quotes-at-boundaries": {
+    "name": "papa-Quoted field with escaped quotes at boundaries",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-unquoted-field-with-quotes-at-end-of-field": {
+    "name": "papa-Unquoted field with quotes at end of field",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-with-quotes-around-delimiter": {
+    "name": "papa-Quoted field with quotes around delimiter",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-with-quotes-on-right-side-of-delimiter": {
+    "name": "papa-Quoted field with quotes on right side of delimiter",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-with-quotes-on-left-side-of-delimiter": {
+    "name": "papa-Quoted field with quotes on left side of delimiter",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-with-5-quotes-in-a-row-and-a-delimiter-in-there-too": {
+    "name": "papa-Quoted field with 5 quotes in a row and a delimiter in there: too",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-with-whitespace-around-quotes": {
+    "name": "papa-Quoted field with whitespace around quotes",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-misplaced-quotes-in-data-not-as-opening-quotes": {
+    "name": "papa-Misplaced quotes in data: not as opening quotes",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-has-no-closing-quote": {
+    "name": "papa-Quoted field has no closing quote",
+    "opt": {
+      "header": false,
+      "object": false
+    },
+    "err": "unterminated_string"
+  },
+  "papa-quoted-field-has-invalid-trailing-quote-after-delimiter-with-a-valid-closer": {
+    "name": "papa-Quoted field has invalid trailing quote after delimiter with a valid closer",
+    "opt": {
+      "header": false,
+      "object": false
+    },
+    "err": "unexpected"
+  },
+  "papa-quoted-field-has-invalid-trailing-quote-after-delimiter": {
+    "name": "papa-Quoted field has invalid trailing quote after delimiter",
+    "opt": {
+      "header": false,
+      "object": false
+    },
+    "err": "unexpected"
+  },
+  "papa-quoted-field-has-invalid-trailing-quote-before-delimiter": {
+    "name": "papa-Quoted field has invalid trailing quote before delimiter",
+    "opt": {
+      "header": false,
+      "object": false
+    },
+    "err": "unexpected"
+  },
+  "papa-quoted-field-has-invalid-trailing-quote-after-new-line": {
+    "name": "papa-Quoted field has invalid trailing quote after new line",
+    "opt": {
+      "header": false,
+      "object": false
+    },
+    "err": "unexpected"
+  },
+  "papa-quoted-field-has-valid-trailing-quote-via-delimiter": {
+    "name": "papa-Quoted field has valid trailing quote via delimiter",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-has-valid-trailing-quote-via-n": {
+    "name": "papa-Quoted field has valid trailing quote via \\n",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-has-valid-trailing-quote-via-eof": {
+    "name": "papa-Quoted field has valid trailing quote via EOF",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-contains-delimiters-and-n-with-valid-trailing-quote": {
+    "name": "papa-Quoted field contains delimiters and \\n with valid trailing quote",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-line-starts-with-quoted-field": {
+    "name": "papa-Line starts with quoted field",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-line-starts-with-unquoted-empty-field": {
+    "name": "papa-Line starts with unquoted empty field",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-line-ends-with-quoted-field": {
+    "name": "papa-Line ends with quoted field",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-line-ends-with-quoted-field-first-field-of-next-line-is-empty-n": {
+    "name": "papa-Line ends with quoted field: first field of next line is empty, \\n",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-at-end-of-row-but-not-at-eof-has-quotes": {
+    "name": "papa-Quoted field at end of row (but not at EOF) has quotes",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-empty-quoted-field-at-eof-is-empty": {
+    "name": "papa-Empty quoted field at EOF is empty",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-multiple-consecutive-empty-fields": {
+    "name": "papa-Multiple consecutive empty fields",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-empty-input-string": {
+    "name": "papa-Empty input string",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-input-is-just-the-delimiter-2-empty-fields": {
+    "name": "papa-Input is just the delimiter (2 empty fields)",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-input-is-just-empty-fields": {
+    "name": "papa-Input is just empty fields",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-input-is-just-a-string-a-single-field": {
+    "name": "papa-Input is just a string (a single field)",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-commented-line-at-beginning": {
+    "name": "papa-Commented line at beginning",
+    "opt": {
+      "header": false,
+      "object": false,
+      "comment": true
+    }
+  },
+  "papa-commented-line-in-middle": {
+    "name": "papa-Commented line in middle",
+    "opt": {
+      "header": false,
+      "object": false,
+      "comment": true
+    }
+  },
+  "papa-commented-line-at-end": {
+    "name": "papa-Commented line at end",
+    "opt": {
+      "header": false,
+      "object": false,
+      "comment": true
+    }
+  },
+  "papa-two-comment-lines-consecutively": {
+    "name": "papa-Two comment lines consecutively",
+    "opt": {
+      "header": false,
+      "object": false,
+      "comment": true
+    }
+  },
+  "papa-two-comment-lines-consecutively-at-end-of-file": {
+    "name": "papa-Two comment lines consecutively at end of file",
+    "opt": {
+      "header": false,
+      "object": false,
+      "comment": true
+    }
+  },
+  "papa-three-comment-lines-consecutively-at-beginning-of-file": {
+    "name": "papa-Three comment lines consecutively at beginning of file",
+    "opt": {
+      "header": false,
+      "object": false,
+      "comment": true
+    }
+  },
+  "papa-entire-file-is-comment-lines": {
+    "name": "papa-Entire file is comment lines",
+    "opt": {
+      "header": false,
+      "object": false,
+      "comment": true
+    }
+  },
+  "papa-comment-with-non-default-character": {
+    "name": "papa-Comment with non-default character",
+    "opt": {
+      "header": false,
+      "object": false,
+      "comment": true
+    },
+    "jsonicOpt": {
+      "comment": {
+        "def": {
+          "hash": {
+            "start": "!"
+          }
+        }
+      }
+    }
+  },
+  "papa-bad-comments-value-specified": {
+    "name": "papa-Bad comments value specified",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-multi-character-comment-string": {
+    "name": "papa-Multi-character comment string",
+    "opt": {
+      "header": false,
+      "object": false,
+      "comment": true
+    },
+    "jsonicOpt": {
+      "comment": {
+        "def": {
+          "hash": {
+            "start": "=N("
+          }
+        }
+      }
+    }
+  },
+  "papa-input-with-only-a-commented-line": {
+    "name": "papa-Input with only a commented line",
+    "opt": {
+      "header": false,
+      "object": false,
+      "comment": true
+    }
+  },
+  "papa-jsonic-input-with-only-a-commented-line-and-blank-line-after": {
+    "name": "papa-jsonic-Input with only a commented line and blank line after",
+    "opt": {
+      "header": false,
+      "object": false,
+      "comment": true
+    }
+  },
+  "papa-input-with-only-a-commented-line-without-comments-enabled": {
+    "name": "papa-Input with only a commented line: without comments enabled",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-input-without-comments-with-line-starting-with-whitespace": {
+    "name": "papa-Input without comments with line starting with whitespace",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-multiple-rows-one-column-no-delimiter-found": {
+    "name": "papa-Multiple rows: one column (no delimiter found)",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-jsonic-one-column-input-with-empty-fields": {
+    "name": "papa-jsonic-One column input with empty fields",
+    "opt": {
+      "header": false,
+      "object": false,
+      "record": {
+        "empty": true
+      }
+    }
+  },
+  "papa-two-rows-just-r": {
+    "name": "papa-Two rows: just \\r",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-two-rows-r-n": {
+    "name": "papa-Two rows: \\r\\n",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-with-r-n": {
+    "name": "papa-Quoted field with \\r\\n",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-with-r": {
+    "name": "papa-Quoted field with \\r",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-field-with-n": {
+    "name": "papa-Quoted field with \\n",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-quoted-fields-with-spaces-between-closing-quote-and-next-delimiter": {
+    "name": "papa-Quoted fields with spaces between closing quote and next delimiter",
+    "opt": {
+      "header": false,
+      "object": false,
+      "trim": true
+    }
+  },
+  "papa-quoted-fields-with-spaces-between-closing-quote-and-next-new-line": {
+    "name": "papa-Quoted fields with spaces between closing quote and next new line",
+    "opt": {
+      "header": false,
+      "object": false,
+      "trim": true
+    }
+  },
+  "papa-quoted-fields-with-spaces-after-closing-quote": {
+    "name": "papa-Quoted fields with spaces after closing quote",
+    "opt": {
+      "header": false,
+      "object": false,
+      "trim": true
+    }
+  },
+  "papa-misplaced-quotes-in-data-twice-not-as-opening-quotes": {
+    "name": "papa-Misplaced quotes in data twice: not as opening quotes",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-header-row-with-one-row-of-data": {
+    "name": "papa-Header row with one row of data",
+    "opt": {
+      "header": true
+    }
+  },
+  "papa-header-row-only": {
+    "name": "papa-Header row only"
+  },
+  "papa-row-with-too-few-fields": {
+    "name": "papa-Row with too few fields",
+    "opt": {
+      "field": {
+        "exact": true
+      }
+    },
+    "err": "csv_missing_field"
+  },
+  "papa-row-with-too-many-fields": {
+    "name": "papa-Row with too many fields",
+    "opt": {
+      "field": {
+        "exact": true
+      }
+    },
+    "err": "csv_extra_field"
+  },
+  "papa-row-with-enough-fields-but-blank-field-in-the-begining": {
+    "name": "papa-Row with enough fields but blank field in the begining",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-row-with-enough-fields-but-blank-field-in-the-begining-using-headers": {
+    "name": "papa-Row with enough fields but blank field in the begining using headers"
+  },
+  "papa-row-with-enough-fields-but-blank-field-at-end": {
+    "name": "papa-Row with enough fields but blank field at end"
+  },
+  "papa-tab-delimiter": {
+    "name": "papa-Tab delimiter",
+    "opt": {
+      "header": false,
+      "object": false,
+      "field": {
+        "separation": "\t"
+      }
+    }
+  },
+  "papa-pipe-delimiter": {
+    "name": "papa-Pipe delimiter",
+    "opt": {
+      "header": false,
+      "object": false,
+      "field": {
+        "separation": "|"
+      }
+    }
+  },
+  "papa-ascii-30-delimiter": {
+    "name": "papa-ASCII 30 delimiter",
+    "opt": {
+      "header": false,
+      "object": false,
+      "field": {
+        "separation": "\u001e"
+      }
+    }
+  },
+  "papa-ascii-31-delimiter": {
+    "name": "papa-ASCII 31 delimiter",
+    "opt": {
+      "header": false,
+      "object": false,
+      "field": {
+        "separation": "\u001f"
+      }
+    }
+  },
+  "papa-multi-character-delimiter": {
+    "name": "papa-Multi-character delimiter",
+    "opt": {
+      "header": false,
+      "object": false,
+      "field": {
+        "separation": ", "
+      }
+    }
+  },
+  "papa-multi-character-delimiter-length-2-with-quoted-field": {
+    "name": "papa-Multi-character delimiter (length 2) with quoted field",
+    "opt": {
+      "header": false,
+      "object": false,
+      "field": {
+        "separation": ", "
+      }
+    }
+  },
+  "papa-dynamic-typing-converts-boolean-literals": {
+    "name": "papa-Dynamic typing converts boolean literals",
+    "opt": {
+      "header": false,
+      "object": false,
+      "value": true
+    },
+    "jsonicOpt": {
+      "value": {
+        "def": {
+          "TRUE": {
+            "val": true
+          },
+          "FALSE": {
+            "val": false
+          }
+        }
+      }
+    }
+  },
+  "papa-dynamic-typing-doesn-t-convert-other-types": {
+    "name": "papa-Dynamic typing doesn't convert other types",
+    "opt": {
+      "header": false,
+      "object": false,
+      "value": true
+    },
+    "jsonicOpt": {
+      "value": {
+        "def": {
+          "null": null
+        }
+      }
+    }
+  },
+  "papa-jsonic-blank-line-at-beginning": {
+    "name": "papa-jsonic-Blank line at beginning",
+    "opt": {
+      "header": false,
+      "object": false,
+      "record": {
+        "empty": true
+      }
+    }
+  },
+  "papa-jsonic-blank-line-in-middle": {
+    "name": "papa-jsonic-Blank line in middle",
+    "opt": {
+      "header": false,
+      "object": false,
+      "record": {
+        "empty": true
+      }
+    }
+  },
+  "papa-jsonic-blank-lines-at-end": {
+    "name": "papa-jsonic-Blank lines at end",
+    "opt": {
+      "header": false,
+      "object": false,
+      "record": {
+        "empty": true
+      }
+    }
+  },
+  "papa-jsonic-blank-line-in-middle-with-whitespace": {
+    "name": "papa-jsonic-Blank line in middle with whitespace",
+    "opt": {
+      "header": false,
+      "object": false,
+      "record": {
+        "empty": true
+      }
+    }
+  },
+  "papa-first-field-of-a-line-is-empty": {
+    "name": "papa-First field of a line is empty",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-last-field-of-a-line-is-empty": {
+    "name": "papa-Last field of a line is empty",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-other-fields-are-empty": {
+    "name": "papa-Other fields are empty",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-empty-input-string-2": {
+    "name": "papa-Empty input string 2",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-input-is-just-the-delimiter-2-empty-fields-2": {
+    "name": "papa-Input is just the delimiter (2 empty fields) 2",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-input-is-just-a-string-a-single-field-2": {
+    "name": "papa-Input is just a string (a single field) 2",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-empty-lines": {
+    "name": "papa-Empty lines",
+    "opt": {
+      "header": false,
+      "object": false,
+      "record": {
+        "empty": true
+      }
+    }
+  },
+  "papa-skip-empty-lines": {
+    "name": "papa-Skip empty lines",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-skip-empty-lines-with-newline-at-end-of-input": {
+    "name": "papa-Skip empty lines: with newline at end of input",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-skip-empty-lines-with-empty-input": {
+    "name": "papa-Skip empty lines: with empty input",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-skip-empty-lines-with-first-line-only-whitespace": {
+    "name": "papa-Skip empty lines: with first line only whitespace",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-single-quote-as-quote-character": {
+    "name": "papa-Single quote as quote character",
+    "opt": {
+      "header": false,
+      "object": false,
+      "string": {
+        "quote": "'"
+      }
+    }
+  },
+  "papa-custom-escape-character-in-the-middle": {
+    "name": "papa-Custom escape character in the middle",
+    "opt": {
+      "header": false,
+      "object": false,
+      "string": {
+        "csv": false
+      }
+    }
+  },
+  "papa-custom-escape-character-at-the-end": {
+    "name": "papa-Custom escape character at the end",
+    "opt": {
+      "header": false,
+      "object": false,
+      "string": {
+        "csv": false
+      }
+    }
+  },
+  "papa-header-row-with-preceding-comment": {
+    "name": "papa-Header row with preceding comment",
+    "opt": {
+      "comment": true
+    }
+  },
+  "papa-carriage-return-in-header-inside-quotes-with-line-feed-endings": {
+    "name": "papa-Carriage return in header inside quotes: with line feed endings",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-using-r-n-endings-uses-r-n-linebreak": {
+    "name": "papa-Using \\r\\n endings uses \\r\\n linebreak",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-using-n-endings-uses-n-linebreak": {
+    "name": "papa-Using \\n endings uses \\n linebreak",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-using-r-n-endings-with-r-n-in-header-field-uses-r-n-linebreak": {
+    "name": "papa-Using \\r\\n endings with \\r\\n in header field uses \\r\\n linebreak",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-using-r-n-endings-with-n-in-header-field-uses-r-n-linebreak": {
+    "name": "papa-Using \\r\\n endings with \\n in header field uses \\r\\n linebreak",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-using-r-n-endings-with-n-in-header-field-with-skip-empty-lines-uses-r-n-linebreak": {
+    "name": "papa-Using \\r\\n endings with \\n in header field with skip empty lines uses \\r\\n linebreak",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-using-n-endings-with-r-n-in-header-field-uses-n-linebreak": {
+    "name": "papa-Using \\n endings with \\r\\n in header field uses \\n linebreak",
+    "opt": {
+      "header": false,
+      "object": false
+    }
+  },
+  "papa-using-reserved-regex-character-as-quote-character": {
+    "name": "papa-Using reserved regex character | as quote character",
+    "opt": {
+      "header": false,
+      "object": false,
+      "string": {
+        "quote": "|"
+      }
+    }
+  },
+  "papa-quoted-fields-with-spaces-between-closing-quote-and-next-delimiter-and-contains-delimiter": {
+    "name": "papa-Quoted fields with spaces between closing quote and next delimiter and contains delimiter",
+    "opt": {
+      "header": false,
+      "object": false,
+      "trim": true
+    }
+  },
+  "papa-quoted-fields-with-spaces-between-closing-quote-and-newline-and-contains-newline": {
+    "name": "papa-Quoted fields with spaces between closing quote and newline and contains newline",
+    "opt": {
+      "header": false,
+      "object": false,
+      "trim": true
+    }
+  }
+}

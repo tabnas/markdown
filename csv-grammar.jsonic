@@ -1,0 +1,52 @@
+# CSV Grammar Definition
+# Parsed by a standard Jsonic instance and passed to jsonic.grammar()
+# Function references (@ prefixed) are resolved against the refs map
+#
+# Token naming:
+#   #LN - line ending (removed from per-instance IGNORE set)
+#   #SP - whitespace  (removed from per-instance IGNORE set in strict mode)
+#   #CA - comma / field separator
+#   #ZZ - end of input
+#   #VAL - token set: text, string, number, value literals
+#
+# Rules csv, newline, record, text are fully defined here.
+# Rules list, elem, val are modified in code (strict mode defines from scratch;
+# non-strict prepends to existing defaults to preserve JSON parsing).
+
+{
+  rule: csv: open: [
+    { s: '#ZZ' }
+    { s: '#LN' p: newline c: '@not-record-empty' }
+    { p: record }
+  ]
+
+  rule: newline: open: [
+    { s: '#LN #LN' r: newline }
+    { s: '#LN' r: newline }
+    { s: '#ZZ' }
+    { r: record }
+  ]
+  rule: newline: close: [
+    { s: '#LN #LN' r: newline }
+    { s: '#LN' r: newline }
+    { s: '#ZZ' }
+    { r: record }
+  ]
+
+  rule: record: open: [
+    { p: list }
+  ]
+  rule: record: close: [
+    { s: '#ZZ' }
+    { s: '#LN #ZZ' b: 1 }
+    { s: '#LN' r: '@record-close-next' }
+  ]
+
+  rule: text: open: [
+    { s: ['#VAL' '#SP'] b: 1 r: text n: { text: 1 } g: 'csv,space,follows' a: '@text-follows' }
+    { s: ['#SP' '#VAL'] r: text n: { text: 1 } g: 'csv,space,leads' a: '@text-leads' }
+    { s: ['#SP' '#CA #LN #ZZ'] b: 1 n: { text: 1 } g: 'csv,end' a: '@text-end' }
+    { s: '#SP' n: { text: 1 } g: 'csv,space' a: '@text-space' p: '@text-space-push' }
+    {}
+  ]
+}
