@@ -10,7 +10,7 @@ import (
 	jsonic "github.com/jsonicjs/jsonic/go"
 )
 
-const Version = "0.1.3"
+const Version = "0.1.1"
 
 // --- BEGIN EMBEDDED markdown-grammar.jsonic ---
 const grammarText = `
