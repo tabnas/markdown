@@ -1,55 +1,62 @@
-# CSV plugin for Jsonic (TypeScript)
+# Markdown plugin for Jsonic (TypeScript)
 
-A Jsonic syntax plugin that parses CSV text into JavaScript arrays
+A Jsonic syntax plugin that parses Markdown text into JavaScript arrays
 of objects or arrays, with support for headers, quoted fields,
 custom delimiters, streaming, and strict/non-strict modes.
 
 ```bash
-npm install @jsonic/csv
+npm install @jsonic/markdown
 ```
 
 Requires `jsonic` >= 2 as a peer dependency.
 
+This guide follows the [Diataxis](https://diataxis.fr) framework:
+[tutorials](#tutorials) for first-time users, [how-to guides](#how-to-guides)
+for specific tasks, [explanation](#explanation) for background, and a
+[reference](#reference) for the API.
+
+For the Go version, see [markdown-go.md](markdown-go.md).
+
 
 ## Tutorials
 
-### Parse a basic CSV file
+### Parse a basic Markdown file
 
-Parse CSV text with a header row into an array of objects:
+Parse Markdown text with a header row into an array of objects:
 
 ```typescript
 import { Jsonic } from 'jsonic'
-import { Csv } from '@jsonic/csv'
+import { Markdown } from '@jsonic/markdown'
 
-const j = Jsonic.make().use(Csv)
+const j = Jsonic.make().use(Markdown)
 
 j("name,age\nAlice,30\nBob,25")
 // [{ name: 'Alice', age: '30' }, { name: 'Bob', age: '25' }]
 ```
 
-### Parse CSV without headers
+### Parse Markdown without headers
 
 Return rows as arrays instead of objects, with no header row:
 
 ```typescript
 import { Jsonic } from 'jsonic'
-import { Csv } from '@jsonic/csv'
+import { Markdown } from '@jsonic/markdown'
 
-const j = Jsonic.make().use(Csv, { header: false, object: false })
+const j = Jsonic.make().use(Markdown, { header: false, object: false })
 
 j("a,b,c\n1,2,3")
 // [['a', 'b', 'c'], ['1', '2', '3']]
 ```
 
-### Parse CSV with quoted fields
+### Parse Markdown with quoted fields
 
 Double-quoted fields handle commas, newlines, and escaped quotes:
 
 ```typescript
 import { Jsonic } from 'jsonic'
-import { Csv } from '@jsonic/csv'
+import { Markdown } from '@jsonic/markdown'
 
-const j = Jsonic.make().use(Csv)
+const j = Jsonic.make().use(Markdown)
 
 j('name,bio\nAlice,"Likes ""cats"" and dogs"\nBob,"Line1\nLine2"')
 // [
@@ -66,7 +73,7 @@ j('name,bio\nAlice,"Likes ""cats"" and dogs"\nBob,"Line1\nLine2"')
 Set `field.separation` to use a delimiter other than comma:
 
 ```typescript
-const j = Jsonic.make().use(Csv, {
+const j = Jsonic.make().use(Markdown, {
   field: { separation: '\t' }
 })
 
@@ -80,7 +87,7 @@ By default in strict mode, all values are strings. Enable `number`
 and `value` to parse numeric and boolean values:
 
 ```typescript
-const j = Jsonic.make().use(Csv, {
+const j = Jsonic.make().use(Markdown, {
   number: true,
   value: true,
 })
@@ -95,7 +102,7 @@ Enable `trim` to remove leading and trailing whitespace from field
 values:
 
 ```typescript
-const j = Jsonic.make().use(Csv, { trim: true })
+const j = Jsonic.make().use(Markdown, { trim: true })
 
 j("a , b \n 1 , 2 ")
 // [{ a: '1', b: '2' }]
@@ -109,7 +116,7 @@ storing them all in memory:
 ```typescript
 const records: any[] = []
 
-const j = Jsonic.make().use(Csv, {
+const j = Jsonic.make().use(Markdown, {
   stream: (what, record) => {
     if (what === 'record') records.push(record)
   },
@@ -122,11 +129,11 @@ j("a,b\n1,2\n3,4")
 
 ### Provide explicit field names
 
-Set `field.names` when the CSV has no header row but you want
+Set `field.names` when the input has no header row but you want
 object output with named fields:
 
 ```typescript
-const j = Jsonic.make().use(Csv, {
+const j = Jsonic.make().use(Markdown, {
   header: false,
   field: { names: ['x', 'y', 'z'] },
 })
@@ -141,7 +148,7 @@ Set `field.exact` to error when a row has more or fewer fields
 than the header:
 
 ```typescript
-const j = Jsonic.make().use(Csv, {
+const j = Jsonic.make().use(Markdown, {
   field: { exact: true },
 })
 
@@ -151,11 +158,11 @@ const j = Jsonic.make().use(Csv, {
 
 ### Use non-strict mode for embedded JSON
 
-Disable `strict` to allow Jsonic syntax inside CSV fields,
+Disable `strict` to allow Jsonic syntax inside fields,
 including JSON objects, arrays, and expressions:
 
 ```typescript
-const j = Jsonic.make().use(Csv, { strict: false })
+const j = Jsonic.make().use(Markdown, { strict: false })
 
 j("a,b\ntrue,[1,2]")
 // [{ a: true, b: [1, 2] }]
@@ -166,7 +173,7 @@ j("a,b\ntrue,[1,2]")
 Enable `comment` to skip lines starting with `#`:
 
 ```typescript
-const j = Jsonic.make().use(Csv, { comment: true })
+const j = Jsonic.make().use(Markdown, { comment: true })
 
 j("a,b\n# skip this\n1,2")
 // [{ a: '1', b: '2' }]
@@ -178,7 +185,7 @@ By default, blank lines are skipped. Set `record.empty` to
 preserve them as empty-field records:
 
 ```typescript
-const j = Jsonic.make().use(Csv, { record: { empty: true } })
+const j = Jsonic.make().use(Markdown, { record: { empty: true } })
 
 j("a\n1\n\n2")
 // [{ a: '1' }, { a: '' }, { a: '2' }]
@@ -189,10 +196,10 @@ j("a\n1\n\n2")
 
 ### Strict vs non-strict mode
 
-In **strict mode** (default), the CSV plugin disables Jsonic's
+In **strict mode** (default), the Markdown plugin disables Jsonic's
 built-in JSON parsing. All field values are treated as raw strings
 unless `number` or `value` options are enabled. This matches the
-behaviour of standard CSV parsers.
+behaviour of standard tabular text parsers.
 
 In **non-strict mode** (`strict: false`), the plugin preserves
 Jsonic's ability to parse JSON values. Fields can contain objects
@@ -202,7 +209,7 @@ using Jsonic syntax. Non-strict mode enables `trim`, `comment`, and
 
 ### How quoted fields work
 
-The plugin includes a custom CSV string matcher that handles the
+The plugin includes a custom Markdown string matcher that handles the
 RFC 4180 double-quote escaping convention:
 
 - A field wrapped in double quotes can contain commas, newlines,
@@ -213,14 +220,14 @@ RFC 4180 double-quote escaping convention:
 
 ## Reference
 
-### `Csv` (Plugin)
+### `Markdown` (Plugin)
 
-The plugin function. Register with `Jsonic.make().use(Csv, options)`.
+The plugin function. Register with `Jsonic.make().use(Markdown, options)`.
 
-### `CsvOptions`
+### `MarkdownOptions`
 
 ```typescript
-type CsvOptions = {
+type MarkdownOptions = {
   // Trim surrounding whitespace. Default: null (false in strict, true in non-strict)
   trim: boolean | null
 
@@ -242,7 +249,7 @@ type CsvOptions = {
   // Stream callback. Default: null
   stream: null | ((what: string, record?: Record<string, any> | Error) => void)
 
-  // Strict CSV mode (disables Jsonic syntax). Default: true
+  // Strict mode (disables Jsonic syntax). Default: true
   strict: boolean
 
   field: {
@@ -274,13 +281,13 @@ type CsvOptions = {
     // Quote character. Default: '"'
     quote: string
 
-    // Force CSV string mode (null=auto). Default: null
-    csv: null | boolean
+    // Force Markdown string mode (null=auto). Default: null
+    markdown: null | boolean
   }
 }
 ```
 
-### `buildCsvStringMatcher` (Function)
+### `buildMarkdownStringMatcher` (Function)
 
-Exported for advanced use. Creates the custom CSV double-quote
+Exported for advanced use. Creates the custom Markdown double-quote
 string matcher used internally by the plugin.

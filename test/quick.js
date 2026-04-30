@@ -1,22 +1,22 @@
 const { Jsonic } = require('@jsonic/jsonic-next')
 const { Debug } = require('@jsonic/jsonic-next/debug')
-const { Csv } = require('..')
+const { Markdown } = require('..')
 
 const tlog = []
 
 // const c0 = Jsonic.make()
 //       .use(Debug,{trace:true})
-//       .use(Csv,{comment:true,object:false,header:false})
+//       .use(Markdown,{comment:true,object:false,header:false})
 
 // const u0 = Jsonic.make()
 //       // .use(Debug,{trace:true})
-//       .use(Csv,{
+//       .use(Markdown,{
 //         strict:false,
 //       })
 
-const csv = Jsonic.make()
+const markdown = Jsonic.make()
   .use(Debug, { trace: true })
-  .use(Csv, {
+  .use(Markdown, {
     // line: {empty:true},
     // header: false,
     // object: false,
@@ -28,33 +28,33 @@ const csv = Jsonic.make()
   // .sub({lex:(t)=>console.log(t)})
   .sub({ lex: (t) => tlog.push(t) })
 
-// console.log(csv.options.tokenSet)
-// console.log(csv.internal().config.lex.match)
+// console.log(markdown.options.tokenSet)
+// console.log(markdown.internal().config.lex.match)
 
-// console.log(csv(`a,b
+// console.log(markdown(`a,b
 // 1,2,`,{xlog:-1}))
 
 console.log(
-  csv(
+  markdown(
     `a
 ,1`,
     { xlog: -1 },
   ),
 )
 
-// console.log(csv(`a,b
+// console.log(markdown(`a,b
 // 1, 2
 // 11 ,{22
 // 3 3, "a"
 // `,{xlog:-1}))
 
-// console.log(csv(`a,b
+// console.log(markdown(`a,b
 // 1,2
 // 3,"x""y"
 // 4,5
 // `,{xlog:-1}))
 
-// console.log(csv(`a,b
+// console.log(markdown(`a,b
 // 1, 2 3
 // 4,  5  6
 // 7,	8		9
@@ -63,7 +63,7 @@ console.log(
 
 // const u0 = Jsonic.make()
 //       .use(Debug,{trace:true})
-//       .use(Csv, {strict:false})
+//       .use(Markdown, {strict:false})
 
 // console.dir(u0(`a,b
 // 1 , 2
@@ -108,13 +108,13 @@ console.log(
 
 // `))
 
-// console.log(csv(`a,b
+// console.log(markdown(`a,b
 // A,B
 // #X
 
 // AA,BB`))
 
-// console.log(csv(`
+// console.log(markdown(`
 // #X
 // #XX
 // a,b
@@ -125,12 +125,12 @@ console.log(
 // #ZZ
 // `))
 
-// console.log(csv('\n'))
+// console.log(markdown('\n'))
 
-// console.log(csv('a,b\nA,"""B"'))
+// console.log(markdown('a,b\nA,"""B"'))
 
-// console.log(csv('true'))
+// console.log(markdown('true'))
 
-// console.log(csv('\na\n'))
+// console.log(markdown('\na\n'))
 
 // console.log(tlog)

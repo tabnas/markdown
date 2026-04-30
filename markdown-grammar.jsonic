@@ -1,4 +1,4 @@
-# CSV Grammar Definition
+# Markdown Grammar Definition
 # Parsed by a standard Jsonic instance and passed to jsonic.grammar()
 # Function references (@ prefixed) are resolved against the refs map
 #
@@ -9,12 +9,12 @@
 #   #ZZ - end of input
 #   #VAL - token set: text, string, number, value literals
 #
-# Rules csv, newline, record, text are fully defined here.
+# Rules markdown, newline, record, text are fully defined here.
 # Rules list, elem, val are modified in code (strict mode defines from scratch;
 # non-strict prepends to existing defaults to preserve JSON parsing).
 
 {
-  rule: csv: open: [
+  rule: markdown: open: [
     { s: '#ZZ' }
     { s: '#LN' p: newline c: '@not-record-empty' }
     { p: record }
@@ -43,10 +43,10 @@
   ]
 
   rule: text: open: [
-    { s: ['#VAL' '#SP'] b: 1 r: text n: { text: 1 } g: 'csv,space,follows' a: '@text-follows' }
-    { s: ['#SP' '#VAL'] r: text n: { text: 1 } g: 'csv,space,leads' a: '@text-leads' }
-    { s: ['#SP' '#CA #LN #ZZ'] b: 1 n: { text: 1 } g: 'csv,end' a: '@text-end' }
-    { s: '#SP' n: { text: 1 } g: 'csv,space' a: '@text-space' p: '@text-space-push' }
+    { s: ['#VAL' '#SP'] b: 1 r: text n: { text: 1 } g: 'markdown,space,follows' a: '@text-follows' }
+    { s: ['#SP' '#VAL'] r: text n: { text: 1 } g: 'markdown,space,leads' a: '@text-leads' }
+    { s: ['#SP' '#CA #LN #ZZ'] b: 1 n: { text: 1 } g: 'markdown,end' a: '@text-end' }
+    { s: '#SP' n: { text: 1 } g: 'markdown,space' a: '@text-space' p: '@text-space-push' }
     {}
   ]
 }

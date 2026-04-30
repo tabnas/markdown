@@ -519,7 +519,7 @@
         "exact": true
       }
     },
-    "err": "csv_missing_field"
+    "err": "markdown_missing_field"
   },
   "papa-row-with-too-many-fields": {
     "name": "papa-Row with too many fields",
@@ -528,7 +528,7 @@
         "exact": true
       }
     },
-    "err": "csv_extra_field"
+    "err": "markdown_extra_field"
   },
   "papa-row-with-enough-fields-but-blank-field-in-the-begining": {
     "name": "papa-Row with enough fields but blank field in the begining",
@@ -774,7 +774,7 @@
       "header": false,
       "object": false,
       "string": {
-        "csv": false
+        "markdown": false
       }
     }
   },
@@ -784,7 +784,7 @@
       "header": false,
       "object": false,
       "string": {
-        "csv": false
+        "markdown": false
       }
     }
   },

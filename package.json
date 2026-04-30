@@ -1,12 +1,11 @@
 {
-  "name": "@jsonic/csv",
-  "version": "0.10.0",
-  "description": "This plugin allows the [Jsonic](https://jsonic.senecajs.org) JSON parser to support csv syntax.",
-  "main": "dist/csv.js",
+  "name": "@jsonic/markdown",
+  "version": "0.11.0",
+  "description": "This plugin allows the [Jsonic](https://jsonic.senecajs.org) JSON parser to support markdown syntax.",
+  "main": "dist/markdown.js",
   "type": "commonjs",
-  "browser": "csv.min.js",
-  "types": "dist/csv.d.ts",
-  "homepage": "https://github.com/jsonicjs/csv",
+  "types": "dist/markdown.d.ts",
+  "homepage": "https://github.com/jsonicjs/markdown",
   "keywords": [
     "pattern",
     "matcher",
@@ -17,12 +16,12 @@
   "author": "Richard Rodger (http://richardrodger.com)",
   "repository": {
     "type": "git",
-    "url": "git://github.com/jsonicjs/csv.git"
+    "url": "git://github.com/jsonicjs/markdown.git"
   },
   "scripts": {
     "test": "node --enable-source-maps --test \"dist-test/*.test.js\"",
     "test-some": "node --enable-source-maps --test-name-pattern=\"$npm_config_pattern\" --test \"dist-test/*.test.js\"",
-    "test-watch": "node --test --watch dist-test/csv.test.js",
+    "test-watch": "node --test --watch dist-test/markdown.test.js",
     "embed": "node embed-grammar.js",
     "watch": "tsc --build src test -w",
     "build": "node embed-grammar.js && tsc --build src test",
@@ -39,9 +38,8 @@
     "LICENSE"
   ],
   "devDependencies": {
-    "@types/node": "^25.6.0",
-    "csv-spectrum": "^2.0.0",
-    "typescript": "^5.9.3"
+    "@types/node": "25.6.0",
+    "typescript": "6.0.3"
   },
   "peerDependencies": {
     "jsonic": ">=2"

@@ -13,7 +13,7 @@ import {
 } from 'jsonic'
 
 // See defaults below for commentary.
-type CsvOptions = {
+type MarkdownOptions = {
   trim: boolean | null
   comment: boolean | null
   number: boolean | null
@@ -35,13 +35,13 @@ type CsvOptions = {
   }
   string: {
     quote: string
-    csv: null | boolean
+    markdown: null | boolean
   }
 }
 
-// --- BEGIN EMBEDDED csv-grammar.jsonic ---
+// --- BEGIN EMBEDDED markdown-grammar.jsonic ---
 const grammarText = `
-# CSV Grammar Definition
+# Markdown Grammar Definition
 # Parsed by a standard Jsonic instance and passed to jsonic.grammar()
 # Function references (@ prefixed) are resolved against the refs map
 #
@@ -52,12 +52,12 @@ const grammarText = `
 #   #ZZ - end of input
 #   #VAL - token set: text, string, number, value literals
 #
-# Rules csv, newline, record, text are fully defined here.
+# Rules markdown, newline, record, text are fully defined here.
 # Rules list, elem, val are modified in code (strict mode defines from scratch;
 # non-strict prepends to existing defaults to preserve JSON parsing).
 
 {
-  rule: csv: open: [
+  rule: markdown: open: [
     { s: '#ZZ' }
     { s: '#LN' p: newline c: '@not-record-empty' }
     { p: record }
@@ -86,18 +86,18 @@ const grammarText = `
   ]
 
   rule: text: open: [
-    { s: ['#VAL' '#SP'] b: 1 r: text n: { text: 1 } g: 'csv,space,follows' a: '@text-follows' }
-    { s: ['#SP' '#VAL'] r: text n: { text: 1 } g: 'csv,space,leads' a: '@text-leads' }
-    { s: ['#SP' '#CA #LN #ZZ'] b: 1 n: { text: 1 } g: 'csv,end' a: '@text-end' }
-    { s: '#SP' n: { text: 1 } g: 'csv,space' a: '@text-space' p: '@text-space-push' }
+    { s: ['#VAL' '#SP'] b: 1 r: text n: { text: 1 } g: 'markdown,space,follows' a: '@text-follows' }
+    { s: ['#SP' '#VAL'] r: text n: { text: 1 } g: 'markdown,space,leads' a: '@text-leads' }
+    { s: ['#SP' '#CA #LN #ZZ'] b: 1 n: { text: 1 } g: 'markdown,end' a: '@text-end' }
+    { s: '#SP' n: { text: 1 } g: 'markdown,space' a: '@text-space' p: '@text-space-push' }
     {}
   ]
 }
 `
-// --- END EMBEDDED csv-grammar.jsonic ---
+// --- END EMBEDDED markdown-grammar.jsonic ---
 
 // Plugin implementation.
-const Csv: Plugin = (jsonic: Jsonic, options: CsvOptions) => {
+const Markdown: Plugin = (jsonic: Jsonic, options: MarkdownOptions) => {
   // Normalize boolean options.
   const strict = !!options.strict
   const objres = !!options.object
@@ -114,11 +114,11 @@ const Csv: Plugin = (jsonic: Jsonic, options: CsvOptions) => {
 
   // In strict mode, Jsonic field content is not parsed.
   if (strict) {
-    if (false !== options.string.csv) {
+    if (false !== options.string.markdown) {
       jsonic.options({
         lex: {
           match: {
-            stringcsv: { order: 1e5, make: buildCsvStringMatcher(options) },
+            stringmarkdown: { order: 1e5, make: buildMarkdownStringMatcher(options) },
           },
         },
       })
@@ -130,11 +130,11 @@ const Csv: Plugin = (jsonic: Jsonic, options: CsvOptions) => {
 
   // Fields may contain Jsonic content.
   else {
-    if (true === options.string.csv) {
+    if (true === options.string.markdown) {
       jsonic.options({
         lex: {
           match: {
-            stringcsv: { order: 1e5, make: buildCsvStringMatcher(options) },
+            stringmarkdown: { order: 1e5, make: buildMarkdownStringMatcher(options) },
           },
         },
       })
@@ -181,7 +181,7 @@ const Csv: Plugin = (jsonic: Jsonic, options: CsvOptions) => {
   // Jsonic option overrides.
   let jsonicOptions: any = {
     rule: {
-      start: 'csv',
+      start: 'markdown',
     },
     fixed: {
       token,
@@ -217,13 +217,13 @@ const Csv: Plugin = (jsonic: Jsonic, options: CsvOptions) => {
           : options.record.separators,
     },
     error: {
-      csv_extra_field: 'unexpected extra field value: $fsrc',
-      csv_missing_field: 'missing field',
+      markdown_extra_field: 'unexpected extra field value: $fsrc',
+      markdown_missing_field: 'missing field',
     },
     hint: {
-      csv_extra_field: `Row $row has too many fields (the first of which is: $fsrc). Only $len
+      markdown_extra_field: `Row $row has too many fields (the first of which is: $fsrc). Only $len
 fields per row are expected.`,
-      csv_missing_field: `Row $row has too few fields. $len fields per row are expected.`,
+      markdown_missing_field: `Row $row has too few fields. $len fields per row are expected.`,
     },
   }
 
@@ -235,13 +235,13 @@ fields per row are expected.`,
 
     // === State actions (auto-wired by @rulename-{bo,ao,bc,ac} convention) ===
 
-    '@csv-bo': (r: Rule, ctx: Context) => {
+    '@markdown-bo': (r: Rule, ctx: Context) => {
       ctx.u.recordI = 0
       stream && stream('start')
       r.node = []
     },
 
-    '@csv-ac': (_r: Rule) => {
+    '@markdown-ac': (_r: Rule) => {
       stream && stream('end')
     },
 
@@ -262,8 +262,8 @@ fields per row are expected.`,
               if (record.length !== fields.length) {
                 return ctx.t0.bad(
                   record.length > fields.length
-                    ? 'csv_extra_field'
-                    : 'csv_missing_field',
+                    ? 'markdown_extra_field'
+                    : 'markdown_missing_field',
                 )
               }
             }
@@ -379,7 +379,7 @@ fields per row are expected.`,
         { s: [LN], b: 1 },
       ])
       // Unconditional fallback to push elem — the default jsonic list rule gates
-      // its elem push on prev.u.implist which CSV's record rule does not set.
+      // its elem push on prev.u.implist which the record rule does not set.
       .open([{ p: 'elem' }], { append: true })
       .close([
         // LN ends record
@@ -441,13 +441,13 @@ fields per row are expected.`,
   })
 }
 
-// Custom CSV String matcher.
+// Custom Markdown String matcher.
 // Handles "a""b" -> "a"b" quoting wierdness.
 // This is a reduced copy of the standard Jsonic string matcher.
-function buildCsvStringMatcher(csvopts: CsvOptions) {
-  return function makeCsvStringMatcher(cfg: Config, _opts: Options) {
-    return function csvStringMatcher(lex: Lex) {
-      let quoteMap: any = { [csvopts.string.quote]: true }
+function buildMarkdownStringMatcher(mdopts: MarkdownOptions) {
+  return function makeMarkdownStringMatcher(cfg: Config, _opts: Options) {
+    return function markdownStringMatcher(lex: Lex) {
+      let quoteMap: any = { [mdopts.string.quote]: true }
 
       let { pnt, src } = lex
       let { sI, rI, cI } = pnt
@@ -531,7 +531,7 @@ function buildCsvStringMatcher(csvopts: CsvOptions) {
 }
 
 // Default option values.
-Csv.defaults = {
+Markdown.defaults = {
   trim: null,
   comment: null,
   number: null,
@@ -553,10 +553,10 @@ Csv.defaults = {
   },
   string: {
     quote: '"',
-    csv: null,
+    markdown: null,
   },
-} as CsvOptions
+} as MarkdownOptions
 
-export { Csv, buildCsvStringMatcher }
+export { Markdown, buildMarkdownStringMatcher }
 
-export type { CsvOptions }
+export type { MarkdownOptions }

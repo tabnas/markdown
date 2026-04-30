@@ -2,6 +2,7 @@
   "compilerOptions": {
     "esModuleInterop": true,
     "module": "nodenext",
+    "types": ["node"],
     "noEmitOnError": true,
     "outDir": "../dist-test",
     "rootDir": ".",

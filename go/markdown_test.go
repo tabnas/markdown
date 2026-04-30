@@ -1,4 +1,4 @@
-package csv
+package markdown
 
 import (
 	"encoding/json"
@@ -24,10 +24,10 @@ func fixturesDir() string {
 	return filepath.Join("..", "test", "fixtures")
 }
 
-// csvParse creates a jsonic instance with the Csv plugin and parses src.
-func csvParse(src string, opts ...map[string]any) ([]any, error) {
+// markdownParse creates a jsonic instance with the Markdown plugin and parses src.
+func markdownParse(src string, opts ...map[string]any) ([]any, error) {
 	j := jsonic.Make()
-	j.UseDefaults(Csv, Defaults, opts...)
+	j.UseDefaults(Markdown, Defaults, opts...)
 
 	result, err := j.Parse(src)
 	if err != nil {
@@ -105,7 +105,7 @@ func TestFixtures(t *testing.T) {
 
 func TestPlugin(t *testing.T) {
 	j := jsonic.Make()
-	j.UseDefaults(Csv, Defaults)
+	j.UseDefaults(Markdown, Defaults)
 
 	result, err := j.Parse("a,b\n1,2\n3,4")
 	if err != nil {
@@ -129,7 +129,7 @@ func TestPlugin(t *testing.T) {
 
 func TestPluginWithOptions(t *testing.T) {
 	j := jsonic.Make()
-	j.UseDefaults(Csv, Defaults, map[string]any{"object": false})
+	j.UseDefaults(Markdown, Defaults, map[string]any{"object": false})
 
 	result, err := j.Parse("a,b\n1,2")
 	if err != nil {
@@ -157,7 +157,7 @@ func TestPluginWithOptions(t *testing.T) {
 
 func TestPluginEmpty(t *testing.T) {
 	j := jsonic.Make()
-	j.UseDefaults(Csv, Defaults)
+	j.UseDefaults(Markdown, Defaults)
 
 	result, err := j.Parse("")
 	if err != nil {
@@ -176,7 +176,7 @@ func TestPluginEmpty(t *testing.T) {
 
 func TestUsePlugin(t *testing.T) {
 	j := jsonic.Make()
-	j.Use(Csv, nil)
+	j.Use(Markdown, nil)
 
 	result, err := j.Parse("a,b\n1,2")
 	if err != nil {
@@ -186,12 +186,12 @@ func TestUsePlugin(t *testing.T) {
 }
 
 func TestEmptyRecords(t *testing.T) {
-	result, _ := csvParse("a\n1\n\n2\n3\n\n\n4\n")
+	result, _ := markdownParse("a\n1\n\n2\n3\n\n\n4\n")
 	assertRecords(t, "empty-ignored", result, []map[string]any{
 		{"a": "1"}, {"a": "2"}, {"a": "3"}, {"a": "4"},
 	})
 
-	result2, _ := csvParse("a\n1\n\n2\n3\n\n\n4\n",
+	result2, _ := markdownParse("a\n1\n\n2\n3\n\n\n4\n",
 		map[string]any{"record": map[string]any{"empty": true}})
 	assertRecords(t, "empty-preserved", result2, []map[string]any{
 		{"a": "1"}, {"a": ""}, {"a": "2"}, {"a": "3"},
@@ -200,12 +200,12 @@ func TestEmptyRecords(t *testing.T) {
 }
 
 func TestHeader(t *testing.T) {
-	result, _ := csvParse("\na,b\nA,B")
+	result, _ := markdownParse("\na,b\nA,B")
 	assertRecords(t, "header-skip-leading", result, []map[string]any{
 		{"a": "A", "b": "B"},
 	})
 
-	result2, _ := csvParse("\na,b\nA,B", map[string]any{"header": false})
+	result2, _ := markdownParse("\na,b\nA,B", map[string]any{"header": false})
 	assertRecords(t, "no-header", result2, []map[string]any{
 		{"field~0": "a", "field~1": "b"},
 		{"field~0": "A", "field~1": "B"},
@@ -229,7 +229,7 @@ func TestDoubleQuotes(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result, err := csvParse(tt.input)
+		result, err := markdownParse(tt.input)
 		if err != nil {
 			t.Errorf("Parse(%q): error: %v", tt.input, err)
 			continue
@@ -246,43 +246,43 @@ func TestDoubleQuotes(t *testing.T) {
 }
 
 func TestTrim(t *testing.T) {
-	r1, _ := csvParse("a\n b")
+	r1, _ := markdownParse("a\n b")
 	assertField(t, "no-trim-leading", r1, "a", " b")
 
-	r2, _ := csvParse("a\nb ")
+	r2, _ := markdownParse("a\nb ")
 	assertField(t, "no-trim-trailing", r2, "a", "b ")
 
-	r3, _ := csvParse("a\n b ")
+	r3, _ := markdownParse("a\n b ")
 	assertField(t, "no-trim-both", r3, "a", " b ")
 
-	r4, _ := csvParse("a\n b", map[string]any{"trim": true})
+	r4, _ := markdownParse("a\n b", map[string]any{"trim": true})
 	assertField(t, "trim-leading", r4, "a", "b")
 
-	r5, _ := csvParse("a\nb ", map[string]any{"trim": true})
+	r5, _ := markdownParse("a\nb ", map[string]any{"trim": true})
 	assertField(t, "trim-trailing", r5, "a", "b")
 
-	r6, _ := csvParse("a\n b c ", map[string]any{"trim": true})
+	r6, _ := markdownParse("a\n b c ", map[string]any{"trim": true})
 	assertField(t, "trim-internal", r6, "a", "b c")
 }
 
 func TestComment(t *testing.T) {
-	r1, _ := csvParse("a\n# b")
+	r1, _ := markdownParse("a\n# b")
 	assertField(t, "no-comment", r1, "a", "# b")
 
-	r2, _ := csvParse("a\n# b", map[string]any{"comment": true})
+	r2, _ := markdownParse("a\n# b", map[string]any{"comment": true})
 	if len(r2) != 0 {
 		t.Errorf("comment-line: expected 0 records, got %d", len(r2))
 	}
 
-	r3, _ := csvParse("a\n b #c", map[string]any{"comment": true})
+	r3, _ := markdownParse("a\n b #c", map[string]any{"comment": true})
 	assertField(t, "comment-inline", r3, "a", " b ")
 }
 
 func TestNumber(t *testing.T) {
-	r1, _ := csvParse("a\n1")
+	r1, _ := markdownParse("a\n1")
 	assertField(t, "no-number", r1, "a", "1")
 
-	r2, _ := csvParse("a\n1", map[string]any{"number": true})
+	r2, _ := markdownParse("a\n1", map[string]any{"number": true})
 	m := toMap(r2[0])
 	if m["a"] != float64(1) {
 		t.Errorf("number: expected 1 (float64), got %v (%T)", m["a"], m["a"])
@@ -290,22 +290,22 @@ func TestNumber(t *testing.T) {
 }
 
 func TestValue(t *testing.T) {
-	r1, _ := csvParse("a\ntrue")
+	r1, _ := markdownParse("a\ntrue")
 	assertField(t, "no-value", r1, "a", "true")
 
-	r2, _ := csvParse("a\ntrue", map[string]any{"value": true})
+	r2, _ := markdownParse("a\ntrue", map[string]any{"value": true})
 	m := toMap(r2[0])
 	if m["a"] != true {
 		t.Errorf("value-true: expected true, got %v (%T)", m["a"], m["a"])
 	}
 
-	r3, _ := csvParse("a\nfalse", map[string]any{"value": true})
+	r3, _ := markdownParse("a\nfalse", map[string]any{"value": true})
 	m3 := toMap(r3[0])
 	if m3["a"] != false {
 		t.Errorf("value-false: expected false, got %v (%T)", m3["a"], m3["a"])
 	}
 
-	r4, _ := csvParse("a\nnull", map[string]any{"value": true})
+	r4, _ := markdownParse("a\nnull", map[string]any{"value": true})
 	m4 := toMap(r4[0])
 	if m4["a"] != nil {
 		t.Errorf("value-null: expected nil, got %v (%T)", m4["a"], m4["a"])
@@ -317,7 +317,7 @@ func TestStream(t *testing.T) {
 	var records []any
 
 	j := jsonic.Make()
-	j.UseDefaults(Csv, Defaults, map[string]any{
+	j.UseDefaults(Markdown, Defaults, map[string]any{
 		"stream": func(what string, record any) {
 			events = append(events, what)
 			if what == "record" {
@@ -342,14 +342,14 @@ func TestStream(t *testing.T) {
 }
 
 func TestSeparators(t *testing.T) {
-	result, _ := csvParse("a|b|c\nA|B|C\nAA|BB|CC",
+	result, _ := markdownParse("a|b|c\nA|B|C\nAA|BB|CC",
 		map[string]any{"field": map[string]any{"separation": "|"}})
 	assertRecords(t, "pipe", result, []map[string]any{
 		{"a": "A", "b": "B", "c": "C"},
 		{"a": "AA", "b": "BB", "c": "CC"},
 	})
 
-	result2, _ := csvParse("a~~b~~c\nA~~B~~C",
+	result2, _ := markdownParse("a~~b~~c\nA~~B~~C",
 		map[string]any{"field": map[string]any{"separation": "~~"}})
 	assertRecords(t, "multi-char", result2, []map[string]any{
 		{"a": "A", "b": "B", "c": "C"},
@@ -357,7 +357,7 @@ func TestSeparators(t *testing.T) {
 }
 
 func TestRecordSeparators(t *testing.T) {
-	result, _ := csvParse("a,b,c%A,B,C%AA,BB,CC",
+	result, _ := markdownParse("a,b,c%A,B,C%AA,BB,CC",
 		map[string]any{"record": map[string]any{"separators": "%"}})
 	assertRecords(t, "record-sep", result, []map[string]any{
 		{"a": "A", "b": "B", "c": "C"},
@@ -365,10 +365,10 @@ func TestRecordSeparators(t *testing.T) {
 	})
 }
 
-// parseFixture parses CSV with optional jsonic-level options for fixtures.
+// parseFixture parses Markdown with optional jsonic-level options for fixtures.
 func parseFixture(src string, pluginOpts map[string]any, jsonicOpts map[string]any) ([]any, error) {
 	if len(jsonicOpts) == 0 {
-		return csvParse(src, pluginOpts)
+		return markdownParse(src, pluginOpts)
 	}
 
 	j := jsonic.Make()
@@ -418,7 +418,7 @@ func parseFixture(src string, pluginOpts map[string]any, jsonicOpts map[string]a
 		}
 	}
 
-	j.UseDefaults(Csv, Defaults, pluginOpts)
+	j.UseDefaults(Markdown, Defaults, pluginOpts)
 
 	result, err := j.Parse(src)
 	if err != nil {

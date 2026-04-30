@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 
-// Embed csv-grammar.jsonic into TypeScript and Go source files.
+// Embed markdown-grammar.jsonic into TypeScript and Go source files.
 // Run via: npm run embed  (or:  node embed-grammar.js)
 
 const fs = require('fs')
 const path = require('path')
 
-const GRAMMAR_FILE = path.join(__dirname, 'csv-grammar.jsonic')
-const TS_FILE = path.join(__dirname, 'src', 'csv.ts')
-const GO_FILE = path.join(__dirname, 'go', 'csv.go')
+const GRAMMAR_FILE = path.join(__dirname, 'markdown-grammar.jsonic')
+const TS_FILE = path.join(__dirname, 'src', 'markdown.ts')
+const GO_FILE = path.join(__dirname, 'go', 'markdown.go')
 
-const BEGIN = '// --- BEGIN EMBEDDED csv-grammar.jsonic ---'
-const END = '// --- END EMBEDDED csv-grammar.jsonic ---'
+const BEGIN = '// --- BEGIN EMBEDDED markdown-grammar.jsonic ---'
+const END = '// --- END EMBEDDED markdown-grammar.jsonic ---'
 
 const grammar = fs.readFileSync(GRAMMAR_FILE, 'utf8')
 

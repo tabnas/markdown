@@ -5,23 +5,19 @@ import assert from 'node:assert'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import Util from 'util'
-
 import { Jsonic } from 'jsonic'
-import { Csv } from '../dist/csv'
-
-const Spectrum = require('csv-spectrum')
+import { Markdown } from '../dist/markdown'
 
 const fixturesDir = join(__dirname, '..', 'test', 'fixtures')
 const manifest = JSON.parse(
   readFileSync(join(fixturesDir, 'manifest.json'), 'utf8'),
 )
 
-describe('csv', () => {
+describe('markdown', () => {
   test('empty-records', async () => {
     // ignored by default
 
-    const jo = Jsonic.make().use(Csv)
+    const jo = Jsonic.make().use(Markdown)
     assert.deepEqual(jo('\n'), [])
     assert.deepEqual(jo('a\n1\n\n2\n3\n\n\n4\n'), [
       { a: '1' },
@@ -30,7 +26,7 @@ describe('csv', () => {
       { a: '4' },
     ])
 
-    const ja = Jsonic.make().use(Csv, { object: false })
+    const ja = Jsonic.make().use(Markdown, { object: false })
     assert.deepEqual(ja('\n'), [])
     assert.deepEqual(ja('a\n1\n\n2\n3\n\n\n4\n'), [['1'], ['2'], ['3'], ['4']])
 
@@ -43,7 +39,7 @@ describe('csv', () => {
 
     // with option, empty creates record
 
-    const jon = Jsonic.make().use(Csv, { record: { empty: true } })
+    const jon = Jsonic.make().use(Markdown, { record: { empty: true } })
     assert.deepEqual(jon('\n'), [])
     assert.deepEqual(jon('a\n1\n\n2\n3\n\n\n4\n'), [
       { a: '1' },
@@ -57,7 +53,7 @@ describe('csv', () => {
 
     // with comments
 
-    const joc = Jsonic.make().use(Csv, { comment: true })
+    const joc = Jsonic.make().use(Markdown, { comment: true })
     // console.log(joc('a#X\n1\n#Y\n2\n3\n\n#Z\n4\n#Q'))
     assert.deepEqual(joc('a#X\n1\n#Y\n2\n3\n\n#Z\n4\n#Q'), [
       { a: '1' },
@@ -66,7 +62,7 @@ describe('csv', () => {
       { a: '4' },
     ])
 
-    const jocn = Jsonic.make().use(Csv, {
+    const jocn = Jsonic.make().use(Markdown, {
       comment: true,
       record: { empty: true },
     })
@@ -82,15 +78,15 @@ describe('csv', () => {
   })
 
   test('header', async () => {
-    const jo = Jsonic.make().use(Csv)
+    const jo = Jsonic.make().use(Markdown)
     assert.deepEqual(jo('\n'), [])
     assert.deepEqual(jo('\na,b\nA,B'), [{ a: 'A', b: 'B' }])
 
-    const ja = Jsonic.make().use(Csv, { object: false })
+    const ja = Jsonic.make().use(Markdown, { object: false })
     assert.deepEqual(ja('\n'), [])
     assert.deepEqual(ja('\na,b\nA,B'), [['A', 'B']])
 
-    const jon = Jsonic.make().use(Csv, { header: false })
+    const jon = Jsonic.make().use(Markdown, { header: false })
     assert.deepEqual(jon('\n'), [])
     assert.deepEqual(jon('\na,b\nA,B'), [
       {
@@ -103,14 +99,14 @@ describe('csv', () => {
       },
     ])
 
-    const jan = Jsonic.make().use(Csv, { header: false, object: false })
+    const jan = Jsonic.make().use(Markdown, { header: false, object: false })
     assert.deepEqual(jan('\n'), [])
     assert.deepEqual(jan('\na,b\nA,B'), [
       ['a', 'b'],
       ['A', 'B'],
     ])
 
-    const jonf = Jsonic.make().use(Csv, {
+    const jonf = Jsonic.make().use(Markdown, {
       header: false,
       field: { names: ['a', 'b'] },
     })
@@ -128,7 +124,7 @@ describe('csv', () => {
   })
 
   test('comma', async () => {
-    const jo = Jsonic.make().use(Csv)
+    const jo = Jsonic.make().use(Markdown)
 
     assert.deepEqual(jo('\na'), [])
     assert.deepEqual(jo('a\n1,'), [{ a: '1', 'field~1': '' }])
@@ -142,7 +138,7 @@ describe('csv', () => {
     assert.deepEqual(jo('a,b\n,1,2\n'), [{ a: '', b: '1', 'field~2': '2' }])
     assert.deepEqual(jo('\na\n'), [])
 
-    const ja = Jsonic.make().use(Csv, { object: false })
+    const ja = Jsonic.make().use(Markdown, { object: false })
 
     assert.deepEqual(ja('a\n1,'), [['1', '']])
     assert.deepEqual(ja('a\n,1'), [['', '1']])
@@ -152,7 +148,7 @@ describe('csv', () => {
   })
 
   test('separators', async () => {
-    const jd = Jsonic.make().use(Csv, {
+    const jd = Jsonic.make().use(Markdown, {
       field: {
         separation: '|',
       },
@@ -163,7 +159,7 @@ describe('csv', () => {
       { a: 'AA', b: 'BB', c: 'CC' },
     ])
 
-    const jD = Jsonic.make().use(Csv, {
+    const jD = Jsonic.make().use(Markdown, {
       field: {
         separation: '~~',
       },
@@ -174,7 +170,7 @@ describe('csv', () => {
       { a: 'AA', b: 'BB', c: 'CC' },
     ])
 
-    const jn = Jsonic.make().use(Csv, {
+    const jn = Jsonic.make().use(Markdown, {
       record: {
         separators: '%',
       },
@@ -187,7 +183,7 @@ describe('csv', () => {
   })
 
   test('double-quote', async () => {
-    const j = Jsonic.make().use(Csv)
+    const j = Jsonic.make().use(Markdown)
 
     assert.deepEqual(j('a\n"b"'), [{ a: 'b' }])
 
@@ -209,7 +205,7 @@ describe('csv', () => {
   })
 
   test('trim', async () => {
-    const j = Jsonic.make().use(Csv)
+    const j = Jsonic.make().use(Markdown)
 
     assert.deepEqual(j('a\n b'), [{ a: ' b' }])
     assert.deepEqual(j('a\nb '), [{ a: 'b ' }])
@@ -223,7 +219,7 @@ describe('csv', () => {
     assert.deepEqual(j('a\n  b c   '), [{ a: '  b c   ' }])
     assert.deepEqual(j('a\n \tb c \t '), [{ a: ' \tb c \t ' }])
 
-    const jt = Jsonic.make().use(Csv, { trim: true })
+    const jt = Jsonic.make().use(Markdown, { trim: true })
 
     assert.deepEqual(jt('a\n b'), [{ a: 'b' }])
     assert.deepEqual(jt('a\nb '), [{ a: 'b' }])
@@ -239,40 +235,40 @@ describe('csv', () => {
   })
 
   test('comment', async () => {
-    const j = Jsonic.make().use(Csv)
+    const j = Jsonic.make().use(Markdown)
     assert.deepEqual(j('a\n# b'), [{ a: '# b' }])
     assert.deepEqual(j('a\n b #c'), [{ a: ' b #c' }])
 
-    const jc = Jsonic.make().use(Csv, { comment: true })
+    const jc = Jsonic.make().use(Markdown, { comment: true })
     assert.deepEqual(jc('a\n# b'), [])
     assert.deepEqual(jc('a\n b #c'), [{ a: ' b ' }])
 
-    const jt = Jsonic.make().use(Csv, { strict: false })
+    const jt = Jsonic.make().use(Markdown, { strict: false })
     assert.deepEqual(jt('a\n# b'), [])
     assert.deepEqual(jt('a\n b '), [{ a: 'b' }])
   })
 
   test('number', async () => {
-    const j = Jsonic.make().use(Csv)
+    const j = Jsonic.make().use(Markdown)
     assert.deepEqual(j('a\n1'), [{ a: '1' }])
     assert.deepEqual(j('a\n1e2'), [{ a: '1e2' }])
 
-    const jn = Jsonic.make().use(Csv, { number: true })
+    const jn = Jsonic.make().use(Markdown, { number: true })
     assert.deepEqual(jn('a\n1'), [{ a: 1 }])
     assert.deepEqual(jn('a\n1e2'), [{ a: 100 }])
 
-    const jt = Jsonic.make().use(Csv, { strict: false })
+    const jt = Jsonic.make().use(Markdown, { strict: false })
     assert.deepEqual(jt('a\n1'), [{ a: 1 }])
     assert.deepEqual(jt('a\n1e2'), [{ a: 100 }])
   })
 
   test('value', async () => {
-    const j = Jsonic.make().use(Csv)
+    const j = Jsonic.make().use(Markdown)
     assert.deepEqual(j('a\ntrue'), [{ a: 'true' }])
     assert.deepEqual(j('a\nfalse'), [{ a: 'false' }])
     assert.deepEqual(j('a\nnull'), [{ a: 'null' }])
 
-    const jv = Jsonic.make().use(Csv, { value: true })
+    const jv = Jsonic.make().use(Markdown, { value: true })
     assert.deepEqual(jv('a\ntrue'), [{ a: true }])
     assert.deepEqual(jv('a\nfalse'), [{ a: false }])
     assert.deepEqual(jv('a\nnull'), [{ a: null }])
@@ -282,7 +278,7 @@ describe('csv', () => {
     return new Promise<void>((resolve) => {
       let tmp: any = {}
       let data: any[]
-      const j = Jsonic.make().use(Csv, {
+      const j = Jsonic.make().use(Markdown, {
         stream: (what: string, record?: any[]) => {
           if ('start' === what) {
             data = []
@@ -310,7 +306,7 @@ describe('csv', () => {
   })
 
   test('unstrict', async () => {
-    const j = Jsonic.make().use(Csv, { strict: false })
+    const j = Jsonic.make().use(Markdown, { strict: false })
     let d0 = j(`a,b,c
 true,[1,2],{x:{y:"q\\"w"}}
  x , 'y\\'y', "z\\"z"
@@ -335,35 +331,15 @@ true,[1,2],{x:{y:"q\\"w"}}
     assert.throws(() => j('a\n{x:1}y'), /unexpected/)
   })
 
-  test('spectrum', async () => {
-    const j = Jsonic.make().use(Csv)
-    const tests = await Util.promisify(Spectrum)()
-    for (let i = 0; i < tests.length; i++) {
-      let test = tests[i]
-      let name = test.name
-      let json = JSON.parse(test.json.toString())
-      let csv = test.csv.toString()
-      let res = j(csv)
-      let testname = name + ' ' + (i + 1) + '/' + tests.length
-
-      // Broken test, reenable when fixed
-      if (5 === i) {
-        continue
-      }
-
-      assert.deepEqual({ [testname]: res }, { [testname]: json })
-    }
-  })
-
   test('fixtures', async () => {
-    const csv = Jsonic.make().use(Csv)
+    const markdown = Jsonic.make().use(Markdown)
     for (const [key, entry] of Object.entries(manifest) as [string, any][]) {
       const name: string = entry.name
 
-      let parser = csv
+      let parser = markdown
       if (entry.opt) {
         let j = entry.jsonicOpt ? Jsonic.make(entry.jsonicOpt) : Jsonic.make()
-        parser = j.use(Csv, entry.opt)
+        parser = j.use(Markdown, entry.opt)
       }
       const csvFile = entry.csvFile || key
       const raw = readFileSync(join(fixturesDir, csvFile + '.csv'), 'utf8')

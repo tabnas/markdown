@@ -1,6 +1,6 @@
 /* Copyright (c) 2021-2025 Richard Rodger, MIT License */
 
-package csv
+package markdown
 
 import (
 	"fmt"
@@ -12,9 +12,9 @@ import (
 
 const Version = "0.1.3"
 
-// --- BEGIN EMBEDDED csv-grammar.jsonic ---
+// --- BEGIN EMBEDDED markdown-grammar.jsonic ---
 const grammarText = `
-# CSV Grammar Definition
+# Markdown Grammar Definition
 # Parsed by a standard Jsonic instance and passed to jsonic.grammar()
 # Function references (@ prefixed) are resolved against the refs map
 #
@@ -25,12 +25,12 @@ const grammarText = `
 #   #ZZ - end of input
 #   #VAL - token set: text, string, number, value literals
 #
-# Rules csv, newline, record, text are fully defined here.
+# Rules markdown, newline, record, text are fully defined here.
 # Rules list, elem, val are modified in code (strict mode defines from scratch;
 # non-strict prepends to existing defaults to preserve JSON parsing).
 
 {
-  rule: csv: open: [
+  rule: markdown: open: [
     { s: '#ZZ' }
     { s: '#LN' p: newline c: '@not-record-empty' }
     { p: record }
@@ -59,24 +59,24 @@ const grammarText = `
   ]
 
   rule: text: open: [
-    { s: ['#VAL' '#SP'] b: 1 r: text n: { text: 1 } g: 'csv,space,follows' a: '@text-follows' }
-    { s: ['#SP' '#VAL'] r: text n: { text: 1 } g: 'csv,space,leads' a: '@text-leads' }
-    { s: ['#SP' '#CA #LN #ZZ'] b: 1 n: { text: 1 } g: 'csv,end' a: '@text-end' }
-    { s: '#SP' n: { text: 1 } g: 'csv,space' a: '@text-space' p: '@text-space-push' }
+    { s: ['#VAL' '#SP'] b: 1 r: text n: { text: 1 } g: 'markdown,space,follows' a: '@text-follows' }
+    { s: ['#SP' '#VAL'] r: text n: { text: 1 } g: 'markdown,space,leads' a: '@text-leads' }
+    { s: ['#SP' '#CA #LN #ZZ'] b: 1 n: { text: 1 } g: 'markdown,end' a: '@text-end' }
+    { s: '#SP' n: { text: 1 } g: 'markdown,space' a: '@text-space' p: '@text-space-push' }
     {}
   ]
 }
 `
-// --- END EMBEDDED csv-grammar.jsonic ---
+// --- END EMBEDDED markdown-grammar.jsonic ---
 
-// Csv is a jsonic plugin that adds CSV parsing support.
+// Markdown is a jsonic plugin that adds Markdown parsing support.
 // Options are pre-merged with Defaults by jsonic.UseDefaults.
-func Csv(j *jsonic.Jsonic, options map[string]any) error {
+func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 	// Guard against re-invocation: Use() re-runs plugins on SetOptions calls.
-	if j.Decoration("csv-init") != nil {
+	if j.Decoration("markdown-init") != nil {
 		return nil
 	}
-	j.Decorate("csv-init", true)
+	j.Decorate("markdown-init", true)
 
 	strict := toBool(options["strict"])
 	objres := toBool(options["object"])
@@ -97,20 +97,20 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
 
 	// In strict mode, Jsonic field content is not parsed.
 	if strict {
-		if stringOpts["csv"] != false {
+		if stringOpts["markdown"] != false {
 			j.SetOptions(jsonic.Options{Lex: &jsonic.LexOptions{
 				Match: map[string]*jsonic.MatchSpec{
-					"stringcsv": {Order: 1e5, Make: buildCsvStringMatcher(stringOpts)},
+					"stringmarkdown": {Order: 1e5, Make: buildMarkdownStringMatcher(stringOpts)},
 				},
 			}})
 		}
 		j.SetOptions(jsonic.Options{Rule: &jsonic.RuleOptions{Exclude: "jsonic,imp"}})
 	} else {
 		// Fields may contain Jsonic content.
-		if stringOpts["csv"] == true {
+		if stringOpts["markdown"] == true {
 			j.SetOptions(jsonic.Options{Lex: &jsonic.LexOptions{
 				Match: map[string]*jsonic.MatchSpec{
-					"stringcsv": {Order: 1e5, Make: buildCsvStringMatcher(stringOpts)},
+					"stringmarkdown": {Order: 1e5, Make: buildMarkdownStringMatcher(stringOpts)},
 				},
 			}})
 		}
@@ -134,7 +134,7 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
 
 	// Jsonic option overrides (matching TS jsonicOptions).
 	jsonicOptions := jsonic.Options{
-		Rule: &jsonic.RuleOptions{Start: "csv"},
+		Rule: &jsonic.RuleOptions{Start: "markdown"},
 		Number: &jsonic.NumberOptions{
 			Lex: boolPtr(opt_number),
 		},
@@ -151,18 +151,18 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
 			Single: boolPtr(record_empty),
 		},
 		Error: map[string]string{
-			"csv_extra_field":   "unexpected extra field value: $fsrc",
-			"csv_missing_field": "missing field",
+			"markdown_extra_field":   "unexpected extra field value: $fsrc",
+			"markdown_missing_field": "missing field",
 		},
 		Hint: map[string]string{
-			"csv_extra_field":   "Row $row has too many fields (the first of which is: $fsrc). Only $len\nfields per row are expected.",
-			"csv_missing_field": "Row $row has too few fields. $len fields per row are expected.",
+			"markdown_extra_field":   "Row $row has too many fields (the first of which is: $fsrc). Only $len\nfields per row are expected.",
+			"markdown_missing_field": "Row $row has too few fields. $len fields per row are expected.",
 		},
 	}
 
 	if strict {
-		csvStringOpt := stringOpts["csv"]
-		if csvStringOpt == nil || csvStringOpt == true {
+		markdownStringOpt := stringOpts["markdown"]
+		if markdownStringOpt == nil || markdownStringOpt == true {
 			jsonicOptions.String = &jsonic.StringOptions{
 				Lex:   boolPtr(false),
 				Chars: "",
@@ -219,7 +219,7 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
 
 	refs := map[jsonic.FuncRef]any{
 
-		"@csv-bo": jsonic.StateAction(func(r *jsonic.Rule, ctx *jsonic.Context) {
+		"@markdown-bo": jsonic.StateAction(func(r *jsonic.Rule, ctx *jsonic.Context) {
 			if ctx.Meta == nil {
 				ctx.Meta = make(map[string]any)
 			}
@@ -230,7 +230,7 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
 			r.Node = make([]any, 0)
 		}),
 
-		"@csv-ac": jsonic.StateAction(func(r *jsonic.Rule, ctx *jsonic.Context) {
+		"@markdown-ac": jsonic.StateAction(func(r *jsonic.Rule, ctx *jsonic.Context) {
 			if stream != nil {
 				stream("end", nil)
 			}
@@ -269,9 +269,9 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
 
 					if fields != nil {
 						if fieldExact && len(record) != len(fields) {
-							errCode := "csv_missing_field"
+							errCode := "markdown_missing_field"
 							if len(record) > len(fields) {
-								errCode = "csv_extra_field"
+								errCode = "markdown_extra_field"
 							}
 							ctx.ParseErr = &jsonic.Token{
 								Name: "#BD", Tin: jsonic.TinBD,
@@ -428,7 +428,7 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
 		return err
 	}
 	if err := j.Grammar(gs); err != nil {
-		return fmt.Errorf("failed to apply csv grammar: %w", err)
+		return fmt.Errorf("failed to apply markdown grammar: %w", err)
 	}
 
 	// Rules list, elem, val are modified in code rather than the grammar file,
@@ -441,7 +441,7 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
 	ZZ := j.Token("#ZZ")
 	VAL := j.TokenSet("VAL")
 
-	j.Rule("list", func(rs *jsonic.RuleSpec) {
+	j.Rule("list", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
 		rs.Clear()
 		rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
 			r.Node = make([]any, 0)
@@ -456,7 +456,7 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
 		}
 	})
 
-	j.Rule("elem", func(rs *jsonic.RuleSpec) {
+	j.Rule("elem", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
 		rs.Clear()
 		rs.Open = []*jsonic.AltSpec{
 			{S: [][]jsonic.Tin{{CA}}, B: 1,
@@ -498,7 +498,7 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
 		})
 	})
 
-	j.Rule("val", func(rs *jsonic.RuleSpec) {
+	j.Rule("val", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
 		rs.Clear()
 		rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
 			r.Node = jsonic.Undefined
@@ -515,7 +515,7 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
 					if r.OS == 0 {
 						r.Node = jsonic.Undefined
 					} else {
-						r.Node = r.O0.ResolveVal()
+						r.Node = r.O0.ResolveVal(r, ctx)
 					}
 				} else {
 					r.Node = r.Child.Node
@@ -527,10 +527,10 @@ func Csv(j *jsonic.Jsonic, options map[string]any) error {
 	return nil
 }
 
-// Custom CSV String matcher factory.
+// Custom Markdown String matcher factory.
 // Handles "a""b" -> a"b quoting.
-// Matches TS: buildCsvStringMatcher(options) returns make(cfg, opts) => matcher(lex).
-func buildCsvStringMatcher(stringOpts map[string]any) jsonic.MakeLexMatcher {
+// Matches TS: buildMarkdownStringMatcher(options) returns make(cfg, opts) => matcher(lex).
+func buildMarkdownStringMatcher(stringOpts map[string]any) jsonic.MakeLexMatcher {
 	quote := toString(stringOpts["quote"])
 	return func(cfg *jsonic.LexConfig, opts *jsonic.Options) jsonic.LexMatcher {
 		return func(lex *jsonic.Lex, rule *jsonic.Rule) *jsonic.Token {
@@ -619,7 +619,7 @@ func buildCsvStringMatcher(stringOpts map[string]any) jsonic.MakeLexMatcher {
 	}
 }
 
-// Defaults matches the TS Csv.defaults. Used with jsonic.UseDefaults.
+// Defaults matches the TS Markdown.defaults. Used with jsonic.UseDefaults.
 var Defaults = map[string]any{
 	"trim":    nil,
 	"comment": nil,
@@ -641,8 +641,8 @@ var Defaults = map[string]any{
 		"empty":      false,
 	},
 	"string": map[string]any{
-		"quote": `"`,
-		"csv":   nil,
+		"quote":    `"`,
+		"markdown": nil,
 	},
 }
 
