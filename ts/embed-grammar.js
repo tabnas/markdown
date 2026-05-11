@@ -8,7 +8,7 @@ const path = require('path')
 
 const GRAMMAR_FILE = path.join(__dirname, 'markdown-grammar.jsonic')
 const TS_FILE = path.join(__dirname, 'src', 'markdown.ts')
-const GO_FILE = path.join(__dirname, 'go', 'markdown.go')
+const GO_FILE = path.join(__dirname, '..', 'go', 'markdown.go')
 
 const BEGIN = '// --- BEGIN EMBEDDED markdown-grammar.jsonic ---'
 const END = '// --- END EMBEDDED markdown-grammar.jsonic ---'

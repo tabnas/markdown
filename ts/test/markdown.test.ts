@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { Jsonic } from 'jsonic'
 import { Markdown } from '../dist/markdown'
 
-const fixturesDir = join(__dirname, '..', 'test', 'fixtures')
+const fixturesDir = join(__dirname, '..', '..', 'test', 'fixtures')
 const manifest = JSON.parse(
   readFileSync(join(fixturesDir, 'manifest.json'), 'utf8'),
 )
