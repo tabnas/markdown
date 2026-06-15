@@ -21,17 +21,15 @@ Available for TypeScript and Go.
 
 **TypeScript**
 
-```typescript
+```js
 import { Jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
 const parse = Jsonic.make().use(Markdown)
 
-parse("name,age\nAlice,30\nBob,25")
-// [{ name: 'Alice', age: '30' }, { name: 'Bob', age: '25' }]
+parse("name,age\nAlice,30\nBob,25") // => [{ name: 'Alice', age: '30' }, { name: 'Bob', age: '25' }]
 
-parse('a,b\n1,"hello, world"')
-// [{ a: '1', b: 'hello, world' }]
+parse('a,b\n1,"hello, world"') // => [{ a: '1', b: 'hello, world' }]
 ```
 
 **Go**
