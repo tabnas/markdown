@@ -24,45 +24,39 @@ For the Go version, see [markdown-go.md](markdown-go.md).
 
 Parse Markdown text with a header row into an array of objects:
 
-```typescript
+```js
 import { Jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
 const j = Jsonic.make().use(Markdown)
 
-j("name,age\nAlice,30\nBob,25")
-// [{ name: 'Alice', age: '30' }, { name: 'Bob', age: '25' }]
+j("name,age\nAlice,30\nBob,25") // => [{ name: 'Alice', age: '30' }, { name: 'Bob', age: '25' }]
 ```
 
 ### Parse Markdown without headers
 
 Return rows as arrays instead of objects, with no header row:
 
-```typescript
+```js
 import { Jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
 const j = Jsonic.make().use(Markdown, { header: false, object: false })
 
-j("a,b,c\n1,2,3")
-// [['a', 'b', 'c'], ['1', '2', '3']]
+j("a,b,c\n1,2,3") // => [['a', 'b', 'c'], ['1', '2', '3']]
 ```
 
 ### Parse Markdown with quoted fields
 
 Double-quoted fields handle commas, newlines, and escaped quotes:
 
-```typescript
+```js
 import { Jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
 const j = Jsonic.make().use(Markdown)
 
-j('name,bio\nAlice,"Likes ""cats"" and dogs"\nBob,"Line1\nLine2"')
-// [
-//   { name: 'Alice', bio: 'Likes "cats" and dogs' },
-//   { name: 'Bob', bio: 'Line1\nLine2' }
-// ]
+j('name,bio\nAlice,"Likes ""cats"" and dogs"\nBob,"Line1\nLine2"') // => [{ name: 'Alice', bio: 'Likes "cats" and dogs' }, { name: 'Bob', bio: 'Line1\nLine2' }]
 ```
 
 
@@ -72,13 +66,15 @@ j('name,bio\nAlice,"Likes ""cats"" and dogs"\nBob,"Line1\nLine2"')
 
 Set `field.separation` to use a delimiter other than comma:
 
-```typescript
+```js
+import { Jsonic } from '@tabnas/jsonic'
+import { Markdown } from '@tabnas/markdown'
+
 const j = Jsonic.make().use(Markdown, {
   field: { separation: '\t' }
 })
 
-j("name\tage\nAlice\t30")
-// [{ name: 'Alice', age: '30' }]
+j("name\tage\nAlice\t30") // => [{ name: 'Alice', age: '30' }]
 ```
 
 ### Enable number and value parsing
@@ -86,14 +82,16 @@ j("name\tage\nAlice\t30")
 By default in strict mode, all values are strings. Enable `number`
 and `value` to parse numeric and boolean values:
 
-```typescript
+```js
+import { Jsonic } from '@tabnas/jsonic'
+import { Markdown } from '@tabnas/markdown'
+
 const j = Jsonic.make().use(Markdown, {
   number: true,
   value: true,
 })
 
-j("a,b,c\n1,true,null")
-// [{ a: 1, b: true, c: null }]
+j("a,b,c\n1,true,null") // => [{ a: 1, b: true, c: null }]
 ```
 
 ### Trim whitespace from fields
@@ -101,11 +99,13 @@ j("a,b,c\n1,true,null")
 Enable `trim` to remove leading and trailing whitespace from field
 values:
 
-```typescript
+```js
+import { Jsonic } from '@tabnas/jsonic'
+import { Markdown } from '@tabnas/markdown'
+
 const j = Jsonic.make().use(Markdown, { trim: true })
 
-j("a , b \n 1 , 2 ")
-// [{ a: '1', b: '2' }]
+j("a , b \n 1 , 2 ") // => [{ a: '1', b: '2' }]
 ```
 
 ### Stream records as they are parsed
@@ -113,8 +113,11 @@ j("a , b \n 1 , 2 ")
 Use the `stream` callback to receive records one at a time without
 storing them all in memory:
 
-```typescript
-const records: any[] = []
+```js
+import { Jsonic } from '@tabnas/jsonic'
+import { Markdown } from '@tabnas/markdown'
+
+const records = []
 
 const j = Jsonic.make().use(Markdown, {
   stream: (what, record) => {
@@ -122,9 +125,10 @@ const j = Jsonic.make().use(Markdown, {
   },
 })
 
-j("a,b\n1,2\n3,4")
-// returns [] (empty, records were streamed)
-// records === [{ a: '1', b: '2' }, { a: '3', b: '4' }]
+// returns [] (empty), records were streamed instead:
+j("a,b\n1,2\n3,4") // => []
+
+records // => [{ a: '1', b: '2' }, { a: '3', b: '4' }]
 ```
 
 ### Provide explicit field names
@@ -132,14 +136,16 @@ j("a,b\n1,2\n3,4")
 Set `field.names` when the input has no header row but you want
 object output with named fields:
 
-```typescript
+```js
+import { Jsonic } from '@tabnas/jsonic'
+import { Markdown } from '@tabnas/markdown'
+
 const j = Jsonic.make().use(Markdown, {
   header: false,
   field: { names: ['x', 'y', 'z'] },
 })
 
-j("1,2,3\n4,5,6")
-// [{ x: '1', y: '2', z: '3' }, { x: '4', y: '5', z: '6' }]
+j("1,2,3\n4,5,6") // => [{ x: '1', y: '2', z: '3' }, { x: '4', y: '5', z: '6' }]
 ```
 
 ### Enforce exact field counts
@@ -147,13 +153,21 @@ j("1,2,3\n4,5,6")
 Set `field.exact` to error when a row has more or fewer fields
 than the header:
 
-```typescript
+```js
+import { Jsonic } from '@tabnas/jsonic'
+import { Markdown } from '@tabnas/markdown'
+
 const j = Jsonic.make().use(Markdown, {
   field: { exact: true },
 })
 
-// j("a,b\n1,2,3")  // throws: unexpected extra field value
-// j("a,b\n1")      // throws: missing field
+const code = (fn) => { try { fn(); return null } catch (e) { return e.code } }
+
+// too many fields throws:
+code(() => j("a,b\n1,2,3")) // => 'markdown_extra_field'
+
+// too few fields throws:
+code(() => j("a,b\n1")) // => 'markdown_missing_field'
 ```
 
 ### Use non-strict mode for embedded JSON
@@ -161,22 +175,26 @@ const j = Jsonic.make().use(Markdown, {
 Disable `strict` to allow Jsonic syntax inside fields,
 including JSON objects, arrays, and expressions:
 
-```typescript
+```js
+import { Jsonic } from '@tabnas/jsonic'
+import { Markdown } from '@tabnas/markdown'
+
 const j = Jsonic.make().use(Markdown, { strict: false })
 
-j("a,b\ntrue,[1,2]")
-// [{ a: true, b: [1, 2] }]
+j("a,b\ntrue,[1,2]") // => [{ a: true, b: [1, 2] }]
 ```
 
 ### Enable comment lines
 
 Enable `comment` to skip lines starting with `#`:
 
-```typescript
+```js
+import { Jsonic } from '@tabnas/jsonic'
+import { Markdown } from '@tabnas/markdown'
+
 const j = Jsonic.make().use(Markdown, { comment: true })
 
-j("a,b\n# skip this\n1,2")
-// [{ a: '1', b: '2' }]
+j("a,b\n# skip this\n1,2") // => [{ a: '1', b: '2' }]
 ```
 
 ### Preserve empty records
@@ -184,11 +202,13 @@ j("a,b\n# skip this\n1,2")
 By default, blank lines are skipped. Set `record.empty` to
 preserve them as empty-field records:
 
-```typescript
+```js
+import { Jsonic } from '@tabnas/jsonic'
+import { Markdown } from '@tabnas/markdown'
+
 const j = Jsonic.make().use(Markdown, { record: { empty: true } })
 
-j("a\n1\n\n2")
-// [{ a: '1' }, { a: '' }, { a: '2' }]
+j("a\n1\n\n2") // => [{ a: '1' }, { a: '' }, { a: '2' }]
 ```
 
 
