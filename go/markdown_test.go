@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	jsonic "github.com/jsonicjs/jsonic/go"
+	jsonic "github.com/tabnas/jsonic/go"
 )
 
 // fixtureEntry represents one entry in the test manifest.

@@ -5,7 +5,7 @@ or slices, with support for headers, quoted fields, custom
 delimiters, streaming, and strict/non-strict modes.
 
 ```bash
-go get github.com/jsonicjs/markdown/go@latest
+go get github.com/tabnas/markdown/go@latest
 ```
 
 This guide follows the [Diataxis](https://diataxis.fr) framework:
@@ -29,8 +29,8 @@ package main
 import (
     "fmt"
 
-    jsonic "github.com/jsonicjs/jsonic/go"
-    markdown "github.com/jsonicjs/markdown/go"
+    jsonic "github.com/tabnas/jsonic/go"
+    markdown "github.com/tabnas/markdown/go"
 )
 
 func main() {

@@ -5,7 +5,7 @@ import assert from 'node:assert'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { Jsonic } from 'jsonic'
+import { Jsonic } from '@tabnas/jsonic'
 import { Markdown } from '../dist/markdown'
 
 const fixturesDir = join(__dirname, '..', '..', 'test', 'fixtures')

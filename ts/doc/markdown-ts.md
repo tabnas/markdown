@@ -5,7 +5,7 @@ of objects or arrays, with support for headers, quoted fields,
 custom delimiters, streaming, and strict/non-strict modes.
 
 ```bash
-npm install @jsonic/markdown
+npm install @tabnas/markdown
 ```
 
 Requires `jsonic` >= 2 as a peer dependency.
@@ -25,8 +25,8 @@ For the Go version, see [markdown-go.md](markdown-go.md).
 Parse Markdown text with a header row into an array of objects:
 
 ```typescript
-import { Jsonic } from 'jsonic'
-import { Markdown } from '@jsonic/markdown'
+import { Jsonic } from '@tabnas/jsonic'
+import { Markdown } from '@tabnas/markdown'
 
 const j = Jsonic.make().use(Markdown)
 
@@ -39,8 +39,8 @@ j("name,age\nAlice,30\nBob,25")
 Return rows as arrays instead of objects, with no header row:
 
 ```typescript
-import { Jsonic } from 'jsonic'
-import { Markdown } from '@jsonic/markdown'
+import { Jsonic } from '@tabnas/jsonic'
+import { Markdown } from '@tabnas/markdown'
 
 const j = Jsonic.make().use(Markdown, { header: false, object: false })
 
@@ -53,8 +53,8 @@ j("a,b,c\n1,2,3")
 Double-quoted fields handle commas, newlines, and escaped quotes:
 
 ```typescript
-import { Jsonic } from 'jsonic'
-import { Markdown } from '@jsonic/markdown'
+import { Jsonic } from '@tabnas/jsonic'
+import { Markdown } from '@tabnas/markdown'
 
 const j = Jsonic.make().use(Markdown)
 

@@ -10,7 +10,8 @@ import {
   Config,
   Options,
   Lex,
-} from 'jsonic'
+  Token,
+} from '@tabnas/jsonic'
 
 // See defaults below for commentary.
 type MarkdownOptions = {
@@ -446,7 +447,7 @@ fields per row are expected.`,
 // This is a reduced copy of the standard Jsonic string matcher.
 function buildMarkdownStringMatcher(mdopts: MarkdownOptions) {
   return function makeMarkdownStringMatcher(cfg: Config, _opts: Options) {
-    return function markdownStringMatcher(lex: Lex) {
+    return function markdownStringMatcher(lex: Lex): Token | undefined {
       let quoteMap: any = { [mdopts.string.quote]: true }
 
       let { pnt, src } = lex

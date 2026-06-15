@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	jsonic "github.com/jsonicjs/jsonic/go"
+	jsonic "github.com/tabnas/jsonic/go"
 )
 
 const Version = "0.1.1"
@@ -446,20 +446,20 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 		rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
 			r.Node = make([]any, 0)
 		})
-		rs.Open = []*jsonic.AltSpec{
-			{S: [][]jsonic.Tin{{LN}}, B: 1},
-			{P: "elem"},
-		}
-		rs.Close = []*jsonic.AltSpec{
-			{S: [][]jsonic.Tin{{LN}}, B: 1},
-			{S: [][]jsonic.Tin{{ZZ}}},
-		}
+		rs.AddOpen(
+			&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
+			&jsonic.AltSpec{P: "elem"},
+		)
+		rs.AddClose(
+			&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
+			&jsonic.AltSpec{S: [][]jsonic.Tin{{ZZ}}},
+		)
 	})
 
 	j.Rule("elem", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
 		rs.Clear()
-		rs.Open = []*jsonic.AltSpec{
-			{S: [][]jsonic.Tin{{CA}}, B: 1,
+		rs.AddOpen(
+			&jsonic.AltSpec{S: [][]jsonic.Tin{{CA}}, B: 1,
 				A: jsonic.AltAction(func(r *jsonic.Rule, ctx *jsonic.Context) {
 					if arr, ok := r.Node.([]any); ok {
 						r.Node = append(arr, emptyField)
@@ -469,10 +469,10 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 					}
 					r.U["done"] = true
 				})},
-			{P: "val"},
-		}
-		rs.Close = []*jsonic.AltSpec{
-			{S: [][]jsonic.Tin{{CA}, {LN, ZZ}}, B: 1,
+			&jsonic.AltSpec{P: "val"},
+		)
+		rs.AddClose(
+			&jsonic.AltSpec{S: [][]jsonic.Tin{{CA}, {LN, ZZ}}, B: 1,
 				A: jsonic.AltAction(func(r *jsonic.Rule, ctx *jsonic.Context) {
 					if arr, ok := r.Node.([]any); ok {
 						r.Node = append(arr, emptyField)
@@ -481,10 +481,10 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 						}
 					}
 				})},
-			{S: [][]jsonic.Tin{{CA}}, R: "elem"},
-			{S: [][]jsonic.Tin{{LN}}, B: 1},
-			{S: [][]jsonic.Tin{{ZZ}}},
-		}
+			&jsonic.AltSpec{S: [][]jsonic.Tin{{CA}}, R: "elem"},
+			&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
+			&jsonic.AltSpec{S: [][]jsonic.Tin{{ZZ}}},
+		)
 		rs.AddBC(func(r *jsonic.Rule, ctx *jsonic.Context) {
 			done, _ := r.U["done"].(bool)
 			if !done && !jsonic.IsUndefined(r.Child.Node) {
@@ -503,12 +503,12 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 		rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
 			r.Node = jsonic.Undefined
 		})
-		rs.Open = []*jsonic.AltSpec{
-			{S: [][]jsonic.Tin{VAL, {SP}}, B: 2, P: "text"},
-			{S: [][]jsonic.Tin{{SP}}, B: 1, P: "text"},
-			{S: [][]jsonic.Tin{VAL}},
-			{S: [][]jsonic.Tin{{LN}}, B: 1},
-		}
+		rs.AddOpen(
+			&jsonic.AltSpec{S: [][]jsonic.Tin{VAL, {SP}}, B: 2, P: "text"},
+			&jsonic.AltSpec{S: [][]jsonic.Tin{{SP}}, B: 1, P: "text"},
+			&jsonic.AltSpec{S: [][]jsonic.Tin{VAL}},
+			&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
+		)
 		rs.AddBC(func(r *jsonic.Rule, ctx *jsonic.Context) {
 			if jsonic.IsUndefined(r.Node) {
 				if jsonic.IsUndefined(r.Child.Node) {

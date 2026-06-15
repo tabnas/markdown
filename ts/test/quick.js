@@ -1,5 +1,5 @@
-const { Jsonic } = require('@jsonic/jsonic-next')
-const { Debug } = require('@jsonic/jsonic-next/debug')
+const { Jsonic } = require('@tabnas/jsonic')
+const { Debug } = require('@tabnas/jsonic/debug')
 const { Markdown } = require('..')
 
 const tlog = []

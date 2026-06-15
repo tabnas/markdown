@@ -1,6 +1,6 @@
-# @jsonic/markdown
+# @tabnas/markdown
 
-This plugin allows the [Jsonic](https://jsonic.senecajs.org) JSON parser to support markdown syntax.
+This plugin allows the [Tabnas](https://jsonic.senecajs.org) JSON parser to support markdown syntax.
 
 This repository contains:
 
