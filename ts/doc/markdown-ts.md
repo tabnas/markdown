@@ -5,10 +5,10 @@ of objects or arrays, with support for headers, quoted fields,
 custom delimiters, streaming, and strict/non-strict modes.
 
 ```bash
-npm install @tabnas/markdown
+npm install @tabnas/markdown @tabnas/parser @tabnas/jsonic
 ```
 
-Requires `jsonic` >= 2 as a peer dependency.
+Requires `@tabnas/parser` and `@tabnas/jsonic` >= 2 as peer dependencies.
 
 This guide follows the [Diataxis](https://diataxis.fr) framework:
 [tutorials](#tutorials) for first-time users, [how-to guides](#how-to-guides)
@@ -25,12 +25,13 @@ For the Go version, see [markdown-go.md](markdown-go.md).
 Parse Markdown text with a header row into an array of objects:
 
 ```js
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = Jsonic.make().use(Markdown)
+const j = new Tabnas().use(jsonic).use(Markdown)
 
-j("name,age\nAlice,30\nBob,25") // => [{ name: 'Alice', age: '30' }, { name: 'Bob', age: '25' }]
+j.parse("name,age\nAlice,30\nBob,25") // => [{ name: 'Alice', age: '30' }, { name: 'Bob', age: '25' }]
 ```
 
 ### Parse Markdown without headers
@@ -38,12 +39,13 @@ j("name,age\nAlice,30\nBob,25") // => [{ name: 'Alice', age: '30' }, { name: 'Bo
 Return rows as arrays instead of objects, with no header row:
 
 ```js
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = Jsonic.make().use(Markdown, { header: false, object: false })
+const j = new Tabnas().use(jsonic).use(Markdown, { header: false, object: false })
 
-j("a,b,c\n1,2,3") // => [['a', 'b', 'c'], ['1', '2', '3']]
+j.parse("a,b,c\n1,2,3") // => [['a', 'b', 'c'], ['1', '2', '3']]
 ```
 
 ### Parse Markdown with quoted fields
@@ -51,12 +53,13 @@ j("a,b,c\n1,2,3") // => [['a', 'b', 'c'], ['1', '2', '3']]
 Double-quoted fields handle commas, newlines, and escaped quotes:
 
 ```js
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = Jsonic.make().use(Markdown)
+const j = new Tabnas().use(jsonic).use(Markdown)
 
-j('name,bio\nAlice,"Likes ""cats"" and dogs"\nBob,"Line1\nLine2"') // => [{ name: 'Alice', bio: 'Likes "cats" and dogs' }, { name: 'Bob', bio: 'Line1\nLine2' }]
+j.parse('name,bio\nAlice,"Likes ""cats"" and dogs"\nBob,"Line1\nLine2"') // => [{ name: 'Alice', bio: 'Likes "cats" and dogs' }, { name: 'Bob', bio: 'Line1\nLine2' }]
 ```
 
 
@@ -67,14 +70,15 @@ j('name,bio\nAlice,"Likes ""cats"" and dogs"\nBob,"Line1\nLine2"') // => [{ name
 Set `field.separation` to use a delimiter other than comma:
 
 ```js
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = Jsonic.make().use(Markdown, {
+const j = new Tabnas().use(jsonic).use(Markdown, {
   field: { separation: '\t' }
 })
 
-j("name\tage\nAlice\t30") // => [{ name: 'Alice', age: '30' }]
+j.parse("name\tage\nAlice\t30") // => [{ name: 'Alice', age: '30' }]
 ```
 
 ### Enable number and value parsing
@@ -83,15 +87,16 @@ By default in strict mode, all values are strings. Enable `number`
 and `value` to parse numeric and boolean values:
 
 ```js
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = Jsonic.make().use(Markdown, {
+const j = new Tabnas().use(jsonic).use(Markdown, {
   number: true,
   value: true,
 })
 
-j("a,b,c\n1,true,null") // => [{ a: 1, b: true, c: null }]
+j.parse("a,b,c\n1,true,null") // => [{ a: 1, b: true, c: null }]
 ```
 
 ### Trim whitespace from fields
@@ -100,12 +105,13 @@ Enable `trim` to remove leading and trailing whitespace from field
 values:
 
 ```js
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = Jsonic.make().use(Markdown, { trim: true })
+const j = new Tabnas().use(jsonic).use(Markdown, { trim: true })
 
-j("a , b \n 1 , 2 ") // => [{ a: '1', b: '2' }]
+j.parse("a , b \n 1 , 2 ") // => [{ a: '1', b: '2' }]
 ```
 
 ### Stream records as they are parsed
@@ -114,19 +120,20 @@ Use the `stream` callback to receive records one at a time without
 storing them all in memory:
 
 ```js
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
 const records = []
 
-const j = Jsonic.make().use(Markdown, {
+const j = new Tabnas().use(jsonic).use(Markdown, {
   stream: (what, record) => {
     if (what === 'record') records.push(record)
   },
 })
 
 // returns [] (empty), records were streamed instead:
-j("a,b\n1,2\n3,4") // => []
+j.parse("a,b\n1,2\n3,4") // => []
 
 records // => [{ a: '1', b: '2' }, { a: '3', b: '4' }]
 ```
@@ -137,15 +144,16 @@ Set `field.names` when the input has no header row but you want
 object output with named fields:
 
 ```js
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = Jsonic.make().use(Markdown, {
+const j = new Tabnas().use(jsonic).use(Markdown, {
   header: false,
   field: { names: ['x', 'y', 'z'] },
 })
 
-j("1,2,3\n4,5,6") // => [{ x: '1', y: '2', z: '3' }, { x: '4', y: '5', z: '6' }]
+j.parse("1,2,3\n4,5,6") // => [{ x: '1', y: '2', z: '3' }, { x: '4', y: '5', z: '6' }]
 ```
 
 ### Enforce exact field counts
@@ -154,20 +162,21 @@ Set `field.exact` to error when a row has more or fewer fields
 than the header:
 
 ```js
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = Jsonic.make().use(Markdown, {
+const j = new Tabnas().use(jsonic).use(Markdown, {
   field: { exact: true },
 })
 
 const code = (fn) => { try { fn(); return null } catch (e) { return e.code } }
 
 // too many fields throws:
-code(() => j("a,b\n1,2,3")) // => 'markdown_extra_field'
+code(() => j.parse("a,b\n1,2,3")) // => 'markdown_extra_field'
 
 // too few fields throws:
-code(() => j("a,b\n1")) // => 'markdown_missing_field'
+code(() => j.parse("a,b\n1")) // => 'markdown_missing_field'
 ```
 
 ### Use non-strict mode for embedded JSON
@@ -176,12 +185,13 @@ Disable `strict` to allow Jsonic syntax inside fields,
 including JSON objects, arrays, and expressions:
 
 ```js
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = Jsonic.make().use(Markdown, { strict: false })
+const j = new Tabnas().use(jsonic).use(Markdown, { strict: false })
 
-j("a,b\ntrue,[1,2]") // => [{ a: true, b: [1, 2] }]
+j.parse("a,b\ntrue,[1,2]") // => [{ a: true, b: [1, 2] }]
 ```
 
 ### Enable comment lines
@@ -189,12 +199,13 @@ j("a,b\ntrue,[1,2]") // => [{ a: true, b: [1, 2] }]
 Enable `comment` to skip lines starting with `#`:
 
 ```js
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = Jsonic.make().use(Markdown, { comment: true })
+const j = new Tabnas().use(jsonic).use(Markdown, { comment: true })
 
-j("a,b\n# skip this\n1,2") // => [{ a: '1', b: '2' }]
+j.parse("a,b\n# skip this\n1,2") // => [{ a: '1', b: '2' }]
 ```
 
 ### Preserve empty records
@@ -203,12 +214,13 @@ By default, blank lines are skipped. Set `record.empty` to
 preserve them as empty-field records:
 
 ```js
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = Jsonic.make().use(Markdown, { record: { empty: true } })
+const j = new Tabnas().use(jsonic).use(Markdown, { record: { empty: true } })
 
-j("a\n1\n\n2") // => [{ a: '1' }, { a: '' }, { a: '2' }]
+j.parse("a\n1\n\n2") // => [{ a: '1' }, { a: '' }, { a: '2' }]
 ```
 
 
@@ -242,7 +254,7 @@ RFC 4180 double-quote escaping convention:
 
 ### `Markdown` (Plugin)
 
-The plugin function. Register with `Jsonic.make().use(Markdown, options)`.
+The plugin function. Register with `new Tabnas().use(jsonic).use(Markdown, options)`.
 
 ### `MarkdownOptions`
 

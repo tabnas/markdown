@@ -22,14 +22,15 @@ Available for TypeScript and Go.
 **TypeScript**
 
 ```js
-import { Jsonic } from '@tabnas/jsonic'
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const parse = Jsonic.make().use(Markdown)
+const j = new Tabnas().use(jsonic).use(Markdown)
 
-parse("name,age\nAlice,30\nBob,25") // => [{ name: 'Alice', age: '30' }, { name: 'Bob', age: '25' }]
+j.parse("name,age\nAlice,30\nBob,25") // => [{ name: 'Alice', age: '30' }, { name: 'Bob', age: '25' }]
 
-parse('a,b\n1,"hello, world"') // => [{ a: '1', b: 'hello, world' }]
+j.parse('a,b\n1,"hello, world"') // => [{ a: '1', b: 'hello, world' }]
 ```
 
 **Go**
@@ -50,6 +51,16 @@ framework (tutorials, how-to guides, explanation, reference):
 - [TypeScript documentation](doc/markdown-ts.md)
 - [Go documentation](doc/markdown-go.md)
 
+
+
+## Grammar diagram
+
+The installed grammar as a railroad/syntax diagram, generated from the live
+grammar with [`@tabnas/railroad`](https://github.com/tabnas/railroad):
+
+![markdown grammar railroad diagram](doc/grammar.svg)
+
+A vertical ASCII version is in [`doc/grammar.txt`](doc/grammar.txt).
 
 ## License
 
