@@ -132,12 +132,12 @@ text:
                                      │
 
 Tokens:
-  CB  = close brace } (end of a map)
-  CL  = colon : (separates a key from its value)
-  CS  = close square bracket ] (end of a list)
-  KEY = map key: bare text, number, string, or keyword
-  LN  = newline (line break, usually ignored)
-  OB  = open brace { (start of a map)
-  OS  = open square bracket [ (start of a list)
-  SP  = whitespace (spaces/tabs, usually ignored)
-  VAL = value: bare text, number, string, or keyword
+  CB  = close brace } (embedded JSON map)
+  CL  = colon : (key:value in embedded JSON)
+  CS  = close bracket ] (embedded JSON list)
+  KEY = embedded JSON map key
+  LN  = newline (ends a record / row)
+  OB  = open brace { (embedded JSON map)
+  OS  = open bracket [ (embedded JSON list)
+  SP  = whitespace (significant: field text)
+  VAL = field value: text, number, string, or keyword

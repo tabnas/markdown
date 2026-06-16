@@ -101,6 +101,30 @@ const grammarText = `
 
 // Plugin implementation.
 const Markdown: Plugin = (tn: Tabnas, options: MarkdownOptions) => {
+  // Human descriptions for the tokens, surfaced in railroad diagram legends
+  // (read off the live config by @tabnas/railroad). Newline and whitespace are
+  // structurally significant (record separator / field text); the JSON
+  // brace/bracket tokens only appear inside embedded jsonic field values.
+  tn.options({
+    config: {
+      modify: {
+        'markdown-tokendesc': (cfg: any) => {
+          cfg.tokenDesc = Object.assign(cfg.tokenDesc || {}, {
+            '#LN': 'newline (ends a record / row)',
+            '#SP': 'whitespace (significant: field text)',
+            '#OB': 'open brace { (embedded JSON map)',
+            '#CB': 'close brace } (embedded JSON map)',
+            '#OS': 'open bracket [ (embedded JSON list)',
+            '#CS': 'close bracket ] (embedded JSON list)',
+            '#CL': 'colon : (key:value in embedded JSON)',
+            'KEY': 'embedded JSON map key',
+            'VAL': 'field value: text, number, string, or keyword',
+          })
+        },
+      },
+    },
+  })
+
   // Normalize boolean options.
   const strict = !!options.strict
   const objres = !!options.object
