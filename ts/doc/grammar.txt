@@ -141,3 +141,6 @@ Tokens:
   OS  = open bracket [ (embedded JSON list)
   SP  = whitespace (significant: field text)
   VAL = field value: text, number, string, or keyword
+
+Ignored tokens:
+  CM = comment
