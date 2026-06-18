@@ -396,31 +396,53 @@ fields per row are expected.`,
 
 
   // Rules list, elem, val are modified in code rather than the grammar file,
-  // because in non-strict mode the default jsonic alternatives must be preserved
-  // to support embedded JSON values like [1,2] and {x:1}.
+  // because in non-strict mode the default jsonic alternatives must be
+  // preserved to support embedded JSON values like [1,2] and {x:1}.
+  //
+  // In STRICT mode the rules are rebuilt from scratch (clear()): the new
+  // node-building contract makes the jsonic defaults accumulate via child$
+  // and the info marker, which flattens records and produces `[object
+  // Object]` keys. Each rule then owns its node — allocate in `bo`,
+  // coalesce in `bc`. This mirrors the Go port (markdown.go list/elem/val),
+  // which already passes against the new core.
+  //
+  // In NON-STRICT mode the jsonic open/close alternatives are kept (so the
+  // embedded JSON structural tokens `[`/`]`/`{`/`}` still parse). The
+  // markdown record alternates are prepended (record/field handling wins
+  // for top-level rows) with an unconditional `elem`/`val` fallback
+  // appended after the jsonic alts (so jsonic's `#OS`/`#CS` etc. are tried
+  // first for embedded containers). The corrupting jsonic lifecycle
+  // bo/bc actions are replaced with clean, record-aware versions.
 
-  tn.rule('list', (rs: RuleSpec) => {
-    return rs
-      .open([
-        // If not ignoring empty fields, don't consume LN used to close empty record.
-        { s: [LN], b: 1 },
-      ])
-      // Unconditional fallback to push elem — the default jsonic list rule gates
-      // its elem push on prev.u.implist which the record rule does not set.
-      .open([{ p: 'elem' }], { append: true })
-      .close([
-        // LN ends record
-        { s: [LN], b: 1 },
+  if (strict) {
+    tn.rule('list', (rs: RuleSpec) => {
+      return rs
+        .clear()
+        // Allocate the record's field array; the parent (record) reads it
+        // back from r.child.node in @record-bc.
+        .bo((r: Rule) => {
+          r.node = []
+        })
+        .open([
+          // If not ignoring empty fields, don't consume LN used to close empty record.
+          { s: [LN], b: 1 },
 
-        { s: [ZZ] },
-      ])
-  })
+          // Parse each field as an element.
+          { p: 'elem' },
+        ])
+        .close([
+          // LN ends record
+          { s: [LN], b: 1 },
 
-  tn.rule('elem', (rs: RuleSpec) => {
-    return rs
-      .open(
-        [
-          // An empty element
+          { s: [ZZ] },
+        ])
+    })
+
+    tn.rule('elem', (rs: RuleSpec) => {
+      return rs
+        .clear()
+        .open([
+          // An empty element (`,` with nothing before it).
           {
             s: [CA],
             b: 1,
@@ -429,12 +451,111 @@ fields per row are expected.`,
               r.u.done = true
             },
           },
-        ],
-      )
 
-      .close(
-        [
-          // An empty element at the end of the line
+          // Otherwise parse a field value.
+          { p: 'val' },
+        ])
+        .close([
+          // An empty element at the end of the line / input.
+          {
+            s: [CA, [LN, ZZ]],
+            b: 1,
+            a: (r: Rule) => r.node.push(options.field.empty),
+          },
+
+          // Next element.
+          { s: [CA], r: 'elem' },
+
+          // LN ends record
+          { s: [LN], b: 1 },
+
+          // ZZ ends input
+          { s: [ZZ] },
+        ])
+        // Push the parsed field value, unless an open alt already handled it
+        // (done flag) or there was no value.
+        .bc((r: Rule) => {
+          if (true !== r.u.done && undefined !== r.child.node) {
+            r.node.push(r.child.node)
+          }
+        })
+    })
+
+    tn.rule('val', (rs: RuleSpec) => {
+      return rs
+        .clear()
+        // A value rule owns its node; start undefined so bc can tell whether
+        // a child / token supplied a value (implicit-null otherwise).
+        .bo((r: Rule) => {
+          r.node = undefined
+        })
+        .open([
+          // Handle text and space concatenation.
+          { s: [VAL, SP], b: 2, p: 'text' },
+          { s: [SP], b: 1, p: 'text' },
+
+          // A plain value token.
+          { s: [VAL] },
+
+          // LN ends record
+          { s: [LN], b: 1 },
+        ])
+        // Coalesce: child value > matched token > implicit null (undefined).
+        .bc((r: Rule, ctx: Context) => {
+          if (undefined === r.node) {
+            if (undefined !== r.child.node) {
+              r.node = r.child.node
+            } else if (0 !== r.os) {
+              r.node = r.o0.resolveVal(r, ctx)
+            }
+          }
+        })
+    })
+  } else {
+    // Non-strict: keep the jsonic/json alternatives (embedded containers),
+    // layer the markdown record alternates around them.
+
+    tn.rule('list', (rs: RuleSpec) => {
+      return rs
+        // Record context allocates its own clean field array. For an
+        // embedded `[...]`, json's @array$ open-alt re-allocates, so this is
+        // harmless there. Replace jsonic's list bo (dmap/implist + info
+        // marker) which would otherwise corrupt the record node.
+        .clearActions('bo', 'bc')
+        .bo((r: Rule) => {
+          r.node = []
+        })
+        // Don't consume the LN that closes an (empty) record.
+        .open([{ s: [LN], b: 1 }])
+        // Fallback: a record field. Appended AFTER the jsonic alts so the
+        // embedded `#OS`/`#OS #CS` alts are matched first.
+        .open([{ p: 'elem' }], { append: true })
+        // LN / ZZ end a record.
+        .close([{ s: [LN], b: 1 }])
+        .close([{ s: [ZZ] }], { append: true })
+    })
+
+    tn.rule('elem', (rs: RuleSpec) => {
+      return rs
+        // Replace jsonic's elem bc (child$ / pair handling) with a clean
+        // push so record fields and embedded array elements both land as
+        // plain values.
+        .clearActions('bc')
+        .open([
+          // An empty element (`,` with nothing before it).
+          {
+            s: [CA],
+            b: 1,
+            a: (r: Rule) => {
+              r.node.push(options.field.empty)
+              r.u.done = true
+            },
+          },
+        ])
+        // Fallback: parse a field/element value, after jsonic's alts.
+        .open([{ p: 'val' }], { append: true })
+        .close([
+          // An empty element at the end of the line / input.
           {
             s: [CA, [LN, ZZ]],
             b: 1,
@@ -443,22 +564,26 @@ fields per row are expected.`,
 
           // LN ends record
           { s: [LN], b: 1 },
-        ],
-      )
-  })
+        ])
+        .bc((r: Rule) => {
+          if (true !== r.u.done && undefined !== r.child.node) {
+            r.node.push(r.child.node)
+          }
+        })
+    })
 
-  tn.rule('val', (rs: RuleSpec) => {
-    return rs.open(
-      [
-        // Handle text and space concatentation
-        { s: [VAL, SP], b: 2, p: 'text' },
-        { s: [SP], b: 1, p: 'text' },
+    tn.rule('val', (rs: RuleSpec) => {
+      return rs
+        .open([
+          // Handle text and space concatenation.
+          { s: [VAL, SP], b: 2, p: 'text' },
+          { s: [SP], b: 1, p: 'text' },
 
-        // LN ends record
-        { s: [LN], b: 1 },
-      ],
-    )
-  })
+          // LN ends record
+          { s: [LN], b: 1 },
+        ])
+    })
+  }
 
   // Close is called on final rule - set parent val node
   tn.rule('text', (rs: RuleSpec) => {
