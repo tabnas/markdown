@@ -1,25 +1,27 @@
-# @tabnas/markdown
+# @tabnas/markdown (TypeScript)
 
-A [Tabnas](https://jsonic.senecajs.org) syntax plugin that parses
-Markdown text into objects or arrays, with support for headers, quoted
-fields, custom delimiters, streaming, and strict/non-strict modes.
-Available for TypeScript and Go.
-
+A [Tabnas](https://github.com/tabnas/parser) grammar plugin that parses
+delimited record text — a header row, comma-separated fields, one record per
+line, with RFC-4180 quoting — into arrays of objects or arrays. Despite the
+name it is a configurable CSV/TSV-family reader, with support for headers,
+quoted fields, custom delimiters, streaming, and strict / non-strict modes.
 
 [![npm version](https://img.shields.io/npm/v/@tabnas/markdown.svg)](https://npmjs.com/package/@tabnas/markdown)
 [![build](https://github.com/tabnas/markdown/actions/workflows/build.yml/badge.svg)](https://github.com/tabnas/markdown/actions/workflows/build.yml)
-[![Coverage Status](https://coveralls.io/repos/github/tabnas/markdown/badge.svg?branch=main)](https://coveralls.io/github/tabnas/markdown?branch=main)
-[![Known Vulnerabilities](https://snyk.io/test/github/tabnas/markdown/badge.svg)](https://snyk.io/test/github/tabnas/markdown)
-[![DeepScan grade](https://deepscan.io/api/teams/5016/projects/22466/branches/663906/badge/grade.svg)](https://deepscan.io/dashboard#view=project&tid=5016&pid=22466&bid=663906)
-[![Maintainability](https://api.codeclimate.com/v1/badges/10e9bede600896c77ce8/maintainability)](https://codeclimate.com/github/tabnas/markdown/maintainability)
 
 | ![Voxgig](https://www.voxgig.com/res/img/vgt01r.png) | This open source module is sponsored and supported by [Voxgig](https://www.voxgig.com). |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------- |
 
+## Install
 
-## Quick example
+```bash
+npm install @tabnas/markdown @tabnas/parser @tabnas/jsonic
+```
 
-**TypeScript**
+`@tabnas/parser` (>=2) and `@tabnas/jsonic` are peer dependencies. Requires
+Node >=24.
+
+## Example
 
 ```js
 import { Tabnas } from '@tabnas/parser'
@@ -28,42 +30,32 @@ import { Markdown } from '@tabnas/markdown'
 
 const j = new Tabnas().use(jsonic).use(Markdown)
 
-j.parse("name,age\nAlice,30\nBob,25") // => [{ name: 'Alice', age: '30' }, { name: 'Bob', age: '25' }]
+j.parse('name,age\nAlice,30\nBob,25') // => [{ name: 'Alice', age: '30' }, { name: 'Bob', age: '25' }]
 
-j.parse('a,b\n1,"hello, world"') // => [{ a: '1', b: 'hello, world' }]
+// quoted fields use "" to escape a quote:
+j.parse('a\n"b""c"') // => [{ a: 'b"c' }]
 ```
-
-**Go**
-
-```go
-import markdown "github.com/tabnas/markdown/go"
-
-result, _ := markdown.Parse("name,age\nAlice,30\nBob,25")
-// [{name:Alice age:30} {name:Bob age:25}]
-```
-
 
 ## Documentation
 
-Full documentation following the [Diataxis](https://diataxis.fr)
-framework (tutorials, how-to guides, explanation, reference):
+Documentation follows the [Diátaxis](https://diataxis.fr) framework:
 
-- [TypeScript documentation](doc/markdown-ts.md)
-- [Go documentation](doc/markdown-go.md)
+- [Tutorial](doc/tutorial.md) — a guided first run.
+- [How-to guide](doc/guide.md) — task recipes (delimiters, no-header, streaming, errors, embedded JSON).
+- [Reference](doc/reference.md) — the full API, every option, and the grammar accepted.
+- [Concepts](doc/concepts.md) — how the plugin works on the engine and why.
 
-
+For the Go version, see [../go/README.md](../go/README.md).
 
 ## Grammar diagram
 
-The installed grammar as a railroad/syntax diagram, generated from the live
-grammar with [`@tabnas/railroad`](https://github.com/tabnas/railroad):
+The live grammar as a railroad diagram (regenerated with
+[`@tabnas/railroad`](https://github.com/tabnas/railroad)):
 
 ![markdown grammar railroad diagram](doc/grammar.svg)
 
-A vertical ASCII version is in [`doc/grammar.txt`](doc/grammar.txt).
-
-The grammar source lives in the top-level
-[`markdown-grammar.jsonic`](../markdown-grammar.jsonic) and is embedded here by
+ASCII version: [`doc/grammar.txt`](doc/grammar.txt). The grammar source is the
+top-level [`markdown-grammar.jsonic`](../markdown-grammar.jsonic), embedded by
 [`embed-grammar.js`](embed-grammar.js) during `npm run build`.
 
 ## License

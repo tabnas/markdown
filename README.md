@@ -1,35 +1,80 @@
 # @tabnas/markdown
 
-This plugin allows the [Tabnas](https://jsonic.senecajs.org) JSON parser to support markdown syntax.
+A [Tabnas](https://github.com/tabnas/parser) grammar plugin that parses
+delimited record text (header row, comma-separated fields, one record per line,
+RFC-4180 quoting) into arrays of objects or arrays. Despite the name it is a
+configurable CSV/TSV-family reader, available for both **TypeScript** and
+**Go**, built on `@tabnas/parser` + `@tabnas/jsonic`.
 
-This repository contains:
+```bash
+# TypeScript
+npm install @tabnas/markdown @tabnas/parser @tabnas/jsonic
 
-| Path | Description |
-|---|---|
-| [`ts/`](ts/) | TypeScript / JavaScript implementation. |
-| [`go/`](go/) | Go port. |
-| [`test/fixtures/`](test/fixtures/) | Shared conformance fixtures, exercised by both runtimes. |
+# Go
+go get github.com/tabnas/markdown/go@latest
+```
 
-See [`ts/README.md`](ts/README.md) for usage.
+## One tiny example
 
-## Grammar
+**TypeScript**
 
-The grammar is defined once in the top-level
-[`markdown-grammar.jsonic`](markdown-grammar.jsonic) and embedded into both the
-TypeScript ([`ts/src/markdown.ts`](ts/src/markdown.ts)) and Go
-([`go/markdown.go`](go/markdown.go)) implementations by
-[`ts/embed-grammar.js`](ts/embed-grammar.js) (run as part of `npm run build`).
-Edit the grammar file, then re-embed — never edit the embedded copies directly.
+```js
+import { Tabnas } from '@tabnas/parser'
+import { jsonic } from '@tabnas/jsonic'
+import { Markdown } from '@tabnas/markdown'
+
+const j = new Tabnas().use(jsonic).use(Markdown)
+
+j.parse('name,age\nAlice,30\nBob,25') // => [{ name: 'Alice', age: '30' }, { name: 'Bob', age: '25' }]
+```
+
+**Go**
+
+```go
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
+
+result, _ := j.Parse("name,age\nAlice,30\nBob,25")
+fmt.Println(result)
+// [{[name age] map[age:30 name:Alice]} {[name age] map[age:25 name:Bob]}]
+```
+
+## Documentation
+
+Documentation follows the [Diátaxis](https://diataxis.fr) framework — one file
+per quadrant, per language.
+
+| | TypeScript | Go |
+|---|---|---|
+| Tutorial (learn) | [ts/doc/tutorial.md](ts/doc/tutorial.md) | [go/doc/tutorial.md](go/doc/tutorial.md) |
+| How-to (recipes) | [ts/doc/guide.md](ts/doc/guide.md) | [go/doc/guide.md](go/doc/guide.md) |
+| Reference (API + options + grammar) | [ts/doc/reference.md](ts/doc/reference.md) | [go/doc/reference.md](go/doc/reference.md) |
+| Concepts (how it works) | [ts/doc/concepts.md](ts/doc/concepts.md) | [go/doc/concepts.md](go/doc/concepts.md) |
+
+Per-language hubs: [ts/README.md](ts/README.md) · [go/README.md](go/README.md).
 
 ## Grammar diagram
 
-The grammar as a railroad/syntax diagram, generated from the live grammar
-with [`@tabnas/railroad`](https://github.com/tabnas/railroad):
+The live grammar as a railroad/syntax diagram, generated from the embedded
+grammar with [`@tabnas/railroad`](https://github.com/tabnas/railroad):
 
 ![markdown grammar railroad diagram](ts/doc/grammar.svg)
 
-ASCII version: [`ts/doc/grammar.txt`](ts/doc/grammar.txt).
+A vertical ASCII version is in [`ts/doc/grammar.txt`](ts/doc/grammar.txt). The
+grammar source is the top-level
+[`markdown-grammar.jsonic`](markdown-grammar.jsonic), embedded into both
+implementations by [`ts/embed-grammar.js`](ts/embed-grammar.js) during
+`npm run build` — edit the grammar file, then re-embed; never edit the embedded
+copies directly.
+
+## Repository layout
+
+| Path | Description |
+|---|---|
+| [`ts/`](ts/) | TypeScript / JavaScript implementation (canonical). |
+| [`go/`](go/) | Go port. |
+| [`test/fixtures/`](test/fixtures/) | Shared conformance fixtures, run by both runtimes. |
 
 ## License
 
-MIT. Copyright (c) Richard Rodger.
+MIT. Copyright (c) Richard Rodger and other contributors.
