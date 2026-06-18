@@ -1,4 +1,4 @@
-package markdown
+package tabnasmarkdown
 
 import (
 	"encoding/json"

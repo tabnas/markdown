@@ -12,27 +12,27 @@ Each recipe assumes these imports:
 
 ```go
 import (
-    jsonic "github.com/tabnas/jsonic/go"
-    markdown "github.com/tabnas/markdown/go"
+    tabnasjsonic "github.com/tabnas/jsonic/go"
+    tabnasmarkdown "github.com/tabnas/markdown/go"
 )
 ```
 
 
 ## Register the plugin
 
-`UseDefaults` merges your options over `markdown.Defaults` and applies the
+`UseDefaults` merges your options over `tabnasmarkdown.Defaults` and applies the
 plugin. The returned instance is reusable across `Parse` calls:
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults)
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
 
 r, _ := j.Parse("a,b\n1,2\n3,4")
 fmt.Println(r)
 // [{[a b] map[a:1 b:2]} {[a b] map[a:3 b:4]}]
 ```
 
-Use `j.Use(markdown.Markdown, opts)` if you want to pass raw options *without*
+Use `j.Use(tabnasmarkdown.Markdown, opts)` if you want to pass raw options *without*
 merging the defaults — but `UseDefaults` is the normal path.
 
 
@@ -42,8 +42,8 @@ Set `object: false` for one `[]any` per row, and `header: false` so the first
 row is data:
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
     "header": false,
     "object": false,
 })
@@ -62,8 +62,8 @@ value you can index and type-assert.
 With `header: false` and `field.names`, records are keyed by your names:
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
     "header": false,
     "field":  map[string]any{"names": []string{"x", "y", "z"}},
 })
@@ -81,8 +81,8 @@ Note `names` is a `[]string` inside the `field` map.
 Set `field.separation` (single- or multi-character):
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
     "field": map[string]any{"separation": "|"},
 })
 
@@ -97,8 +97,8 @@ fmt.Println(r)
 Set `record.separators` to end rows on a character other than newline:
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
     "record": map[string]any{"separators": "%"},
 })
 
@@ -114,8 +114,8 @@ Enable `number` for numeric literals and `value` for `true`/`false`/`null`
 (`null` becomes Go `nil`, printed `<nil>`):
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
     "number": true,
     "value":  true,
 })
@@ -131,8 +131,8 @@ fmt.Println(r)
 Enable `trim` to strip leading/trailing whitespace (internal spacing kept):
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
     "trim": true,
 })
 
@@ -147,8 +147,8 @@ fmt.Println(r)
 Enable `comment` to ignore `#` lines (and strip trailing `#...` from a field):
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
     "comment": true,
 })
 
@@ -164,8 +164,8 @@ Double-quoted fields span commas, line breaks, and doubled quotes (`""` →
 `"`):
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults)
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
 
 r, _ := j.Parse("a\n\"b\"\"c\"")
 fmt.Println(r)
@@ -182,8 +182,8 @@ Extra fields beyond the header get keys formed from `field.nonameprefix`
 `""`):
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults)
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
 
 r, _ := j.Parse("a,b\n1,2,3")
 fmt.Println(r)
@@ -196,8 +196,8 @@ fmt.Println(r)
 Set `field.exact` so a row whose field count differs from the header errors:
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
     "field": map[string]any{"exact": true},
 })
 
@@ -205,19 +205,19 @@ _, err := j.Parse("a,b\n1,2,3")
 fmt.Println(err != nil) // true
 ```
 
-`Parse` returns a non-nil `error`. The error is a `*jsonic.JsonicError`; its
+`Parse` returns a non-nil `error`. The error is a `*tabnasjsonic.JsonicError`; its
 `.Code` is `"unexpected"` and its message text names the specific failure
 (`markdown_extra_field` for too many fields, `markdown_missing_field` for too
 few):
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
     "field": map[string]any{"exact": true},
 })
 
 _, err := j.Parse("a,b\n1")
-if je, ok := err.(*jsonic.JsonicError); ok {
+if je, ok := err.(*tabnasjsonic.JsonicError); ok {
     fmt.Println(je.Code)                                   // unexpected
     fmt.Println(strings.Contains(je.Error(), "markdown_missing_field")) // true
 }
@@ -234,8 +234,8 @@ Set `record.empty` so blank lines become empty records rather than being
 skipped:
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
     "record": map[string]any{"empty": true},
 })
 
@@ -254,8 +254,8 @@ streaming, the result is not collected:
 ```go
 var records []any
 
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
     "stream": func(what string, record any) {
         if what == "record" {
             records = append(records, record)
@@ -277,13 +277,13 @@ engine options, not markdown options. Set them with `SetOptions` *before*
 loads:
 
 ```go
-j := jsonic.Make()
-j.SetOptions(jsonic.Options{Comment: &jsonic.CommentOptions{
-    Def: map[string]*jsonic.CommentDef{
+j := tabnasjsonic.Make()
+j.SetOptions(tabnasjsonic.Options{Comment: &tabnasjsonic.CommentOptions{
+    Def: map[string]*tabnasjsonic.CommentDef{
         "bang": {Start: "!", Line: true},
     },
 }})
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{"comment": true})
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{"comment": true})
 
 r, _ := j.Parse("a\n! a comment\n1")
 fmt.Println(r)

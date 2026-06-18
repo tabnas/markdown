@@ -13,8 +13,8 @@ go get github.com/tabnas/markdown/go@latest
 
 ```go
 import (
-    jsonic "github.com/tabnas/jsonic/go"
-    markdown "github.com/tabnas/markdown/go"
+    tabnasjsonic "github.com/tabnas/jsonic/go"
+    tabnasmarkdown "github.com/tabnas/markdown/go"
 )
 ```
 
@@ -30,12 +30,12 @@ import (
 
 | Symbol | Kind | Purpose |
 |---|---|---|
-| `markdown.Markdown` | `func(j *jsonic.Jsonic, options map[string]any) error` | The plugin. Register with `j.UseDefaults(...)` or `j.Use(...)`. |
-| `markdown.Defaults` | `map[string]any` | Default option values, merged by `UseDefaults`. |
-| `markdown.Version` | `const string` | The Go module version (kept in sync with the TS package). |
+| `tabnasmarkdown.Markdown` | `func(j *tabnasjsonic.Jsonic, options map[string]any) error` | The plugin. Register with `j.UseDefaults(...)` or `j.Use(...)`. |
+| `tabnasmarkdown.Defaults` | `map[string]any` | Default option values, merged by `UseDefaults`. |
+| `tabnasmarkdown.Version` | `const string` | The Go module version (kept in sync with the TS package). |
 
 ```go
-func Markdown(j *jsonic.Jsonic, options map[string]any) error
+func Markdown(j *tabnasjsonic.Jsonic, options map[string]any) error
 var Defaults map[string]any
 const Version = "0.1.1"
 ```
@@ -48,13 +48,13 @@ the Go port; it is wired in by the plugin and not part of the public API
 ## Registering and parsing
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults /*, opts... */)
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults /*, opts... */)
 
 result, err := j.Parse("a,b\n1,2")
 ```
 
-- `jsonic.Make()` builds an engine instance with the jsonic base grammar
+- `tabnasjsonic.Make()` builds an engine instance with the jsonic base grammar
   already loaded.
 - `UseDefaults(plugin, Defaults, opts...)` merges each `opts` map over
   `Defaults` and applies the plugin. Prefer this over `Use` so option defaults
@@ -62,7 +62,7 @@ result, err := j.Parse("a,b\n1,2")
 - `Use(plugin, opts)` applies the plugin with raw options (no defaults merge).
 - `Parse(src string) (any, error)` returns the result and an error. On success
   the result is a `[]any` (see [Output types](#output-types)); on failure
-  `err` is a `*jsonic.JsonicError`.
+  `err` is a `*tabnasjsonic.JsonicError`.
 - The instance is reusable — call `Parse` repeatedly.
 
 
@@ -163,8 +163,8 @@ Empty input, all-blank input, and the streaming case yield an empty `[]any`.
 
 ```go
 var records []any
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
     "stream": func(what string, record any) {
         if what == "record" { records = append(records, record) }
     },
@@ -176,7 +176,7 @@ j.Parse("a,b\n1,2\n3,4")
 
 ## Errors
 
-`Parse` returns a `*jsonic.JsonicError` on failure. It has a `.Code` field and
+`Parse` returns a `*tabnasjsonic.JsonicError` on failure. It has a `.Code` field and
 its `.Error()` message carries detail.
 
 | Situation | `.Code` | Message contains |

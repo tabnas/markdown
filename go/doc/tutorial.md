@@ -23,8 +23,8 @@ markdown package:
 
 ```go
 import (
-    jsonic "github.com/tabnas/jsonic/go"
-    markdown "github.com/tabnas/markdown/go"
+    tabnasjsonic "github.com/tabnas/jsonic/go"
+    tabnasmarkdown "github.com/tabnas/markdown/go"
 )
 ```
 
@@ -32,7 +32,7 @@ import (
 ## 2. Parse your first record file
 
 Make a jsonic instance, register the markdown plugin with `UseDefaults` (which
-merges your options over `markdown.Defaults`), then `Parse`:
+merges your options over `tabnasmarkdown.Defaults`), then `Parse`:
 
 ```go
 package main
@@ -40,13 +40,13 @@ package main
 import (
     "fmt"
 
-    jsonic "github.com/tabnas/jsonic/go"
-    markdown "github.com/tabnas/markdown/go"
+    tabnasjsonic "github.com/tabnas/jsonic/go"
+    tabnasmarkdown "github.com/tabnas/markdown/go"
 )
 
 func main() {
-    j := jsonic.Make()
-    j.UseDefaults(markdown.Markdown, markdown.Defaults)
+    j := tabnasjsonic.Make()
+    j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
 
     result, _ := j.Parse("name,age\nAlice,30\nBob,25")
     fmt.Println(result)
@@ -84,13 +84,13 @@ package main
 import (
     "fmt"
 
-    jsonic "github.com/tabnas/jsonic/go"
-    markdown "github.com/tabnas/markdown/go"
+    tabnasjsonic "github.com/tabnas/jsonic/go"
+    tabnasmarkdown "github.com/tabnas/markdown/go"
 )
 
 func main() {
-    j := jsonic.Make()
-    j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+    j := tabnasjsonic.Make()
+    j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
         "header": false,
         "object": false,
     })
@@ -115,8 +115,8 @@ through `fmt`/printing rather than a type assertion — see the
 Turn on `number` (and `value` for `true`/`false`/`null`) to type the fields:
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults, map[string]any{
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
     "number": true,
     "value":  true,
 })
@@ -136,8 +136,8 @@ A field wrapped in double quotes may contain commas, line breaks, or quotes. A
 literal quote is doubled (`""`), per RFC 4180:
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults)
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
 
 result, _ := j.Parse("a\n\"b\"\"c\"")
 fmt.Println(result)

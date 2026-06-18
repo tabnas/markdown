@@ -31,8 +31,8 @@ j.parse('name,age\nAlice,30\nBob,25') // => [{ name: 'Alice', age: '30' }, { nam
 **Go**
 
 ```go
-j := jsonic.Make()
-j.UseDefaults(markdown.Markdown, markdown.Defaults)
+j := tabnasjsonic.Make()
+j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
 
 result, _ := j.Parse("name,age\nAlice,30\nBob,25")
 fmt.Println(result)

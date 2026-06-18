@@ -27,13 +27,13 @@ package main
 import (
     "fmt"
 
-    jsonic "github.com/tabnas/jsonic/go"
-    markdown "github.com/tabnas/markdown/go"
+    tabnasjsonic "github.com/tabnas/jsonic/go"
+    tabnasmarkdown "github.com/tabnas/markdown/go"
 )
 
 func main() {
-    j := jsonic.Make()
-    j.UseDefaults(markdown.Markdown, markdown.Defaults)
+    j := tabnasjsonic.Make()
+    j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
 
     result, _ := j.Parse("name,age\nAlice,30\nBob,25")
     fmt.Println(result)

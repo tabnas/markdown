@@ -11,13 +11,13 @@ The package contains no parser. It is a **plugin for the tabnas engine** that,
 with the jsonic base grammar, configures the engine to read delimited records:
 
 ```
-jsonic.Make()                                  // engine + jsonic base grammar (val/map/list/pair/elem rules, tokens)
-  .UseDefaults(markdown.Markdown, Defaults)    // layer the record grammar on top
+tabnasjsonic.Make()                                  // engine + jsonic base grammar (val/map/list/pair/elem rules, tokens)
+  .UseDefaults(tabnasmarkdown.Markdown, Defaults)    // layer the record grammar on top
   .Parse(src)
 ```
 
-The Go jsonic package re-exports the engine API (`jsonic.Jsonic`,
-`jsonic.Options`, `jsonic.Rule`, `jsonic.LexOptions`, …), so the plugin imports
+The Go jsonic package re-exports the engine API (`tabnasjsonic.Jsonic`,
+`tabnasjsonic.Options`, `tabnasjsonic.Rule`, `tabnasjsonic.LexOptions`, …), so the plugin imports
 `jsonic`, not a separate engine package.
 
 > The package is named *markdown* but installs a record/field (CSV-family)
@@ -105,7 +105,7 @@ The four record rules are authored once in the top-level
 hand-edit the embedded block.
 
 At init, the grammar text is parsed by a standalone jsonic instance
-(`jsonic.Make().Parse(grammarText)`), converted to a `*jsonic.GrammarSpec` by
+(`tabnasjsonic.Make().Parse(grammarText)`), converted to a `*tabnasjsonic.GrammarSpec` by
 `parseGrammarText` / `buildGrammarAlts`, given the `refs` map, and applied with
 `j.Grammar(...)`. `@`-prefixed names resolve against `refs`: state actions by
 the `@rulename-{bo,ao,bc,ac}` convention, alt actions / conditions / dynamic
@@ -130,7 +130,7 @@ but a few shape and behaviour differences remain:
 
 | | TypeScript | Go |
 |---|---|---|
-| Construct | `new Tabnas().use(jsonic).use(Markdown, opts)` | `jsonic.Make()` then `j.UseDefaults(Markdown, Defaults, opts)` |
+| Construct | `new Tabnas().use(jsonic).use(Markdown, opts)` | `tabnasjsonic.Make()` then `j.UseDefaults(Markdown, Defaults, opts)` |
 | Options | a partial `MarkdownOptions` object | `map[string]any` (nested groups are `map[string]any` too) |
 | Defaults merge | the plugin fills defaults itself | you pass `Defaults` to `UseDefaults` |
 | Parse | `j.parse(src)` returns the value, throws on error | `j.Parse(src)` returns `(any, error)` |
@@ -150,7 +150,7 @@ but a few shape and behaviour differences remain:
 
 - **`field.exact` error code.** TS throws an error whose `.code` is the
   specific `markdown_extra_field` / `markdown_missing_field`. Go returns a
-  `*jsonic.JsonicError` whose `.Code` is `"unexpected"`; the specific code
+  `*tabnasjsonic.JsonicError` whose `.Code` is `"unexpected"`; the specific code
   appears only in the message text. Both fail on the same inputs; only the
   surfaced code differs.
 
