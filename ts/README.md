@@ -62,6 +62,10 @@ grammar with [`@tabnas/railroad`](https://github.com/tabnas/railroad):
 
 A vertical ASCII version is in [`doc/grammar.txt`](doc/grammar.txt).
 
+The grammar source lives in the top-level
+[`markdown-grammar.jsonic`](../markdown-grammar.jsonic) and is embedded here by
+[`embed-grammar.js`](embed-grammar.js) during `npm run build`.
+
 ## License
 
 Copyright (c) 2021-2025 Richard Rodger and other contributors,
