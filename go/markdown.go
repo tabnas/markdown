@@ -100,7 +100,7 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 		if stringOpts["markdown"] != false {
 			j.SetOptions(jsonic.Options{Lex: &jsonic.LexOptions{
 				Match: map[string]*jsonic.MatchSpec{
-					"stringmarkdown": {Order: 1e5, Make: buildMarkdownStringMatcher(stringOpts)},
+					"stringmarkdown": {Order: 1e5, Make: BuildMarkdownStringMatcher(stringOpts)},
 				},
 			}})
 		}
@@ -110,7 +110,7 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 		if stringOpts["markdown"] == true {
 			j.SetOptions(jsonic.Options{Lex: &jsonic.LexOptions{
 				Match: map[string]*jsonic.MatchSpec{
-					"stringmarkdown": {Order: 1e5, Make: buildMarkdownStringMatcher(stringOpts)},
+					"stringmarkdown": {Order: 1e5, Make: BuildMarkdownStringMatcher(stringOpts)},
 				},
 			}})
 		}
@@ -527,10 +527,11 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 	return nil
 }
 
-// Custom Markdown String matcher factory.
-// Handles "a""b" -> a"b quoting.
-// Matches TS: buildMarkdownStringMatcher(options) returns make(cfg, opts) => matcher(lex).
-func buildMarkdownStringMatcher(stringOpts map[string]any) jsonic.MakeLexMatcher {
+// BuildMarkdownStringMatcher is a custom Markdown string matcher factory.
+// It handles "a""b" -> a"b quoting.
+// It mirrors the TS export `buildMarkdownStringMatcher(options)`, which
+// returns make(cfg, opts) => matcher(lex).
+func BuildMarkdownStringMatcher(stringOpts map[string]any) jsonic.MakeLexMatcher {
 	quote := toString(stringOpts["quote"])
 	return func(cfg *jsonic.LexConfig, opts *jsonic.Options) jsonic.LexMatcher {
 		return func(lex *jsonic.Lex, rule *jsonic.Rule) *jsonic.Token {
