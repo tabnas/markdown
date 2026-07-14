@@ -467,6 +467,9 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 							r.Parent.Node = r.Node
 						}
 					}
+					if r.U == nil {
+						r.U = make(map[string]any, 4)
+					}
 					r.U["done"] = true
 				})},
 			&jsonic.AltSpec{P: "val"},
