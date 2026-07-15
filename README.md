@@ -1,5 +1,12 @@
 # @tabnas/markdown
 
+<!-- tabnas-badges -->
+[![npm](https://tabnas.github.io/status/badges/markdown-npm.svg)](https://www.npmjs.com/package/@tabnas/markdown)
+[![CI](https://github.com/tabnas/markdown/actions/workflows/ci.yml/badge.svg)](https://github.com/tabnas/markdown/actions/workflows/ci.yml)
+[![go](https://tabnas.github.io/status/badges/markdown-go.svg)](https://pkg.go.dev/github.com/tabnas/markdown/go)
+[![tabnas standard](https://tabnas.github.io/status/badges/markdown-standard.svg)](https://tabnas.github.io/status/)
+<!-- /tabnas-badges -->
+
 A [Tabnas](https://github.com/tabnas/parser) grammar plugin that parses
 delimited record text (header row, comma-separated fields, one record per line,
 RFC-4180 quoting) into arrays of objects or arrays. Despite the name it is a
