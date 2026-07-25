@@ -67,6 +67,7 @@ const grammarText = `
   ]
 }
 `
+
 // --- END EMBEDDED markdown-grammar.jsonic ---
 
 // Markdown is a jsonic plugin that adds Markdown parsing support.
@@ -650,24 +651,37 @@ var Defaults = map[string]any{
 	},
 }
 
+// grammarMap returns the underlying key→value map for a parsed object node,
+// accepting both the parser's insertion-ordered *jsonic.OrderedMap and a plain
+// map[string]any. A jsonic parse now yields *OrderedMap for objects, so the
+// bare x.(map[string]any) assertions that walk the embedded grammar structure
+// must go through this helper.
+func grammarMap(v any) (map[string]any, bool) {
+	if om, ok := v.(*jsonic.OrderedMap); ok {
+		return om.Vals, true
+	}
+	m, ok := v.(map[string]any)
+	return m, ok
+}
+
 // parseGrammarText parses grammar text and builds a GrammarSpec with Ref support.
 func parseGrammarText(text string, refs map[jsonic.FuncRef]any) (*jsonic.GrammarSpec, error) {
 	parsed, err := jsonic.Make().Parse(text)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse grammar text: %w", err)
 	}
-	parsedMap, ok := parsed.(map[string]any)
+	parsedMap, ok := grammarMap(parsed)
 	if !ok {
 		return nil, fmt.Errorf("grammar text did not parse to a map")
 	}
 	gs := &jsonic.GrammarSpec{Ref: refs}
-	ruleMap, ok := parsedMap["rule"].(map[string]any)
+	ruleMap, ok := grammarMap(parsedMap["rule"])
 	if !ok {
 		return gs, nil
 	}
 	gs.Rule = make(map[string]*jsonic.GrammarRuleSpec, len(ruleMap))
 	for name, rDef := range ruleMap {
-		rd, ok := rDef.(map[string]any)
+		rd, ok := grammarMap(rDef)
 		if !ok {
 			continue
 		}
@@ -690,7 +704,7 @@ func buildGrammarAlts(def any) []*jsonic.GrammarAltSpec {
 	}
 	alts := make([]*jsonic.GrammarAltSpec, 0, len(arr))
 	for _, item := range arr {
-		m, ok := item.(map[string]any)
+		m, ok := grammarMap(item)
 		if !ok {
 			alts = append(alts, &jsonic.GrammarAltSpec{})
 			continue
@@ -726,14 +740,13 @@ func buildGrammarAlts(def any) []*jsonic.GrammarAltSpec {
 			ga.A = jsonic.FuncRef(a)
 		}
 		if c, ok := m["c"]; ok {
-			switch cv := c.(type) {
-			case string:
+			if cv, ok := c.(string); ok {
 				ga.C = cv
-			case map[string]any:
-				ga.C = cv
+			} else if cm, ok := grammarMap(c); ok {
+				ga.C = cm
 			}
 		}
-		if n, ok := m["n"].(map[string]any); ok {
+		if n, ok := grammarMap(m["n"]); ok {
 			ga.N = make(map[string]int, len(n))
 			for k, v := range n {
 				if nv, ok := v.(float64); ok {
