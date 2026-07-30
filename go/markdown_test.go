@@ -467,8 +467,8 @@ func toMap(v any) map[string]any {
 	switch m := v.(type) {
 	case map[string]any:
 		return m
-	case orderedMap:
-		return m.m
+	case *jsonic.OrderedMap:
+		return m.Vals
 	default:
 		return nil
 	}
@@ -484,9 +484,9 @@ func normalizeResult(result []any) []any {
 
 func normalizeValue(v any) any {
 	switch val := v.(type) {
-	case orderedMap:
+	case *jsonic.OrderedMap:
 		m := make(map[string]any)
-		for k, v := range val.m {
+		for k, v := range val.Vals {
 			m[k] = normalizeValue(v)
 		}
 		return m
