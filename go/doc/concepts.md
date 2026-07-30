@@ -71,9 +71,9 @@ In plain jsonic, `#SP` (space), `#LN` (newline) and `#CM` (comment) are
 (doubled quotes).
 
 **Non-strict mode (`strict: false`).** jsonic's `val` / `list` / `map`
-alternatives are preserved so a field *can* contain jsonic content, and
-`trim` / `comment` / `number` / `value` all default on. (See the port gap on
-embedded containers in [Differences](#differences-from-the-ts-version).)
+alternatives are preserved so a field *can* contain jsonic content —
+`a,b\ntrue,[1,2]` gives `{a: true, b: [1,2]}` — and `trim` / `comment` /
+`number` / `value` all default on.
 
 
 ## How a row becomes a record
@@ -92,9 +92,10 @@ The `@record-bc` action does the per-row work:
 5. The record is appended to the result — or, when `stream` is set, handed to
    the callback and not stored.
 
-The Go object record is an `orderedMap{keys, m}` struct that keeps insertion
-order so the parity fixtures (which compare against ordered JSON) line up with
-the TS objects.
+The Go object record is a `*jsonic.OrderedMap` — part of the engine's public
+API — which keeps insertion order, so the parity fixtures (which compare
+against ordered JSON) line up with the TS objects, and callers can read or
+marshal a record directly.
 
 
 ## The embedded grammar and `@`-refs
@@ -140,7 +141,7 @@ but a few shape and behaviour differences remain:
 
 | Value | TypeScript | Go |
 |---|---|---|
-| Object record | plain JS object — read fields directly | an unexported `orderedMap` struct — read by printing or use `object: false`; it is **not** type-assertable by callers and does not implement `MarshalJSON` |
+| Object record | plain JS object — read fields directly | `*jsonic.OrderedMap` — type-assert it, read `.Vals[k]`, range `.Keys` for order, or `json.Marshal` it |
 | Array record | JS array | `[]any` |
 | number | JS `number` | `float64` |
 | `null` keyword | JS `null` | Go `nil` |
@@ -153,14 +154,6 @@ but a few shape and behaviour differences remain:
   `*tabnasjsonic.JsonicError` whose `.Code` is `"unexpected"`; the specific code
   appears only in the message text. Both fail on the same inputs; only the
   surfaced code differs.
-
-- **Non-strict embedded containers.** In TS, non-strict mode parses embedded
-  JSON containers in a field — `a,b\ntrue,[1,2]` → `{ a: true, b: [1, 2] }`,
-  and `{x:1}` works too. In the Go port these container forms currently
-  **error** (`unexpected`); non-strict scalar handling (`true`, numbers, `trim`,
-  `comment`) matches TS. The shared parity fixtures do not exercise embedded
-  containers, so this gap is not caught by the fixture suite. If you need
-  embedded JSON in fields today, use the TypeScript package.
 
 Everything else — strict-mode text fields, headers, custom delimiters and
 record separators, RFC-4180 quoting, `number` / `value` / `trim` / `comment`,
@@ -180,4 +173,4 @@ streaming — behaves the same across both runtimes, as enforced by
 | `a\n# b` | `comment: true` | `[]` | the line is a comment. |
 | `a\n1\n\n2` | `record.empty: true` | `[{[a] map[a:1]} {[a] map[a:]} {[a] map[a:2]}]` | blank becomes empty record. |
 | `a,b\n1,2,3` | `field.exact: true` | error (`.Code unexpected`) | width must match header. |
-| `a,b\ntrue,[1,2]` | `strict: false` | error (`unexpected`) | embedded container — Go port gap. |
+| `a,b\ntrue,[1,2]` | `strict: false` | `[{[a b] map[a:true b:[1 2]]}]` | non-strict keeps jsonic's container alts. |

@@ -1,0 +1,4 @@
+input	expected	opts
+a|b|c\nA|B|C\nAA|BB|CC	[{"a":"A","b":"B","c":"C"},{"a":"AA","b":"BB","c":"CC"}]	{"field":{"separation":"|"}}
+a~~b~~c\nA~~B~~C\nAA~~BB~~CC	[{"a":"A","b":"B","c":"C"},{"a":"AA","b":"BB","c":"CC"}]	{"field":{"separation":"~~"}}
+a,b,c%A,B,C%AA,BB,CC	[{"a":"A","b":"B","c":"C"},{"a":"AA","b":"BB","c":"CC"}]	{"record":{"separators":"%"}}

@@ -251,7 +251,12 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 				if childArr, ok := r.Child.Node.([]any); ok {
 					names := make([]string, len(childArr))
 					for i, v := range childArr {
-						names[i], _ = v.(string)
+						// In non-strict mode the header row is value-parsed
+						// too, so a name can arrive as a number, bool or nil.
+						// TS uses it as an object key and JS coerces it, so
+						// `1,true` yields the keys "1" and "true". A bare
+						// v.(string) would leave those blank and collide.
+						names[i] = fieldName(v)
 					}
 					ctx.Meta["fields"] = names
 				} else {
@@ -264,8 +269,12 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 				}
 
 				if objres {
-					obj := make(map[string]any)
-					var keys []string
+					// The record node is an insertion-ordered map, matching the
+					// TS plugin (whose plain JS object preserves field order) and
+					// the sibling csv plugin. *jsonic.OrderedMap is part of the
+					// engine's public API and marshals to JSON in field order,
+					// so callers can both range it and serialize it.
+					obj := jsonic.NewOrderedMap()
 					i := 0
 
 					if fields != nil {
@@ -286,8 +295,7 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 							if fI < len(record) && !jsonic.IsUndefined(record[fI]) {
 								val = record[fI]
 							}
-							obj[fields[fI]] = val
-							keys = append(keys, fields[fI])
+							obj.Set(fields[fI], val)
 						}
 						i = len(fields)
 					}
@@ -298,15 +306,13 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 						if jsonic.IsUndefined(val) {
 							val = emptyField
 						}
-						obj[fname] = val
-						keys = append(keys, fname)
+						obj.Set(fname, val)
 					}
 
-					out := orderedMap{keys: keys, m: obj}
 					if stream != nil {
-						stream("record", out)
+						stream("record", obj)
 					} else if arr, ok := r.Node.([]any); ok {
-						r.Node = append(arr, out)
+						r.Node = append(arr, obj)
 						if r.Parent != jsonic.NoRule && r.Parent != nil {
 							r.Parent.Node = r.Node
 						}
@@ -442,91 +448,146 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 	ZZ := j.Token("#ZZ")
 	VAL := j.TokenSet("VAL")
 
-	j.Rule("list", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
-		rs.Clear()
-		rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
-			r.Node = make([]any, 0)
-		})
-		rs.AddOpen(
-			&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
-			&jsonic.AltSpec{P: "elem"},
-		)
-		rs.AddClose(
-			&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
-			&jsonic.AltSpec{S: [][]jsonic.Tin{{ZZ}}},
-		)
-	})
+	// pushEmpty appends the configured empty-field value to the rule's field
+	// array, keeping the parent in sync (the TS side mutates the shared array
+	// in place; Go's append may reallocate).
+	pushEmpty := func(r *jsonic.Rule) {
+		if arr, ok := r.Node.([]any); ok {
+			r.Node = append(arr, emptyField)
+			if r.Parent != jsonic.NoRule && r.Parent != nil {
+				r.Parent.Node = r.Node
+			}
+		}
+	}
 
-	j.Rule("elem", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
-		rs.Clear()
-		rs.AddOpen(
-			&jsonic.AltSpec{S: [][]jsonic.Tin{{CA}}, B: 1,
-				A: jsonic.AltAction(func(r *jsonic.Rule, ctx *jsonic.Context) {
-					if arr, ok := r.Node.([]any); ok {
-						r.Node = append(arr, emptyField)
-						if r.Parent != jsonic.NoRule && r.Parent != nil {
-							r.Parent.Node = r.Node
-						}
-					}
-					if r.U == nil {
-						r.U = make(map[string]any, 4)
-					}
-					r.U["done"] = true
-				})},
-			&jsonic.AltSpec{P: "val"},
-		)
-		rs.AddClose(
-			&jsonic.AltSpec{S: [][]jsonic.Tin{{CA}, {LN, ZZ}}, B: 1,
-				A: jsonic.AltAction(func(r *jsonic.Rule, ctx *jsonic.Context) {
-					if arr, ok := r.Node.([]any); ok {
-						r.Node = append(arr, emptyField)
-						if r.Parent != jsonic.NoRule && r.Parent != nil {
-							r.Parent.Node = r.Node
-						}
-					}
-				})},
-			&jsonic.AltSpec{S: [][]jsonic.Tin{{CA}}, R: "elem"},
-			&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
-			&jsonic.AltSpec{S: [][]jsonic.Tin{{ZZ}}},
-		)
-		rs.AddBC(func(r *jsonic.Rule, ctx *jsonic.Context) {
-			done, _ := r.U["done"].(bool)
-			if !done && !jsonic.IsUndefined(r.Child.Node) {
-				if arr, ok := r.Node.([]any); ok {
-					r.Node = append(arr, r.Child.Node)
-					if r.Parent != jsonic.NoRule && r.Parent != nil {
-						r.Parent.Node = r.Node
-					}
+	// pushChild appends the field value parsed by the child rule, unless an
+	// open alt already supplied one (the `done` marker) or there was no value.
+	pushChild := func(r *jsonic.Rule, _ *jsonic.Context) {
+		done, _ := r.U["done"].(bool)
+		if !done && !jsonic.IsUndefined(r.Child.Node) {
+			if arr, ok := r.Node.([]any); ok {
+				r.Node = append(arr, r.Child.Node)
+				if r.Parent != jsonic.NoRule && r.Parent != nil {
+					r.Parent.Node = r.Node
 				}
 			}
-		})
-	})
+		}
+	}
 
-	j.Rule("val", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
-		rs.Clear()
-		rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
-			r.Node = jsonic.Undefined
+	if strict {
+		// Strict mode: rebuild list/elem/val from scratch. JSON structural
+		// tokens are disabled, so the markdown alternates are all that is
+		// needed and the jsonic defaults would only corrupt the record node.
+		j.Rule("list", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
+			rs.Clear()
+			rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
+				r.Node = make([]any, 0)
+			})
+			rs.AddOpen(
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
+				&jsonic.AltSpec{P: "elem"},
+			)
+			rs.AddClose(
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{ZZ}}},
+			)
 		})
-		rs.AddOpen(
-			&jsonic.AltSpec{S: [][]jsonic.Tin{VAL, {SP}}, B: 2, P: "text"},
-			&jsonic.AltSpec{S: [][]jsonic.Tin{{SP}}, B: 1, P: "text"},
-			&jsonic.AltSpec{S: [][]jsonic.Tin{VAL}},
-			&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
-		)
-		rs.AddBC(func(r *jsonic.Rule, ctx *jsonic.Context) {
-			if jsonic.IsUndefined(r.Node) {
-				if jsonic.IsUndefined(r.Child.Node) {
-					if r.OS == 0 {
-						r.Node = jsonic.Undefined
+
+		j.Rule("elem", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
+			rs.Clear()
+			rs.AddOpen(
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{CA}}, B: 1,
+					A: jsonic.AltAction(func(r *jsonic.Rule, ctx *jsonic.Context) {
+						pushEmpty(r)
+						r.EnsureU()["done"] = true
+					})},
+				&jsonic.AltSpec{P: "val"},
+			)
+			rs.AddClose(
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{CA}, {LN, ZZ}}, B: 1,
+					A: jsonic.AltAction(func(r *jsonic.Rule, ctx *jsonic.Context) {
+						pushEmpty(r)
+					})},
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{CA}}, R: "elem"},
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{ZZ}}},
+			)
+			rs.AddBC(pushChild)
+		})
+
+		j.Rule("val", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
+			rs.Clear()
+			rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
+				r.Node = jsonic.Undefined
+			})
+			rs.AddOpen(
+				&jsonic.AltSpec{S: [][]jsonic.Tin{VAL, {SP}}, B: 2, P: "text"},
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{SP}}, B: 1, P: "text"},
+				&jsonic.AltSpec{S: [][]jsonic.Tin{VAL}},
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
+			)
+			rs.AddBC(func(r *jsonic.Rule, ctx *jsonic.Context) {
+				if jsonic.IsUndefined(r.Node) {
+					if jsonic.IsUndefined(r.Child.Node) {
+						if r.OS == 0 {
+							r.Node = jsonic.Undefined
+						} else {
+							r.Node = r.O0.ResolveVal(r, ctx)
+						}
 					} else {
-						r.Node = r.O0.ResolveVal(r, ctx)
+						r.Node = r.Child.Node
 					}
-				} else {
-					r.Node = r.Child.Node
 				}
-			}
+			})
 		})
-	})
+	} else {
+		// Non-strict mode: keep the jsonic/json alternates so embedded
+		// containers ([1,2], {x:1}) still parse, and layer the markdown record
+		// alternates around them — record alts first for the row structure,
+		// the elem/val fallbacks appended so jsonic's #OS/#CS are tried first.
+		j.Rule("list", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
+			// jsonic's list bo/bc (dmap/implist plus the info marker) would
+			// corrupt the record node, so replace them with a clean allocate.
+			rs.ClearActions("bo", "bc")
+			rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
+				r.Node = make([]any, 0)
+			})
+			rs.PrependOpen(&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1})
+			rs.AddOpen(&jsonic.AltSpec{P: "elem"})
+			rs.PrependClose(&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1})
+			rs.AddClose(&jsonic.AltSpec{S: [][]jsonic.Tin{{ZZ}}})
+		})
+
+		j.Rule("elem", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
+			// Replace jsonic's elem bc (child$ / pair handling) so record
+			// fields and embedded array elements both land as plain values.
+			rs.ClearActions("bc")
+			rs.PrependOpen(&jsonic.AltSpec{
+				S: [][]jsonic.Tin{{CA}}, B: 1,
+				A: jsonic.AltAction(func(r *jsonic.Rule, ctx *jsonic.Context) {
+					pushEmpty(r)
+					r.EnsureU()["done"] = true
+				}),
+			})
+			rs.AddOpen(&jsonic.AltSpec{P: "val"})
+			rs.PrependClose(
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{CA}, {LN, ZZ}}, B: 1,
+					A: jsonic.AltAction(func(r *jsonic.Rule, ctx *jsonic.Context) {
+						pushEmpty(r)
+					})},
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
+			)
+			rs.AddBC(pushChild)
+		})
+
+		j.Rule("val", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
+			rs.PrependOpen(
+				&jsonic.AltSpec{S: [][]jsonic.Tin{VAL, {SP}}, B: 2, P: "text"},
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{SP}}, B: 1, P: "text"},
+				&jsonic.AltSpec{S: [][]jsonic.Tin{{LN}}, B: 1},
+			)
+		})
+	}
 
 	return nil
 }
@@ -786,12 +847,25 @@ func toString(v any) string {
 	return s
 }
 
-func boolPtr(b bool) *bool {
-	return &b
+// fieldName renders a parsed header value as the property name TS would use.
+// TS assigns straight into a JS object, so the key goes through JavaScript's
+// own coercion; this reproduces that for the types a header row can produce.
+func fieldName(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case nil:
+		return "null"
+	case bool:
+		return strconv.FormatBool(x)
+	case float64:
+		return strconv.FormatFloat(x, 'g', -1, 64)
+	case int:
+		return strconv.Itoa(x)
+	}
+	return fmt.Sprintf("%v", v)
 }
 
-// orderedMap maintains insertion order for JSON serialization comparison.
-type orderedMap struct {
-	keys []string
-	m    map[string]any
+func boolPtr(b bool) *bool {
+	return &b
 }

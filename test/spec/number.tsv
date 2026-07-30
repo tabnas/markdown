@@ -1,0 +1,7 @@
+input	expected	opts
+a\n1	[{"a":"1"}]
+a\n1e2	[{"a":"1e2"}]
+a\n1	[{"a":1}]	{"number":true}
+a\n1e2	[{"a":100}]	{"number":true}
+a\n1	[{"a":1}]	{"strict":false}
+a\n1e2	[{"a":100}]	{"strict":false}
