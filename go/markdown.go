@@ -251,7 +251,12 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 				if childArr, ok := r.Child.Node.([]any); ok {
 					names := make([]string, len(childArr))
 					for i, v := range childArr {
-						names[i], _ = v.(string)
+						// In non-strict mode the header row is value-parsed
+						// too, so a name can arrive as a number, bool or nil.
+						// TS uses it as an object key and JS coerces it, so
+						// `1,true` yields the keys "1" and "true". A bare
+						// v.(string) would leave those blank and collide.
+						names[i] = fieldName(v)
 					}
 					ctx.Meta["fields"] = names
 				} else {
@@ -840,6 +845,25 @@ func toBool(v any) bool {
 func toString(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// fieldName renders a parsed header value as the property name TS would use.
+// TS assigns straight into a JS object, so the key goes through JavaScript's
+// own coercion; this reproduces that for the types a header row can produce.
+func fieldName(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case nil:
+		return "null"
+	case bool:
+		return strconv.FormatBool(x)
+	case float64:
+		return strconv.FormatFloat(x, 'g', -1, 64)
+	case int:
+		return strconv.Itoa(x)
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 func boolPtr(b bool) *bool {

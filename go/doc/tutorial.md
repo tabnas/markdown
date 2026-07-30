@@ -60,9 +60,9 @@ What happened:
 - Each later line is one **record**, split on commas into **fields**.
 - You get back `[]any`, one record per data row.
 
-Each record is an **ordered map** (`orderedMap`) — it keeps insertion order. In
-`fmt` output it prints as `{[key order] map[...]}`; the `[name age]` part is the
-key order and `map[...]` is the data.
+Each record is an **ordered map** (`*jsonic.OrderedMap`) — it keeps insertion
+order. Range `.Keys` for the field order and read `.Vals[k]` for the data, or
+hand the whole result to `json.Marshal`, which emits the fields in order.
 
 Every value is a **string** (`age:30`, not `30`). In the default *strict* mode
 the plugin does not interpret field contents — you opt into typed values next.
@@ -73,10 +73,11 @@ the plugin does not interpret field contents — you opt into typed values next.
 `Parse` returns `any`. Assert it to `[]any` to get the records. Each record's
 own type depends on the `object` option.
 
-The object records are an internal ordered-map type that callers cannot type
-assert to, so the most convenient way to *read* typed fields is **array
-output** (`object: false`): each record is a plain `[]any` you can index
-directly. Add `header: false` so the first row is data too:
+Object records are `*jsonic.OrderedMap`: type-assert one and read
+`rec.Vals["age"]`, or range `rec.Keys` in field order. **Array output**
+(`object: false`) is still handy when you want positional access — each record
+is a plain `[]any` you can index directly. Add `header: false` so the first row
+is data too:
 
 ```go
 package main

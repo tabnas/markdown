@@ -144,7 +144,7 @@ var Defaults = map[string]any{
 
 | `object` | Record type | Notes |
 |---|---|---|
-| `true` (default) | an internal ordered map | Preserves key order. Prints as `{[key order] map[...]}`. The type is unexported, so callers cannot type-assert to it — read object output by printing, or use `object: false` for programmatic access. |
+| `true` (default) | `*jsonic.OrderedMap` | Preserves field order. Type-assert it and read `.Vals[k]`, range `.Keys` for the order, or `json.Marshal` it — the marshalled object keeps field order. |
 | `false` | `[]any` | Plain slice of cells (`string`, `float64`, `bool`, or `nil`). Directly indexable and type-assertable. |
 
 Empty input, all-blank input, and the streaming case yield an empty `[]any`.
