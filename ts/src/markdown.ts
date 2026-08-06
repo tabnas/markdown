@@ -13,7 +13,11 @@
 // the mdast-adjacent JSON AST this package has always returned, and `html.ts`
 // renders it for `toHtml`.
 
-import { Tabnas, Plugin, Rule, Context } from '@tabnas/parser'
+// `Tabnas` is the only runtime binding needed here; the rest are types, so
+// they are imported as such. Without `import type`, Node's type stripping
+// keeps them in the emitted import and demands runtime exports that do not
+// exist.
+import type { Tabnas, Plugin, Rule, Context } from '@tabnas/parser'
 
 import { parse } from './commonmark.ts'
 import { toAst } from './ast.ts'

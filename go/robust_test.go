@@ -96,6 +96,34 @@ func TestLinkDestinationIsNotQuadratic(t *testing.T) {
 	}
 }
 
+// TestNestedContainersAreNotQuadratic pins the sourcepos column anchor in
+// block.go. A sourcepos column counts characters, but this port's offsets are
+// byte indices, so addChild has to convert — and counting from the start of the
+// line each time made a line of n nested containers cost O(n²), where the
+// canonical runtime is linear. `> - > - > - …` is cheap to write and untrusted
+// input decides n, so this is a denial-of-service bound, not a micro-benchmark.
+func TestNestedContainersAreNotQuadratic(t *testing.T) {
+	measure := func(n int) time.Duration {
+		src := strings.Repeat("> - ", n) + "x"
+		start := time.Now()
+		_ = Parse(src, Options{})
+		return time.Since(start)
+	}
+
+	// Warm up, then compare a 4x size step against a generous linear bound.
+	measure(1000)
+	small := measure(5000)
+	large := measure(20000)
+
+	if small < time.Millisecond {
+		small = time.Millisecond
+	}
+	if ratio := float64(large) / float64(small); ratio > 10 {
+		t.Errorf("4x input took %.1fx time (%v -> %v); expected roughly linear",
+			ratio, small, large)
+	}
+}
+
 func TestNonASCII(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
 		{"café naïve *ém*\n", "<p>café naïve <em>ém</em></p>\n"},
