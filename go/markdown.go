@@ -13,6 +13,14 @@ const Version = "0.4.1"
 
 // --- BEGIN EMBEDDED markdown-grammar.jsonic ---
 const grammarText = `
+# Markdown prose grammar — CommonMark/GFM subset
+# See dx-report.md section 2 and ts/src/markdown.ts header.
+# This grammar is intentionally trivial: the prose parser is implemented
+# in JS inside the markdown rule bo action (parseDocument). The
+# block structure therefore shows as a single markdown -> block fan-out
+# in the railroad diagram, which is honest about where the complexity
+# lives. The file is kept so ts/embed-grammar.js continues to embed a
+# grammar verbatim into both runtimes (see AGENTS.md).
 {
   rule: markdown: open: [
     { s: '#ZZ' }
@@ -59,12 +67,12 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 	// Lex: disable string/comment/number/value that would turn Markdown
 	// syntax into bad tokens before the block scanner runs.
 	j.SetOptions(jsonic.Options{
-		String: &jsonic.StringOptions{Lex: boolPtr(false)},
+		String:  &jsonic.StringOptions{Lex: boolPtr(false)},
 		Comment: &jsonic.CommentOptions{Lex: boolPtr(false)},
-		Number: &jsonic.NumberOptions{Lex: boolPtr(false)},
-		Value: &jsonic.ValueOptions{Lex: boolPtr(false)},
-		Lex: &jsonic.LexOptions{EmptyResult: map[string]any{"type": "document", "children": []any{}}},
-		Rule: &jsonic.RuleOptions{Start: "markdown"},
+		Number:  &jsonic.NumberOptions{Lex: boolPtr(false)},
+		Value:   &jsonic.ValueOptions{Lex: boolPtr(false)},
+		Lex:     &jsonic.LexOptions{EmptyResult: map[string]any{"type": "document", "children": []any{}}},
+		Rule:    &jsonic.RuleOptions{Start: "markdown"},
 	})
 
 	// Rule markdown: bo builds the document from ctx.Src, open/close
