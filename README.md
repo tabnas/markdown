@@ -64,8 +64,9 @@ tn.parse('# Hello') // => { type: 'document', children: [ { type: 'heading', dep
 
 There is a third output for callers who want to walk or mutate before rendering:
 `parseTree()` / `ParseTree()` returns the native CommonMark node tree, which keeps
-`sourcepos` / `SourcePos` on block nodes, and `renderHTML` / `RenderHTML` renders it.
-See the reference for each runtime.
+`sourcepos` / `SourcePos` on block nodes. `renderHTML()` / `RenderHTML()` renders a tree
+back to HTML, so parse, transform and render are three separate steps when you need them
+to be. See the reference for each runtime.
 
 ## Install
 

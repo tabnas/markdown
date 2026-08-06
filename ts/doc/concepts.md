@@ -278,7 +278,7 @@ They are not a simplified grammar, or a grammar that handles the easy cases with
 handling the rest. Block structure is decided entirely by the line algorithm in `block.ts`.
 The file declares one rule with alts that consume the token stream so the engine's
 trailing-content check passes, and that is its entire contribution. The railroad diagram
-generated from it is a single empty box.
+generated from it is empty — a bare track with no boxes on it.
 
 It is kept because `embed-grammar.js` embeds it into both runtimes, and removing it would
 mean changing the embedding step and the two files that carry the embedded block. That is

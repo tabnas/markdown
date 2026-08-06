@@ -406,6 +406,9 @@ cd ts
 npm run conformance
 ```
 
-Between them those fixtures are the parity contract: the two runtimes are checked
-over all 652 examples across all four `gfm` × `breaks` combinations, and produce
-identical ASTs and identical HTML.
+The 36 fixtures pin the AST through the plugin path in both runtimes; they are a
+regression net, not a proof that the runtimes agree. The claim that they agree
+rests on a wider comparison: all 652 spec inputs under all four `GFM` × `Breaks`
+combinations — 2608 records — with both the AST and the HTML compared on each,
+and 0 differences in either. Neither check covers `SourcePos`, which the AST
+drops and the HTML does not encode.

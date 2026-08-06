@@ -79,8 +79,12 @@ To install the plugin on an engine you already have, use `j.Use(tabnasmarkdown.M
 
 Options are a struct, not a map: `tabnasmarkdown.Options{GFM: bool, Breaks: bool}`, with
 `DefaultOptions` being `{GFM: true, Breaks: false}`. `ResolveOptions` converts the plugin
-option map form. The parser is engine-free — nothing under `commonmark.go` imports the
-engine — so the conformance suite runs on its own:
+option map form. `GFM` gates strikethrough and nothing else: tables, task list items,
+autolink literals (bare `www.` / `https://` without angle brackets), footnotes and
+disallowed-raw-HTML filtering are not implemented.
+
+The parser is engine-free — nothing under `commonmark.go` imports the engine — so the
+conformance suite runs on its own:
 
 ```bash
 go test -run TestCommonMarkSpec -v ./...   # 652/652

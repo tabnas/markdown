@@ -129,11 +129,11 @@ while ((ev = walker.next())) {
 tree.lastChild.firstChild.next.destination // => 'https://example.com/docs'
 ```
 
-Then render the mutated tree. `renderHTML` is not on the package's main export;
-it comes from the engine-free parser module:
+Then render the mutated tree with `renderHTML`, which takes a tree rather than a
+source string:
 
 ```js
-import { renderHTML } from '@tabnas/markdown/dist/commonmark.js'
+import { renderHTML } from '@tabnas/markdown'
 
 const html = renderHTML(tree)
 ```
@@ -269,8 +269,12 @@ cd go
 go test -run TestCommonMarkSpec -v ./...
 ```
 
-The shared AST fixtures in `test/spec/*.tsv` are asserted by both runtimes —
+The 36 shared AST fixtures in `test/spec/*.tsv` are asserted by both runtimes —
 `npm test` (after `npm run build`) on the TypeScript side, `go test ./...` on
-the Go side. Between them they are the parity contract: the two runtimes are
-checked over all 652 examples across all four `gfm` × `breaks` combinations,
-and produce identical ASTs and identical HTML.
+the Go side. They pin the AST through the plugin path; they are a regression
+net, not a proof that the runtimes agree.
+
+The claim that the runtimes agree rests on a wider comparison: all 652 spec
+inputs under all four `gfm` × `breaks` combinations — 2608 records — with both
+the AST and the HTML compared on each, and 0 differences in either. Neither
+check covers `sourcepos`, which the AST drops and the HTML does not encode.

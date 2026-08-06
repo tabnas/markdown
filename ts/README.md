@@ -83,7 +83,10 @@ The `// =>` assertions in this repo's Markdown are executed as tests
 (`test/doc-examples.test.ts`, and `tools/check-doc-examples.mjs` for the engine-free
 check), so a wrong expected value is a failing test.
 
-Options are `gfm` (default `true`) and `breaks` (default `false`).
+Options are `gfm` (default `true`) and `breaks` (default `false`). `gfm` gates
+strikethrough and nothing else: tables, task list items, autolink literals (bare `www.` /
+`https://` without angle brackets), footnotes and disallowed-raw-HTML filtering are not
+implemented.
 
 ## Documentation
 

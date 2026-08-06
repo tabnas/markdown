@@ -117,3 +117,204 @@ Drop `@tabnas/jsonic` peerDep. The plugin depends only on `@tabnas/parser`. `ts/
 ---
 
 *This file is append-only during the rescope — new dated entries go at the bottom.*
+
+---
+
+# 2026-08-06 — CommonMark 0.31.2 rewrite (652/652, both runtimes)
+
+**Repo:** `@tabnas/markdown` **Date:** 2026-08-06, TS-first then Go
+**Outcome:** the line-scanner prose parser described in §2 above is gone,
+replaced by a full CommonMark 0.31.2 implementation in both runtimes.
+
+## 6. What was replaced, and why not incrementally
+
+The parser described in §2.1–§2.3 was a single left-to-right line scanner
+(`parseDocument` ~250 lines, `parseInline` ~220) that classified each line
+in a fixed precedence order and recursed on the interior. Measured against
+the vendored 0.31.2 suite it scored **roughly 40%**. The failures were not
+a list of missing features that could be worked through one at a time;
+they came from three structural commitments, each of which the spec's own
+algorithm (Appendix A, "A parsing strategy") makes in the opposite
+direction:
+
+* **One pass over the line, deciding as it went.** Lazy continuation
+  requires the opposite: a line that fails a block quote's `>` test may
+  still continue a paragraph inside it, so unmatched containers must be
+  closed *after* the search for new block starts, not when their marker
+  goes missing. A scanner that classifies a line before it knows whether
+  anything else matched cannot express that. Nor could it express setext
+  underlines, link reference definitions, or list tightness, all of which
+  are decided when a block is *finalized* rather than when it is opened.
+* **Local decisions for emphasis and links.** §2.2 hoped a delimiter walk
+  would do. It cannot: whether a `*` run opens, closes, both or neither
+  depends on what surrounds it, on what unmatched runs are still behind
+  it, and on the lengths of both (the rule of three). Emphasis needs a
+  delimiter stack resolved in a second pass, and links need a bracket
+  stack for the same reason. Retrofitting a stack into a scanner that had
+  already committed to emitting nodes in scan order was a rewrite of the
+  inline half regardless.
+* **Nodes built as children-arrays, top-down.** Both phases splice nodes
+  mid-walk — the block phase closes containers from the tail of an open
+  spine, the inline phase rewrites sibling runs in place. Every splice was
+  an index rewrite. The replacement is a linked tree (`node.ts` /
+  `node.go`), projected to the public AST afterwards.
+
+§2.1's premise — *keep the plugin API, host the parser in the `bo` action,
+do not encode indentation rules as declarative alts* — survived intact and
+is the reason the rewrite was contained. What did not survive is the
+implementation behind it. The tabnas seam (`ctx.src()`, `rule.clear()`,
+the disabled lexers) is unchanged; only what happens after `ctx.src()` was
+replaced.
+
+## 7. Results
+
+* **CommonMark 0.31.2: 652/652 in both TypeScript and Go**, all 26
+  sections. Byte-for-byte HTML comparison against the vendored suite,
+  which is now at `test/commonmark/spec.json`.
+* **Parity: 652 examples × 4 option combinations (`gfm` × `breaks`) =
+  2608 records, 0 differing ASTs and 0 differing HTML outputs.**
+
+  Worth separating what was *verified once* from what is *enforced
+  continuously*, because they are not the same set:
+
+  - Verified, as one-off comparison runs during the port: AST and HTML
+    over those 2608 records; then, after the `sourcepos` unit was fixed,
+    the **native trees** over the same 2608 records — including
+    `sourcepos` — plus a 200-case astral/BMP corpus built to exercise the
+    column boundary. Zero differences in all three.
+  - Enforced by committed tests: the conformance suite in each runtime,
+    the 36 shared `.tsv` fixtures, and
+    `TestSourcePosColumnsCountCharacters` (4 cases per runtime).
+
+  The gap between those two lists is the honest caveat. The comparison
+  that runs in CI covers the two public outputs, and it is structurally
+  blind to `sourcepos` — the projection drops it and the HTML does not
+  encode it. That is exactly why the runtimes could disagree on astral
+  columns while every automated check stayed green, and why the column
+  unit now has a direct test rather than relying on the parity net. A
+  standing cross-runtime tree comparison would close the gap properly and
+  is queued in §10.
+* All **36** shared fixtures in `test/spec/*.tsv` pass in both runtimes,
+  **untouched**. The public AST is otherwise unchanged by the rewrite,
+  which is the strongest evidence available that this was a conformance
+  fix and not a redesign of the output.
+* Reproduce: `npm run conformance` from `ts/` (no build step, no engine
+  needed) or `cd go && go test -run TestCommonMarkSpec -v ./...`.
+
+Two AST changes callers may notice, both listed in the README:
+
+* `spread` on lists and items now follows mdast semantics. It was
+  previously latched by whether the file ended in a newline, so
+  `- a\n- b\n` and `- a\n\n- b\n` produced identical output and the field
+  carried no information at all. §2.3 recorded it as "computed but not yet
+  used"; it was in fact not computed.
+* Inline raw HTML now produces `{type:'html', value:'<b>'}` inline nodes.
+  There was previously no inline node type for it and tags leaked into
+  `text`.
+
+## 8. Corrections to earlier sections
+
+Stated here as corrections rather than edited above, per this file's
+append-only rule.
+
+* **§2.4 was wrong about `gfm`.** The option's comment read "enables
+  strikethrough + autolink extensions". Autolink literals — bare `www.` /
+  `https://` without angle brackets — were never implemented, and are
+  still not. The flag gates **strikethrough only**. It gates nothing else
+  because there is nothing else to gate. §2.3 and the §4 risk table were
+  accurate on this point ("`gfm` gates only strikethrough"); §2.4
+  contradicted them and the README inherited §2.4's version. The package
+  parses CommonMark, with one GFM extension; that is the phrasing to use.
+* **§2.3's deferred list is now partly resolved.** Delivered: full
+  reference-link resolution (two-phase, definitions collected during
+  paragraph finalization), HTML blocks (all seven types, not "raw line
+  starting with `<` until blank"), entity and numeric character
+  references, complete emphasis and strong emphasis including the
+  underscore word-boundary rule §4 flagged as a known gap, and loose/tight
+  list handling — which is real now, not merely an honest boolean.
+  Still outstanding, and still deliberate: **GFM tables, task list items,
+  autolink literals, footnotes**, and disallowed-raw-HTML filtering.
+  Definition lists and math remain out of scope.
+* **§2.3's "in scope" list undersold what shipped and oversold what
+  worked.** It is superseded by the README's statement of the whole
+  0.31.2 surface.
+* **§5's queued `toHtml` is delivered.** `toHtml(src, opts)` /
+  `ToHTML(src, opts)` render CommonMark-conformant HTML. §2.2 called a
+  stringifier "out-of-scope for this strand"; the rewrite made it
+  mandatory rather than optional, because the specification defines
+  conformance as HTML output. Without a renderer there is no way to make
+  "652/652" mean anything. The renderer is therefore the measuring
+  instrument first and a public convenience second. `parseTree()` /
+  `ParseTree()` plus `renderHTML` / `RenderHTML` expose the same path in
+  two steps for callers who want to walk or mutate in between.
+  The GFM table/task support queued alongside it is **not** delivered.
+* **The HTML is not sanitized**, and nothing in §2 anticipated that this
+  would need saying. CommonMark passes raw HTML blocks and inline tags
+  through verbatim by specification: `<script>alert(1)</script>` in, the
+  same out. GFM's disallowed-raw-HTML filter is not implemented. Every
+  document that shows HTML output now carries this warning; keep it there.
+* **§1's fixture-IR split is resolved**, not by choosing between the two
+  shapes but by giving each a distinct job: `test/spec/*.tsv` pins the
+  **AST** and is the TS/Go parity contract; `test/commonmark/spec.json`
+  scores **HTML** and is the conformance contract. Neither can do the
+  other's job — a projection change can leave 652/652 untouched, and the
+  suite runs with `gfm:false` so it can never cover strikethrough.
+  `test/AGENTS.md` documents both.
+* **§1's "grammar embed was doc, not logic" is now stated plainly rather
+  than hedged.** `markdown-grammar.jsonic` is **inert**: block structure
+  is decided by the line algorithm in `block.ts` / `block.go`, and the
+  `markdown` rule exists only to consume the token stream so the engine's
+  trailing-content check passes. §2.1 predicted "a single
+  `document → block` fan-out"; the railroad diagram it actually produces
+  is empty — a bare track with no boxes on it. The file is kept solely because
+  `ts/embed-grammar.js` embeds it. Documentation should say so rather than
+  imply the grammar drives anything.
+
+## 9. Cleanups landed with the rewrite
+
+* **Go is genuinely bare-engine.** `go/go.mod` now requires
+  `github.com/tabnas/parser/go` and nothing else — no jsonic, no indirect
+  requirements. §2.5 decided this and the TypeScript side did it;
+  `AGENTS.md` then claimed it for both while `go/go.mod` said otherwise.
+  The claim and the file now agree.
+* **`tabnasmarkdown.Make()` exists.** `README.md` documented it for a long
+  time before it did. It was never caught because `go/doc/*.md` is not
+  auto-executed, unlike the TypeScript examples. Go examples are now
+  verified by compiling them against the real package; the process rule is
+  in `AGENTS.md`.
+* **RFC-4180 leftovers deleted**: `BuildMarkdownStringMatcher`, and
+  `test/fixtures/` with its 258 orphaned CSV files. §1 called these
+  "template copy from `csv` left intact"; they are gone rather than
+  archived.
+* **Adversarial-input tests added** — `go/robust_test.go`, Go side only so
+  far; the TypeScript counterpart is outstanding. Markdown is routinely
+  parsed from untrusted sources, so nothing may panic, hang, or go
+  super-linear. Two cases guard real defects of the previous Go
+  implementation, both of which the port's shape invited: a code fence
+  over 1000
+  characters panicked in Go, because the closing-fence regex interpolated
+  the fence length into a `{n,}` bounded repeat and RE2 caps those at
+  1000 — untrusted input could abort the host process; and non-ASCII text
+  was corrupted because the inline scanner appended `string(text[i])`, a
+  byte, so every UTF-8 continuation byte widened into its own code point.
+* **Two executable contracts** are now in place and are documented as
+  such in `AGENTS.md`: the conformance corpus, and the `// =>` assertions
+  in the documentation, which `ts/test/doc-examples.test.ts` and
+  `ts/tools/check-doc-examples.mjs` run. Neither may be weakened to make a
+  change pass.
+
+## 10. Follow-ups still queued
+
+* GFM tables, task list items, autolink literals, footnotes,
+  disallowed-raw-HTML filtering. Each would need its own option, not a
+  widening of `gfm` — see the §8 correction.
+* A TypeScript counterpart to `go/robust_test.go`. The adversarial corpus
+  is expressible as inputs that must merely not blow up, so it belongs in
+  both runtimes.
+* A **standing** cross-runtime native-tree comparison. The tree-level
+  check described in §7 was run by hand and found nothing, but nothing
+  re-runs it, so positional drift between the runtimes would go unnoticed
+  again. It needs a dump-and-diff step in CI, not a test inside either
+  runtime, since neither can see the other.
+* `debug/go:Model()`, `Tabnas.Safe/Strict` presets and the `tabnas-verify`
+  gate (§5) remain untouched by this strand.

@@ -550,6 +550,7 @@ downstream of this renderer.
 | Result | **652/652** |
 | Suite | `test/commonmark/spec.json`, vendored |
 | Command | `npm run conformance` (no build step, no engine required) |
+| Options used | `{ gfm: false, breaks: false }` — the suite is pure CommonMark |
 | Go port | `cd go && go test -run TestCommonMarkSpec -v ./...`, also 652/652 |
 
 All 26 sections pass.
@@ -597,7 +598,7 @@ It is inert. It declares one rule, `markdown`, with `open` and `close` alts of
 `[{ s: '#ZZ' }]`. Block structure is decided by the line algorithm in `block.ts`, not by
 these alts. `grammarText` is a string constant that no code path parses; the file is kept
 because `embed-grammar.js` embeds it. The railroad diagram generated from it
-(`ts/doc/grammar.svg`) is a single empty box.
+(`ts/doc/grammar.svg`) is empty: a bare track with no boxes on it.
 
 ## Errors
 

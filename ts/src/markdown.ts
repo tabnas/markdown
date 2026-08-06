@@ -47,14 +47,29 @@ export type MarkdownOptions = {
 
 // --- BEGIN EMBEDDED markdown-grammar.jsonic ---
 const grammarText = `
-# Markdown prose grammar — CommonMark/GFM subset
-# See dx-report.md section 2 and ts/src/markdown.ts header.
-# This grammar is intentionally trivial: the prose parser is implemented
-# in JS inside the markdown rule bo action (parseDocument). The
-# block structure therefore shows as a single markdown -> block fan-out
-# in the railroad diagram, which is honest about where the complexity
-# lives. The file is kept so ts/embed-grammar.js continues to embed a
-# grammar verbatim into both runtimes (see AGENTS.md).
+# Markdown entry rule — CommonMark 0.31.2
+#
+# This grammar is deliberately trivial, and it is NOT where the parser
+# lives. Block structure is decided by the two-phase line algorithm of
+# spec Appendix A, implemented in block.ts / block.go, and inline
+# structure by the delimiter and bracket stacks in inline.ts / inline.go.
+# None of that is expressible as declarative alts, which is why none of
+# it is here.
+#
+# The markdown rule exists only to give the engine an entry point and to
+# consume the token stream so its trailing-content check passes. The bo
+# action reads the whole source via ctx.src() and hands it to the parser.
+# Everything the rule does is in those two lines below.
+#
+# Consequences worth knowing rather than discovering:
+#   - The railroad diagram generated from this file is empty: a bare
+#     track with no boxes on it. That is accurate, not a rendering fault.
+#   - Editing this file changes documentation, not behaviour. The one
+#     exception is the open/close alts, which really are the rule.
+#
+# The file is kept because ts/embed-grammar.js embeds it verbatim into
+# both runtimes as grammarText (see AGENTS.md). It may not contain
+# backticks: the Go copy is a raw string literal.
 {
   rule: markdown: open: [
     { s: '#ZZ' }
@@ -172,3 +187,9 @@ export type {
 
 export { MdNode } from './node.ts'
 export type { ParserOptions } from './options.ts'
+
+// Re-exported so the package entry offers the same pair as the Go package,
+// where `RenderHTML` is exported alongside `ToHTML`. Without this, rendering a
+// tree you built or mutated yourself meant a deep import of `commonmark.ts`,
+// and the two runtimes' public surfaces did not match.
+export { renderHTML } from './html.ts'
