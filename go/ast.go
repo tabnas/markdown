@@ -149,14 +149,23 @@ func toBlock(node *MdNode, opts Options) map[string]any {
 		return map[string]any{"type": "blockquote", "children": blockChildren(node, opts)}
 
 	case NodeCodeBlock:
-		info := strings.TrimSpace(node.Info)
+		// jsTrim/jsSpaceIndex, not strings.TrimSpace and an ASCII-only class:
+		// the canonical runtime splits on `.trim()` and `.search(/\s/)`, whose
+		// character set includes NBSP and U+FEFF but excludes U+0085. The block
+		// phase already trimmed the info string, but unescapeString runs after
+		// that trim, so `&#160;` and friends put whitespace back.
+		info := jsTrim(node.Info)
 		var lang, meta any
 		if info != "" {
-			if sp := strings.IndexAny(info, " \t\n\v\f\r"); sp < 0 {
+			sp, width := jsSpaceIndex(info)
+			if sp < 0 {
 				lang = info
 			} else {
 				lang = info[:sp]
-				if rest := strings.TrimSpace(info[sp+1:]); rest != "" {
+				// Step a whole rune. The TypeScript's `sp + 1` advances one
+				// UTF-16 unit, which is the same thing there because every
+				// character in the class is BMP.
+				if rest := jsTrim(info[sp+width:]); rest != "" {
 					meta = rest
 				}
 			}

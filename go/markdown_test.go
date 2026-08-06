@@ -5,11 +5,11 @@ import (
 	"reflect"
 	"testing"
 
-	jsonic "github.com/tabnas/jsonic/go"
+	parser "github.com/tabnas/parser/go"
 )
 
 func mdParse(src string, opts ...map[string]any) (map[string]any, error) {
-	j := jsonic.Make()
+	j := parser.Make()
 	var o map[string]any
 	if len(opts) > 0 {
 		o = opts[0]
@@ -237,8 +237,8 @@ func TestStrikethrough(t *testing.T) {
 }
 
 func TestBareAndCompat(t *testing.T) {
-	// Bare engine via jsonic.Make (which is tabnas) should work
-	j := jsonic.Make()
+	// Bare engine: the package depends on @tabnas/parser only.
+	j := parser.Make()
 	if err := j.Use(Markdown, nil); err != nil {
 		t.Fatalf("Use Markdown: %v", err)
 	}

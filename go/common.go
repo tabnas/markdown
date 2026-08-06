@@ -115,15 +115,234 @@ func unescapeString(s string) string {
 	})
 }
 
+// isJSSpace reports whether r is JavaScript whitespace: the ECMAScript
+// WhiteSpace and LineTerminator productions, which are both what `\s` matches
+// and what String.prototype.trim() removes. That is the spec's §2.3 Unicode
+// whitespace plus the vertical tab and U+FEFF.
+//
+// Deliberately distinct from isUnicodeWhitespace, which is §2.3 exactly and
+// answers a different question (emphasis flanking). And deliberately used in
+// place of strings.TrimSpace / regexp `\s` wherever the canonical runtime uses
+// a JavaScript trim or `\s`: TrimSpace trims U+0085, which JavaScript keeps,
+// and keeps U+FEFF, which JavaScript trims, while Go's regexp `\s` is only
+// [\t\n\f\r ]. Four separate places turn on exactly this set — the fence info
+// string (block.go), the trailing-space test that decides a hard line break
+// (inline.go), the code fence's language/meta split (ast.go and html.go), and
+// §4.7 label matching (normalizeReference below) — so it is defined once.
+func isJSSpace(r rune) bool {
+	return '\v' == r || '\uFEFF' == r || isUnicodeWhitespace(r)
+}
+
+// jsTrim removes exactly what String.prototype.trim() removes.
+func jsTrim(s string) string { return strings.TrimFunc(s, isJSSpace) }
+
+// jsSpaceIndex is the byte index of the first JavaScript-whitespace character
+// in s, with its width, or (-1, 0) when there is none. It is the Go spelling of
+// `s.search(/\s/)`, except that the index is a byte offset and the width comes
+// back too — JavaScript can advance past the match with `+ 1` because every
+// character in the class is BMP, where Go must step a whole rune.
+func jsSpaceIndex(s string) (idx int, width int) {
+	for i := 0; i < len(s); {
+		// Scan by byte: no character in the class above U+007F can be confused
+		// with a UTF-8 continuation byte, and slicing at i never splits a rune.
+		if c := s[i]; c < utf8.RuneSelf {
+			if isJSSpace(rune(c)) {
+				return i, 1
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if isJSSpace(r) {
+			return i, size
+		}
+		i += size
+	}
+	return -1, 0
+}
+
+// jsFullCaseUpper maps the code points whose Unicode **full** case round trip
+// (lowercase, then uppercase) differs from the **simple**, one-rune-in
+// one-rune-out mapping that strings.ToLower/strings.ToUpper apply.
+//
+// This is the whole reason normalizeReference cannot just be
+// strings.ToUpper(strings.ToLower(s)). JavaScript's toLowerCase/toUpperCase
+// implement the full mappings — the unconditional entries of Unicode's
+// SpecialCasing.txt — so "\u00df".toUpperCase() is "SS", where Go's ToUpper
+// leaves ß alone. CommonMark example 540 ([ẞ] resolving against [SS]) turns on
+// exactly that, and 102 further code points (mostly Greek Extended
+// iota-subscript forms) diverge the same way.
+//
+// Keyed on the *original* rune and holding the result of the whole round trip,
+// which is well defined because in the root locale both halves are pure
+// per-code-point mappings. The one context-sensitive rule, Final_Sigma, washes
+// out here: σ and ς both uppercase to Σ.
+//
+// Generated from the mappings of the canonical runtime, then verified
+// exhaustively against it over every code point (see normalizeReference).
+var jsFullCaseUpper = map[rune]string{
+	// Latin sharp s
+	0x00DF: "\u0053\u0053", // LATIN SMALL LETTER SHARP S
+
+	// Latin
+	0x0130: "\u0049\u0307", // LATIN CAPITAL LETTER I WITH DOT ABOVE
+	0x0149: "\u02bc\u004e", // LATIN SMALL LETTER N PRECEDED BY APOSTROPHE
+	0x01F0: "\u004a\u030c", // LATIN SMALL LETTER J WITH CARON
+
+	// Greek
+	0x0390: "\u0399\u0308\u0301", // GREEK SMALL LETTER IOTA WITH DIALYTIKA AND TONOS
+	0x03B0: "\u03a5\u0308\u0301", // GREEK SMALL LETTER UPSILON WITH DIALYTIKA AND TONOS
+
+	// Armenian
+	0x0587: "\u0535\u0552", // ARMENIAN SMALL LIGATURE ECH YIWN
+
+	// Latin Extended Additional
+	0x1E96: "\u0048\u0331", // LATIN SMALL LETTER H WITH LINE BELOW
+	0x1E97: "\u0054\u0308", // LATIN SMALL LETTER T WITH DIAERESIS
+	0x1E98: "\u0057\u030a", // LATIN SMALL LETTER W WITH RING ABOVE
+	0x1E99: "\u0059\u030a", // LATIN SMALL LETTER Y WITH RING ABOVE
+	0x1E9A: "\u0041\u02be", // LATIN SMALL LETTER A WITH RIGHT HALF RING
+
+	// Latin sharp s
+	0x1E9E: "\u0053\u0053", // LATIN CAPITAL LETTER SHARP S
+
+	// Greek Extended
+	0x1F50: "\u03a5\u0313",       // GREEK SMALL LETTER UPSILON WITH PSILI
+	0x1F52: "\u03a5\u0313\u0300", // GREEK SMALL LETTER UPSILON WITH PSILI AND VARIA
+	0x1F54: "\u03a5\u0313\u0301", // GREEK SMALL LETTER UPSILON WITH PSILI AND OXIA
+	0x1F56: "\u03a5\u0313\u0342", // GREEK SMALL LETTER UPSILON WITH PSILI AND PERISPOMENI
+	0x1F80: "\u1f08\u0399",       // GREEK SMALL LETTER ALPHA WITH PSILI AND YPOGEGRAMMENI
+	0x1F81: "\u1f09\u0399",       // GREEK SMALL LETTER ALPHA WITH DASIA AND YPOGEGRAMMENI
+	0x1F82: "\u1f0a\u0399",       // GREEK SMALL LETTER ALPHA WITH PSILI AND VARIA AND YPOGEGRAMMENI
+	0x1F83: "\u1f0b\u0399",       // GREEK SMALL LETTER ALPHA WITH DASIA AND VARIA AND YPOGEGRAMMENI
+	0x1F84: "\u1f0c\u0399",       // GREEK SMALL LETTER ALPHA WITH PSILI AND OXIA AND YPOGEGRAMMENI
+	0x1F85: "\u1f0d\u0399",       // GREEK SMALL LETTER ALPHA WITH DASIA AND OXIA AND YPOGEGRAMMENI
+	0x1F86: "\u1f0e\u0399",       // GREEK SMALL LETTER ALPHA WITH PSILI AND PERISPOMENI AND YPOGEGRAMMENI
+	0x1F87: "\u1f0f\u0399",       // GREEK SMALL LETTER ALPHA WITH DASIA AND PERISPOMENI AND YPOGEGRAMMENI
+	0x1F88: "\u1f08\u0399",       // GREEK CAPITAL LETTER ALPHA WITH PSILI AND PROSGEGRAMMENI
+	0x1F89: "\u1f09\u0399",       // GREEK CAPITAL LETTER ALPHA WITH DASIA AND PROSGEGRAMMENI
+	0x1F8A: "\u1f0a\u0399",       // GREEK CAPITAL LETTER ALPHA WITH PSILI AND VARIA AND PROSGEGRAMMENI
+	0x1F8B: "\u1f0b\u0399",       // GREEK CAPITAL LETTER ALPHA WITH DASIA AND VARIA AND PROSGEGRAMMENI
+	0x1F8C: "\u1f0c\u0399",       // GREEK CAPITAL LETTER ALPHA WITH PSILI AND OXIA AND PROSGEGRAMMENI
+	0x1F8D: "\u1f0d\u0399",       // GREEK CAPITAL LETTER ALPHA WITH DASIA AND OXIA AND PROSGEGRAMMENI
+	0x1F8E: "\u1f0e\u0399",       // GREEK CAPITAL LETTER ALPHA WITH PSILI AND PERISPOMENI AND PROSGEGRAMMENI
+	0x1F8F: "\u1f0f\u0399",       // GREEK CAPITAL LETTER ALPHA WITH DASIA AND PERISPOMENI AND PROSGEGRAMMENI
+	0x1F90: "\u1f28\u0399",       // GREEK SMALL LETTER ETA WITH PSILI AND YPOGEGRAMMENI
+	0x1F91: "\u1f29\u0399",       // GREEK SMALL LETTER ETA WITH DASIA AND YPOGEGRAMMENI
+	0x1F92: "\u1f2a\u0399",       // GREEK SMALL LETTER ETA WITH PSILI AND VARIA AND YPOGEGRAMMENI
+	0x1F93: "\u1f2b\u0399",       // GREEK SMALL LETTER ETA WITH DASIA AND VARIA AND YPOGEGRAMMENI
+	0x1F94: "\u1f2c\u0399",       // GREEK SMALL LETTER ETA WITH PSILI AND OXIA AND YPOGEGRAMMENI
+	0x1F95: "\u1f2d\u0399",       // GREEK SMALL LETTER ETA WITH DASIA AND OXIA AND YPOGEGRAMMENI
+	0x1F96: "\u1f2e\u0399",       // GREEK SMALL LETTER ETA WITH PSILI AND PERISPOMENI AND YPOGEGRAMMENI
+	0x1F97: "\u1f2f\u0399",       // GREEK SMALL LETTER ETA WITH DASIA AND PERISPOMENI AND YPOGEGRAMMENI
+	0x1F98: "\u1f28\u0399",       // GREEK CAPITAL LETTER ETA WITH PSILI AND PROSGEGRAMMENI
+	0x1F99: "\u1f29\u0399",       // GREEK CAPITAL LETTER ETA WITH DASIA AND PROSGEGRAMMENI
+	0x1F9A: "\u1f2a\u0399",       // GREEK CAPITAL LETTER ETA WITH PSILI AND VARIA AND PROSGEGRAMMENI
+	0x1F9B: "\u1f2b\u0399",       // GREEK CAPITAL LETTER ETA WITH DASIA AND VARIA AND PROSGEGRAMMENI
+	0x1F9C: "\u1f2c\u0399",       // GREEK CAPITAL LETTER ETA WITH PSILI AND OXIA AND PROSGEGRAMMENI
+	0x1F9D: "\u1f2d\u0399",       // GREEK CAPITAL LETTER ETA WITH DASIA AND OXIA AND PROSGEGRAMMENI
+	0x1F9E: "\u1f2e\u0399",       // GREEK CAPITAL LETTER ETA WITH PSILI AND PERISPOMENI AND PROSGEGRAMMENI
+	0x1F9F: "\u1f2f\u0399",       // GREEK CAPITAL LETTER ETA WITH DASIA AND PERISPOMENI AND PROSGEGRAMMENI
+	0x1FA0: "\u1f68\u0399",       // GREEK SMALL LETTER OMEGA WITH PSILI AND YPOGEGRAMMENI
+	0x1FA1: "\u1f69\u0399",       // GREEK SMALL LETTER OMEGA WITH DASIA AND YPOGEGRAMMENI
+	0x1FA2: "\u1f6a\u0399",       // GREEK SMALL LETTER OMEGA WITH PSILI AND VARIA AND YPOGEGRAMMENI
+	0x1FA3: "\u1f6b\u0399",       // GREEK SMALL LETTER OMEGA WITH DASIA AND VARIA AND YPOGEGRAMMENI
+	0x1FA4: "\u1f6c\u0399",       // GREEK SMALL LETTER OMEGA WITH PSILI AND OXIA AND YPOGEGRAMMENI
+	0x1FA5: "\u1f6d\u0399",       // GREEK SMALL LETTER OMEGA WITH DASIA AND OXIA AND YPOGEGRAMMENI
+	0x1FA6: "\u1f6e\u0399",       // GREEK SMALL LETTER OMEGA WITH PSILI AND PERISPOMENI AND YPOGEGRAMMENI
+	0x1FA7: "\u1f6f\u0399",       // GREEK SMALL LETTER OMEGA WITH DASIA AND PERISPOMENI AND YPOGEGRAMMENI
+	0x1FA8: "\u1f68\u0399",       // GREEK CAPITAL LETTER OMEGA WITH PSILI AND PROSGEGRAMMENI
+	0x1FA9: "\u1f69\u0399",       // GREEK CAPITAL LETTER OMEGA WITH DASIA AND PROSGEGRAMMENI
+	0x1FAA: "\u1f6a\u0399",       // GREEK CAPITAL LETTER OMEGA WITH PSILI AND VARIA AND PROSGEGRAMMENI
+	0x1FAB: "\u1f6b\u0399",       // GREEK CAPITAL LETTER OMEGA WITH DASIA AND VARIA AND PROSGEGRAMMENI
+	0x1FAC: "\u1f6c\u0399",       // GREEK CAPITAL LETTER OMEGA WITH PSILI AND OXIA AND PROSGEGRAMMENI
+	0x1FAD: "\u1f6d\u0399",       // GREEK CAPITAL LETTER OMEGA WITH DASIA AND OXIA AND PROSGEGRAMMENI
+	0x1FAE: "\u1f6e\u0399",       // GREEK CAPITAL LETTER OMEGA WITH PSILI AND PERISPOMENI AND PROSGEGRAMMENI
+	0x1FAF: "\u1f6f\u0399",       // GREEK CAPITAL LETTER OMEGA WITH DASIA AND PERISPOMENI AND PROSGEGRAMMENI
+	0x1FB2: "\u1fba\u0399",       // GREEK SMALL LETTER ALPHA WITH VARIA AND YPOGEGRAMMENI
+	0x1FB3: "\u0391\u0399",       // GREEK SMALL LETTER ALPHA WITH YPOGEGRAMMENI
+	0x1FB4: "\u0386\u0399",       // GREEK SMALL LETTER ALPHA WITH OXIA AND YPOGEGRAMMENI
+	0x1FB6: "\u0391\u0342",       // GREEK SMALL LETTER ALPHA WITH PERISPOMENI
+	0x1FB7: "\u0391\u0342\u0399", // GREEK SMALL LETTER ALPHA WITH PERISPOMENI AND YPOGEGRAMMENI
+	0x1FBC: "\u0391\u0399",       // GREEK CAPITAL LETTER ALPHA WITH PROSGEGRAMMENI
+	0x1FC2: "\u1fca\u0399",       // GREEK SMALL LETTER ETA WITH VARIA AND YPOGEGRAMMENI
+	0x1FC3: "\u0397\u0399",       // GREEK SMALL LETTER ETA WITH YPOGEGRAMMENI
+	0x1FC4: "\u0389\u0399",       // GREEK SMALL LETTER ETA WITH OXIA AND YPOGEGRAMMENI
+	0x1FC6: "\u0397\u0342",       // GREEK SMALL LETTER ETA WITH PERISPOMENI
+	0x1FC7: "\u0397\u0342\u0399", // GREEK SMALL LETTER ETA WITH PERISPOMENI AND YPOGEGRAMMENI
+	0x1FCC: "\u0397\u0399",       // GREEK CAPITAL LETTER ETA WITH PROSGEGRAMMENI
+	0x1FD2: "\u0399\u0308\u0300", // GREEK SMALL LETTER IOTA WITH DIALYTIKA AND VARIA
+	0x1FD3: "\u0399\u0308\u0301", // GREEK SMALL LETTER IOTA WITH DIALYTIKA AND OXIA
+	0x1FD6: "\u0399\u0342",       // GREEK SMALL LETTER IOTA WITH PERISPOMENI
+	0x1FD7: "\u0399\u0308\u0342", // GREEK SMALL LETTER IOTA WITH DIALYTIKA AND PERISPOMENI
+	0x1FE2: "\u03a5\u0308\u0300", // GREEK SMALL LETTER UPSILON WITH DIALYTIKA AND VARIA
+	0x1FE3: "\u03a5\u0308\u0301", // GREEK SMALL LETTER UPSILON WITH DIALYTIKA AND OXIA
+	0x1FE4: "\u03a1\u0313",       // GREEK SMALL LETTER RHO WITH PSILI
+	0x1FE6: "\u03a5\u0342",       // GREEK SMALL LETTER UPSILON WITH PERISPOMENI
+	0x1FE7: "\u03a5\u0308\u0342", // GREEK SMALL LETTER UPSILON WITH DIALYTIKA AND PERISPOMENI
+	0x1FF2: "\u1ffa\u0399",       // GREEK SMALL LETTER OMEGA WITH VARIA AND YPOGEGRAMMENI
+	0x1FF3: "\u03a9\u0399",       // GREEK SMALL LETTER OMEGA WITH YPOGEGRAMMENI
+	0x1FF4: "\u038f\u0399",       // GREEK SMALL LETTER OMEGA WITH OXIA AND YPOGEGRAMMENI
+	0x1FF6: "\u03a9\u0342",       // GREEK SMALL LETTER OMEGA WITH PERISPOMENI
+	0x1FF7: "\u03a9\u0342\u0399", // GREEK SMALL LETTER OMEGA WITH PERISPOMENI AND YPOGEGRAMMENI
+	0x1FFC: "\u03a9\u0399",       // GREEK CAPITAL LETTER OMEGA WITH PROSGEGRAMMENI
+
+	// Alphabetic Presentation Forms
+	0xFB00: "\u0046\u0046",       // LATIN SMALL LIGATURE FF
+	0xFB01: "\u0046\u0049",       // LATIN SMALL LIGATURE FI
+	0xFB02: "\u0046\u004c",       // LATIN SMALL LIGATURE FL
+	0xFB03: "\u0046\u0046\u0049", // LATIN SMALL LIGATURE FFI
+	0xFB04: "\u0046\u0046\u004c", // LATIN SMALL LIGATURE FFL
+	0xFB05: "\u0053\u0054",       // LATIN SMALL LIGATURE LONG S T
+	0xFB06: "\u0053\u0054",       // LATIN SMALL LIGATURE ST
+	0xFB13: "\u0544\u0546",       // ARMENIAN SMALL LIGATURE MEN NOW
+	0xFB14: "\u0544\u0535",       // ARMENIAN SMALL LIGATURE MEN ECH
+	0xFB15: "\u0544\u053b",       // ARMENIAN SMALL LIGATURE MEN INI
+	0xFB16: "\u054e\u0546",       // ARMENIAN SMALL LIGATURE VEW NOW
+	0xFB17: "\u0544\u053d",       // ARMENIAN SMALL LIGATURE MEN XEH
+}
+
 // normalizeReference implements §4.7 label matching: case-insensitive under
 // Unicode case folding, with internal whitespace collapsed.
 //
-// ToLower-then-ToUpper is the same approximation of full case folding the
-// reference implementation uses; it makes ẞ/ß and Σ/ς agree.
+// ToLower-then-ToUpper is the approximation of full case folding the reference
+// implementation uses; it makes ẞ/ß and Σ/ς agree. Go's mappings are simple
+// rather than full, so the round trip goes through jsFullCaseUpper.
+//
+// Known gap: Go's unicode tables are Unicode 15.0 where the canonical runtime's
+// are newer, so 55 code points added to Unicode since then (Garay, Ol Onal and
+// a few Latin/Cyrillic additions) have casing pairs Go does not know and will
+// not match case-insensitively. That is a data-version difference, not a
+// mapping-model one; no spec example or fixture reaches it.
 func normalizeReference(rawLabel string) string {
-	trimmed := strings.TrimSpace(rawLabel)
+	trimmed := jsTrim(rawLabel)
 	collapsed := reWhitespaceRun.ReplaceAllString(trimmed, " ")
-	return strings.ToUpper(strings.ToLower(collapsed))
+
+	// Fast path. For ASCII, lowercasing then uppercasing is just uppercasing,
+	// and no ASCII code point is in jsFullCaseUpper.
+	if isASCII(collapsed) {
+		return strings.ToUpper(collapsed)
+	}
+
+	var b strings.Builder
+	b.Grow(len(collapsed))
+	for _, r := range collapsed {
+		if full, ok := jsFullCaseUpper[r]; ok {
+			b.WriteString(full)
+			continue
+		}
+		b.WriteRune(unicode.ToUpper(unicode.ToLower(r)))
+	}
+	return b.String()
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }
 
 var xmlEscaper = strings.NewReplacer(

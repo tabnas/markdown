@@ -4,21 +4,21 @@ import (
 	"testing"
 	"time"
 
-	jsonic "github.com/tabnas/jsonic/go"
+	parser "github.com/tabnas/parser/go"
 )
 
-// makeMarkdownParser builds a fresh jsonic instance with the Markdown plugin
+// makeMarkdownParser builds a fresh engine instance with the Markdown plugin
 // installed. Building the engine + applying the embedded markdown grammar is
 // the expensive part; a parse of a tiny document is comparatively cheap.
-func makeMarkdownParser() *jsonic.Jsonic {
-	j := jsonic.Make()
+func makeMarkdownParser() *parser.Tabnas {
+	j := parser.Make()
 	j.UseDefaults(Markdown, Defaults)
 	return j
 }
 
 // TestParseReusesInstance guards against a performance regression in how the
 // Markdown plugin is consumed. @tabnas/markdown is a PLUGIN with no
-// package-level convenience Parse() — callers build a jsonic instance and
+// package-level convenience Parse() — callers build an engine instance and
 // j.UseDefaults(Markdown, ...) themselves. The right (fast) pattern is to
 // build that instance ONCE and reuse it; the wrong (slow) pattern rebuilds the
 // engine + applies the markdown grammar on every parse, which is dominated by
@@ -74,7 +74,7 @@ func TestParseReusesInstance(t *testing.T) {
 	if reuse > 4*rebuild {
 		t.Errorf("reusing one Markdown instance is not faster than rebuilding it per parse: "+
 			"%d reuse parses took %v vs %v rebuilding each time (ratio %.1fx, limit 4x). "+
-			"Build the jsonic+Markdown instance once and reuse it (the grammar build dominates a parse).",
+			"Build the engine+Markdown instance once and reuse it (the grammar build dominates a parse).",
 			n, reuse, rebuild, float64(reuse)/float64(rebuild))
 	}
 	t.Logf("rebuild-per-parse=%v  reuse-one=%v  rebuild/reuse=%.2fx",

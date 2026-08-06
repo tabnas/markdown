@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	jsonic "github.com/tabnas/jsonic/go"
+	parser "github.com/tabnas/parser/go"
 )
 
 type specRow struct {
@@ -152,7 +152,7 @@ func runSpecFile(t *testing.T, path string) {
 				}
 			}
 
-			j := jsonic.Make()
+			j := parser.Make()
 			if err := j.UseDefaults(Markdown, Defaults, opts); err != nil {
 				t.Fatalf("plugin init: %v", err)
 			}
