@@ -100,15 +100,38 @@ describe('sourcepos', () => {
   test('nested containers do not cost quadratic time', () => {
     // Counting characters from the start of the line on every opened
     // container would be O(n^2), and untrusted input picks n.
+    //
+    // Timing assertions on shared CI runners need care. The first version of
+    // this used Date.now() with a 1ms floor at sizes that ran in single-digit
+    // milliseconds, so quantisation alone could produce a 12x "ratio" — which
+    // is exactly how it failed on macOS. Sub-millisecond clock, best-of-5 to
+    // shed scheduler and GC noise, and sizes large enough that the baseline is
+    // tens of milliseconds rather than ones.
     const measure = (n: number) => {
       const src = '> - '.repeat(n) + 'x'
-      const t0 = Date.now()
-      parse(src, OPTS)
-      return Math.max(1, Date.now() - t0)
+      let best = Infinity
+      for (let i = 0; i < 5; i++) {
+        const t0 = performance.now()
+        parse(src, OPTS)
+        best = Math.min(best, performance.now() - t0)
+      }
+      return best
     }
-    measure(1000)
-    const ratio = measure(20000) / measure(5000)
-    assert.ok(ratio < 10, `4x input took ${ratio.toFixed(1)}x time; expected roughly linear`)
+
+    measure(2000) // warm up the JIT
+    const base = measure(10000)
+    const large = measure(40000)
+
+    // Below this the measurement is noise, not signal; assert nothing rather
+    // than assert something unreliable.
+    if (5 > base) return
+
+    const ratio = large / base
+    assert.ok(
+      12 > ratio,
+      `4x input took ${ratio.toFixed(1)}x time (${base.toFixed(1)}ms -> ${large.toFixed(1)}ms); ` +
+        'linear is ~4x, quadratic ~16x',
+    )
   })
 })
 

@@ -18,7 +18,7 @@
 // It does NOT check engine-level behaviour — token consumption, error
 // handling, `lex.emptyResult` — which remains the CI harness's job.
 
-import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, copyFileSync, existsSync, statSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { join, dirname, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
