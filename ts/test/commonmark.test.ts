@@ -73,3 +73,40 @@ describe('commonmark-options', () => {
     }
   }
 })
+
+describe('sourcepos', () => {
+  // A column counts CHARACTERS, not UTF-16 units. `ln.length` would advance
+  // the column by two for an astral character, which is how the Go port and
+  // this one came to disagree on `😀 *x*` — Go counted 5, TypeScript 6. The
+  // AST does not carry sourcepos, so an AST-level parity check cannot see a
+  // regression here.
+  const endColumn = (src: string) => {
+    const w = parse(src, OPTS).walker()
+    let e
+    while ((e = w.next())) {
+      if (e.entering && 'paragraph' === e.node.type) return e.node.sourcepos[1][1]
+    }
+    return -1
+  }
+
+  test('columns count characters, not UTF-16 units', () => {
+    assert.equal(endColumn('abc *x*\n'), 7)
+    assert.equal(endColumn('é *x*\n'), 5, 'BMP: one unit, one character')
+    assert.equal(endColumn('😀 *x*\n'), 5, 'astral: two units, still one character')
+    assert.equal(endColumn('𝔘𝔘 *x*\n'), 6)
+  })
+
+  test('nested containers do not cost quadratic time', () => {
+    // Counting characters from the start of the line on every opened
+    // container would be O(n^2), and untrusted input picks n.
+    const measure = (n: number) => {
+      const src = '> - '.repeat(n) + 'x'
+      const t0 = Date.now()
+      parse(src, OPTS)
+      return Math.max(1, Date.now() - t0)
+    }
+    measure(1000)
+    const ratio = measure(20000) / measure(5000)
+    assert.ok(ratio < 10, `4x input took ${ratio.toFixed(1)}x time; expected roughly linear`)
+  })
+})

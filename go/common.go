@@ -170,7 +170,7 @@ func jsSpaceIndex(s string) (idx int, width int) {
 // implement the full mappings — the unconditional entries of Unicode's
 // SpecialCasing.txt — so "\u00df".toUpperCase() is "SS", where Go's ToUpper
 // leaves ß alone. CommonMark example 540 ([ẞ] resolving against [SS]) turns on
-// exactly that, and 102 further code points (mostly Greek Extended
+// exactly that, and 103 further code points (mostly Greek Extended
 // iota-subscript forms) diverge the same way.
 //
 // Keyed on the *original* rune and holding the result of the whole round trip,

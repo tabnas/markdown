@@ -181,6 +181,24 @@ function peek(ln: string, pos: number): number {
   return 0 <= pos && pos < ln.length ? ln.charCodeAt(pos) : -1
 }
 
+/**
+ * Number of characters (code points) in `s`. `s.length` counts UTF-16 units,
+ * which double-counts astral characters; sourcepos columns count characters.
+ */
+function charCount(s: string): number {
+  let n = 0
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    // Skip the low half of a surrogate pair; a lone surrogate still counts once.
+    if (0xd800 <= c && c <= 0xdbff && i + 1 < s.length) {
+      const d = s.charCodeAt(i + 1)
+      if (0xdc00 <= d && d <= 0xdfff) i++
+    }
+    n++
+  }
+  return n
+}
+
 function isSpaceOrTab(c: number): boolean {
   return C_SPACE === c || C_TAB === c
 }
@@ -360,7 +378,7 @@ const BLOCK_HANDLERS: Record<string, BlockHandler> = {
             ? rest.match(RE_CLOSING_CODE_FENCE)
             : null
         if (match && match[0].length >= container.fenceLength) {
-          parser.lastLineLength = parser.offset + indent + match[0].length
+          parser.lastLineLength = charCount(ln.slice(0, parser.offset + indent + match[0].length))
           parser.finalize(container, parser.lineNumber)
           return 2
         }
@@ -710,6 +728,12 @@ class BlockParser {
   lineNumber = 0
   lastLineLength = 0
 
+  // Memoize the last offset in `currentLine` whose character count is known,
+  // so sourcepos columns cost amortized O(1). Both reset per line.
+  // See `sourceColumn`.
+  colAnchorOffset = 0
+  colAnchorChars = 0
+
   /** UTF-16 index into `currentLine`. */
   offset = 0
   /** Tab-expanded display column matching `offset` (§2.2). */
@@ -835,11 +859,37 @@ class BlockParser {
    * Open a block of `tag` as a child of the tip, closing blocks that cannot
    * contain it first.
    */
+  /**
+   * Characters of `currentLine` before UTF-16 offset `offset` — what a
+   * sourcepos column counts.
+   *
+   * Not simply `offset`: a JavaScript string index counts UTF-16 units, so an
+   * astral character (emoji, rare CJK) would advance the column by two. A
+   * column means a character, so `\u{1F600} *x*` must report the same columns
+   * in both runtimes.
+   *
+   * Counted incrementally from the last offset already measured. `addChild`
+   * runs once per container opened, so counting from the start of the line
+   * every time would make a line of n nested containers — `> - > - …` — cost
+   * O(n²); untrusted input picks n. Offsets advance monotonically as a line is
+   * consumed, making this amortized O(1); a smaller offset than the anchor is
+   * still correct, just recounted from the start.
+   */
+  sourceColumn(offset: number): number {
+    if (offset < this.colAnchorOffset) {
+      this.colAnchorOffset = 0
+      this.colAnchorChars = 0
+    }
+    this.colAnchorChars += charCount(this.currentLine.slice(this.colAnchorOffset, offset))
+    this.colAnchorOffset = offset
+    return this.colAnchorChars
+  }
+
   addChild(tag: NodeType, offset: number): MdNode {
     while (!handlerFor(this.openTip.type).canContain(tag)) {
       this.finalize(this.openTip, this.lineNumber - 1)
     }
-    const columnNumber = offset + 1 // offset 0 is column 1
+    const columnNumber = this.sourceColumn(offset) + 1 // offset 0 is column 1
     const node = new MdNode(tag, [
       [this.lineNumber, columnNumber],
       [0, 0],
@@ -885,6 +935,10 @@ class BlockParser {
     this.partiallyConsumedTab = false
     this.lineNumber += 1
     this.currentLine = ln
+    // The column anchor memoizes offsets into `currentLine`; a new line
+    // invalidates it. See `sourceColumn`.
+    this.colAnchorOffset = 0
+    this.colAnchorChars = 0
 
     // Step 1: walk the open blocks, consuming continuation markers. Stop at
     // the first block that does not match; `container` is then the last
@@ -952,7 +1006,7 @@ class BlockParser {
       // Lazy continuation (§5.1 rule 2): the markers are missing but an open
       // paragraph absorbs the line anyway, and its containers stay open.
       this.addLine()
-      this.lastLineLength = ln.length
+      this.lastLineLength = charCount(ln)
       return
     }
 
@@ -993,7 +1047,7 @@ class BlockParser {
           type <= 5 &&
           RE_HTML_BLOCK_CLOSE[type].test(this.currentLine.slice(this.offset))
         ) {
-          this.lastLineLength = ln.length
+          this.lastLineLength = charCount(ln)
           this.finalize(container, this.lineNumber)
         }
       }
@@ -1004,7 +1058,7 @@ class BlockParser {
       this.addLine()
     }
 
-    this.lastLineLength = ln.length
+    this.lastLineLength = charCount(ln)
   }
 
   parse(input: string): { doc: MdNode; refmap: RefMap } {

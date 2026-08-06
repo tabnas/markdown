@@ -139,3 +139,37 @@ func TestNonASCII(t *testing.T) {
 		}
 	}
 }
+
+// TestSourcePosColumnsCountCharacters pins the unit of a sourcepos column.
+//
+// Columns count characters. Go offsets are byte indices and the canonical
+// runtime's are UTF-16 indices, so both runtimes have to convert, and both
+// got it wrong in opposite directions at first: `😀 *x*` reported column 5
+// here and 6 there. The AST carries no sourcepos, so the AST-level parity
+// check between the runtimes cannot catch a regression in this.
+func TestSourcePosColumnsCountCharacters(t *testing.T) {
+	endColumn := func(src string) int {
+		w := Parse(src, Options{}).Walker()
+		for e := w.Next(); e != nil; e = w.Next() {
+			if e.Entering && e.Node.Type == NodeParagraph {
+				return e.Node.SourcePos[1][1]
+			}
+		}
+		return -1
+	}
+
+	for _, c := range []struct {
+		in   string
+		want int
+		why  string
+	}{
+		{"abc *x*\n", 7, "ascii"},
+		{"é *x*\n", 5, "BMP: two bytes, one character"},
+		{"😀 *x*\n", 5, "astral: four bytes, still one character"},
+		{"𝔘𝔘 *x*\n", 6, "two astral characters"},
+	} {
+		if got := endColumn(c.in); got != c.want {
+			t.Errorf("%s: %q end column = %d, want %d", c.why, c.in, got, c.want)
+		}
+	}
+}
