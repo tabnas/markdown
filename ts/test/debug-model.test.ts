@@ -1,11 +1,9 @@
 /* Copyright (c) 2021-2026 Richard Rodger and other contributors, MIT License */
 
 /*  debug-model.test.ts
- *  Composition test: the markdown grammar plugin layered with the official
- *  @tabnas/debug plugin. @tabnas/debug is a devDependency, but it is resolved
- *  dynamically and the test SKIPS when it is absent so the suite stays
- *  runnable outside the package; set TABNAS_DEBUG_PATH to point at a sibling
- *  checkout's built plugin.
+ *  Composition test: the markdown prose grammar plugin layered with the
+ *  official @tabnas/debug plugin. The probe is the structured
+ *  model — not CSV's old record/list/text chain.
  */
 
 import { describe, test } from 'node:test'
@@ -13,7 +11,6 @@ import assert from 'node:assert'
 import { createRequire } from 'node:module'
 
 import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '../dist/markdown'
 
 const req = createRequire(__filename)
@@ -37,55 +34,42 @@ const skip = Debug ? false : '@tabnas/debug not available (set TABNAS_DEBUG_PATH
 
 describe('compose: markdown + @tabnas/debug', () => {
   test('parses normally with the debug plugin installed', { skip }, () => {
-    const tn = new Tabnas().use(jsonic).use(Markdown)
+    const tn = new Tabnas().use(Markdown)
     tn.use(Debug, { print: false, trace: false })
-    assert.deepEqual(tn.parse('a,b\nA,B'), [{ a: 'A', b: 'B' }])
+    const doc = tn.parse('# hi\n\nHello *world*')
+    assert.equal(doc.type, 'document')
+    assert.equal(doc.children[0].type, 'heading')
+    assert.equal(doc.children[1].type, 'paragraph')
   })
 
   test('debug.model() returns the structured grammar', { skip }, () => {
-    const tn = new Tabnas().use(jsonic).use(Markdown)
+    const tn = new Tabnas().use(Markdown)
     tn.use(Debug, { print: false, trace: false })
     const m = tn.debug.model()
 
-    // The structured rule set: the jsonic base (elem/list/map/pair/val) plus
-    // the markdown-specific rules (markdown/newline/record/text).
+    // Prose parser is bare-engine: only the `markdown` entry rule is
+    // installed. The old CSV `record`/`list`/`text` rules are gone.
     assert.deepStrictEqual(
       m.rules.map((r: any) => r.name).sort(),
-      ['elem', 'list', 'map', 'markdown', 'newline', 'pair', 'record', 'text', 'val'],
+      ['markdown'],
     )
 
-    // The markdown grammar overrides the entry rule to `markdown`.
+    // Entry rule is `markdown`.
     assert.equal(m.config.start, 'markdown')
-
-    // The plugin chain is recorded, including the markdown plugin.
     assert.ok(
       m.plugins.some((p: any) => p.name === 'Markdown'),
       'plugins should list Markdown',
     )
 
-    // Structural fact: the `markdown` entry rule opens into `newline` (blank
-    // lines) and `record` (a row of fields).
     const markdown = m.rules.find((r: any) => r.name === 'markdown')
     assert.ok(markdown, 'markdown rule should exist')
-    assert.ok(
-      markdown.open.some((a: any) => a.push === 'record'),
-      'markdown should push record',
-    )
-    assert.ok(
-      markdown.open.some((a: any) => a.push === 'newline'),
-      'markdown should push newline',
-    )
+    // The markdown rule consumes the token stream via #AA repetition
+    // so the engine's trailing-content check passes. The actual block
+    // structure lives in JS (parseDocument), not in declarative alts.
+    assert.ok(Array.isArray(markdown.open), 'markdown.open should exist')
+    assert.ok(Array.isArray(markdown.close), 'markdown.close should exist')
 
-    // Structural fact: a `record` opens by pushing the `list` rule (a record
-    // is parsed as a comma-separated list of fields).
-    const record = m.rules.find((r: any) => r.name === 'record')
-    assert.ok(record, 'record rule should exist')
-    assert.ok(
-      record.open.some((a: any) => a.push === 'list'),
-      'record should push list',
-    )
-
-    // The grammar portion is JSON-serialisable and round-trips.
+    // JSON round-trip
     const grammar = {
       tokens: m.tokens,
       rules: m.rules,

@@ -13,7 +13,6 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '../dist/markdown'
 
 // At runtime this file is loaded from `dist-test/`, so hop up one level to
@@ -78,7 +77,7 @@ function runSpec(file: string) {
     for (const row of rows) {
       test(`row ${row.line}: ${label(row.input)}`, () => {
         const opts = '' === row.opts.trim() ? {} : JSON.parse(row.opts)
-        const tn = new Tabnas().use(jsonic).use(Markdown, opts)
+        const tn = new Tabnas().use(Markdown, opts)
 
         if (row.expected.startsWith('ERROR')) {
           const want = row.expected.slice('ERROR'.length).replace(/^:/, '')

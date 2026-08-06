@@ -1,312 +1,119 @@
 # How-to guide: @tabnas/markdown (TypeScript)
 
-Task-oriented recipes. Each one is self-contained — copy it, change the input,
-run it. For the full option list see the [reference](reference.md); for *why*
-the plugin behaves this way see the [concepts](concepts.md).
+Task-oriented recipes. Each one is self-contained.
 
-Every recipe starts from the same three lines:
+Every recipe starts from:
 
 ```js ignore
 import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 ```
-
 
 ## Use the plugin
 
-Load `jsonic` first (the base grammar), then `Markdown` on top. The order
-matters — the markdown plugin overrides the entry rule and rewrites the
-record/field rules of the jsonic grammar.
+Load `Markdown` on a bare engine. Order matters only if you also use another plugin — Markdown must be last to own the `markdown` start rule.
 
 ```js
 import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = new Tabnas().use(jsonic).use(Markdown)
+const j = new Tabnas().use(Markdown)
 
-j.parse('a,b\n1,2\n3,4') // => [{ a: '1', b: '2' }, { a: '3', b: '4' }]
+j.parse('# Hello') // => { type: 'document', children: [{ type: 'heading', depth: 1, children: [{ type: 'text', value: 'Hello' }] }] }
 ```
 
-A configured instance is reusable — call `.parse()` as many times as you like.
+A configured instance is reusable — call `.parse()` many times.
 
+## Parse headings
 
-## Return arrays instead of objects
-
-Set `object: false` to get one array per row, and `header: false` so the first
-row is data rather than keys:
+ATX (`#`…`######`) and Setext (`===`/`---` underline):
 
 ```js
 import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = new Tabnas().use(jsonic).use(Markdown, { header: false, object: false })
+const j = new Tabnas().use(Markdown)
 
-j.parse('a,b,c\n1,2,3') // => [['a', 'b', 'c'], ['1', '2', '3']]
+j.parse('# H1') // => { type: 'document', children: [{ type: 'heading', depth: 1, children: [{ type: 'text', value: 'H1' }] }] }
+j.parse('## H2') // => { type: 'document', children: [{ type: 'heading', depth: 2, children: [{ type: 'text', value: 'H2' }] }] }
+j.parse('Foo\n===') // => { type: 'document', children: [{ type: 'heading', depth: 1, children: [{ type: 'text', value: 'Foo' }] }] }
 ```
 
+## Parse lists
 
-## Name fields when there is no header row
-
-With `header: false` and `field.names`, you get objects keyed by your names
-instead of by a header row:
+Unordered (`-` `*` `+`) and ordered (`1.` `1)`). Start number is preserved.
 
 ```js
 import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = new Tabnas().use(jsonic).use(Markdown, {
-  header: false,
-  field: { names: ['x', 'y', 'z'] },
-})
+const j = new Tabnas().use(Markdown)
 
-j.parse('1,2,3\n4,5,6') // => [{ x: '1', y: '2', z: '3' }, { x: '4', y: '5', z: '6' }]
+j.parse('- a\n- b') // => { type: 'document', children: [{ type: 'list', ordered: false, start: null, spread: false, children: [{ type: 'listItem', spread: false, children: [{ type: 'paragraph', children: [{ type: 'text', value: 'a' }] }] }, { type: 'listItem', spread: false, children: [{ type: 'paragraph', children: [{ type: 'text', value: 'b' }] }] }] }] }
+j.parse('1. a\n2. b\n3. c') // => { type: 'document', children: [{ type: 'list', ordered: true, start: 1, spread: false, children: [{ type: 'listItem', spread: false, children: [{ type: 'paragraph', children: [{ type: 'text', value: 'a' }] }] }, { type: 'listItem', spread: false, children: [{ type: 'paragraph', children: [{ type: 'text', value: 'b' }] }] }, { type: 'listItem', spread: false, children: [{ type: 'paragraph', children: [{ type: 'text', value: 'c' }] }] }] }] }
+j.parse('5. a\n6. b') // => { type: 'document', children: [{ type: 'list', ordered: true, start: 5, spread: false, children: [{ type: 'listItem', spread: false, children: [{ type: 'paragraph', children: [{ type: 'text', value: 'a' }] }] }, { type: 'listItem', spread: false, children: [{ type: 'paragraph', children: [{ type: 'text', value: 'b' }] }] }] }] }
 ```
 
-Extra fields beyond your names get auto-generated keys (`field~3`, …); see
-[handle ragged rows](#handle-ragged-rows-extra-fields).
+## Parse code blocks
 
-
-## Use a custom field delimiter
-
-Set `field.separation`. It can be a single character (tab, pipe) or a
-multi-character string:
+Fenced (```` ``` ```` / `~~~`) and indented (4 spaces):
 
 ```js
 import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = new Tabnas().use(jsonic).use(Markdown, { field: { separation: '\t' } })
+const j = new Tabnas().use(Markdown)
 
-j.parse('name\tage\nAlice\t30') // => [{ name: 'Alice', age: '30' }]
+j.parse('```js\nconsole.log("hi")\n```') // => { type: 'document', children: [{ type: 'code', lang: 'js', meta: null, value: 'console.log("hi")' }] }
+j.parse('    indented\n    code') // => { type: 'document', children: [{ type: 'code', lang: null, meta: null, value: 'indented\ncode' }] }
+```
+
+## Parse blockquotes
+
+```js
+import { Tabnas } from '@tabnas/parser'
+import { Markdown } from '@tabnas/markdown'
+
+const j = new Tabnas().use(Markdown)
+
+j.parse('> hello\n> world') // => { type: 'document', children: [{ type: 'blockquote', children: [{ type: 'paragraph', children: [{ type: 'text', value: 'hello world' }] }] }] }
+```
+
+## Parse inline markup
+
+Emphasis, strong, code spans, links, images, autolinks, strikethrough:
+
+```js
+import { Tabnas } from '@tabnas/parser'
+import { Markdown } from '@tabnas/markdown'
+
+const j = new Tabnas().use(Markdown)
+
+j.parse('Hello *world*') // => { type: 'document', children: [{ type: 'paragraph', children: [{ type: 'text', value: 'Hello ' }, { type: 'emphasis', children: [{ type: 'text', value: 'world' }] }] }] }
+j.parse('Hello **world**') // => { type: 'document', children: [{ type: 'paragraph', children: [{ type: 'text', value: 'Hello ' }, { type: 'strong', children: [{ type: 'text', value: 'world' }] }] }] }
+j.parse('`code`') // => { type: 'document', children: [{ type: 'paragraph', children: [{ type: 'inlineCode', value: 'code' }] }] }
+j.parse('[link](https://example.com)') // => { type: 'document', children: [{ type: 'paragraph', children: [{ type: 'link', url: 'https://example.com', title: null, children: [{ type: 'text', value: 'link' }] }] }] }
+j.parse('![alt](https://example.com/img.png)') // => { type: 'document', children: [{ type: 'paragraph', children: [{ type: 'image', url: 'https://example.com/img.png', title: null, alt: 'alt' }] }] }
+```
+
+## Disable GFM strikethrough
+
+Strikethrough (`~~text~~`) is on when `gfm:true` (default):
+
+```js
+import { Tabnas } from '@tabnas/parser'
+import { Markdown } from '@tabnas/markdown'
+
+const j = new Tabnas().use(Markdown, { gfm: false })
+
+j.parse('~~delete~~') // => { type: 'document', children: [{ type: 'paragraph', children: [{ type: 'text', value: '~~delete~~' }] }] }
 ```
 
 ```js
 import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '@tabnas/markdown'
 
-const j = new Tabnas().use(jsonic).use(Markdown, { field: { separation: '~~' } })
+const gfm = new Tabnas().use(Markdown, { gfm: true })
 
-j.parse('a~~b~~c\nA~~B~~C') // => [{ a: 'A', b: 'B', c: 'C' }]
-```
-
-
-## Use a custom record separator
-
-By default a record ends at a newline. Set `record.separators` to split rows on
-a different character instead:
-
-```js
-import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
-import { Markdown } from '@tabnas/markdown'
-
-const j = new Tabnas().use(jsonic).use(Markdown, { record: { separators: '%' } })
-
-j.parse('a,b%1,2%3,4') // => [{ a: '1', b: '2' }, { a: '3', b: '4' }]
-```
-
-
-## Parse numbers and keywords
-
-In strict mode every field is a string. Enable `number` for numeric literals
-and `value` for the `true` / `false` / `null` keywords:
-
-```js
-import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
-import { Markdown } from '@tabnas/markdown'
-
-const j = new Tabnas().use(jsonic).use(Markdown, { number: true, value: true })
-
-j.parse('a,b,c\n1,true,null') // => [{ a: 1, b: true, c: null }]
-```
-
-
-## Trim whitespace from fields
-
-Whitespace inside a field is significant by default. Enable `trim` to strip
-leading and trailing whitespace (internal spacing is preserved):
-
-```js
-import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
-import { Markdown } from '@tabnas/markdown'
-
-const j = new Tabnas().use(jsonic).use(Markdown, { trim: true })
-
-j.parse('a , b \n 1 , 2 ') // => [{ a: '1', b: '2' }]
-```
-
-
-## Skip comment lines
-
-Enable `comment` to ignore lines that begin with `#` (and to strip trailing
-`#...` comments from a field):
-
-```js
-import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
-import { Markdown } from '@tabnas/markdown'
-
-const j = new Tabnas().use(jsonic).use(Markdown, { comment: true })
-
-j.parse('a,b\n# skip this line\n1,2') // => [{ a: '1', b: '2' }]
-```
-
-
-## Handle quoted fields
-
-Double-quoted fields may span commas, line breaks, and escaped quotes. A
-literal quote is doubled (`""`):
-
-```js
-import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
-import { Markdown } from '@tabnas/markdown'
-
-const j = new Tabnas().use(jsonic).use(Markdown)
-
-j.parse('a\n"b""c""d"') // => [{ a: 'b"c"d' }]
-```
-
-To use a different quote character, set `string.quote`:
-
-```js
-import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
-import { Markdown } from '@tabnas/markdown'
-
-const j = new Tabnas().use(jsonic).use(Markdown, {
-  header: false,
-  object: false,
-  string: { quote: "'" },
-})
-
-j.parse("'a''b'") // => [["a'b"]]
-```
-
-
-## Handle ragged rows (extra fields)
-
-If a row has more fields than the header, the extras are kept under generated
-keys formed from `field.nonameprefix` (default `field~`) plus the index:
-
-```js
-import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
-import { Markdown } from '@tabnas/markdown'
-
-const j = new Tabnas().use(jsonic).use(Markdown)
-
-j.parse('a,b\n1,2,3') // => [{ a: '1', b: '2', 'field~2': '3' }]
-```
-
-A missing field is filled with `field.empty` (default `''`):
-
-```js
-import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
-import { Markdown } from '@tabnas/markdown'
-
-const j = new Tabnas().use(jsonic).use(Markdown)
-
-j.parse('a\n1,') // => [{ a: '1', 'field~1': '' }]
-```
-
-
-## Reject ragged rows
-
-Set `field.exact` to require every row to have exactly as many fields as the
-header. A mismatch throws; the thrown error's `code` tells you which way:
-
-```js
-import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
-import { Markdown } from '@tabnas/markdown'
-
-const j = new Tabnas().use(jsonic).use(Markdown, { field: { exact: true } })
-
-const code = (fn) => { try { fn(); return null } catch (e) { return e.code } }
-
-code(() => j.parse('a,b\n1,2,3')) // => 'markdown_extra_field'
-code(() => j.parse('a,b\n1'))     // => 'markdown_missing_field'
-```
-
-
-## Keep blank lines as empty records
-
-Blank lines are skipped by default. Set `record.empty` to emit them as records
-whose fields are all empty:
-
-```js
-import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
-import { Markdown } from '@tabnas/markdown'
-
-const j = new Tabnas().use(jsonic).use(Markdown, { record: { empty: true } })
-
-j.parse('a\n1\n\n2') // => [{ a: '1' }, { a: '' }, { a: '2' }]
-```
-
-
-## Stream records instead of collecting them
-
-Pass a `stream` callback to receive each record as it is parsed. The callback
-sees `'start'`, then a `'record'` event per row, then `'end'` (and `'error'`
-on failure). When streaming, `parse()` returns an empty array — nothing is kept
-in memory:
-
-```js
-import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
-import { Markdown } from '@tabnas/markdown'
-
-const records = []
-
-const j = new Tabnas().use(jsonic).use(Markdown, {
-  stream: (what, record) => {
-    if (what === 'record') records.push(record)
-  },
-})
-
-j.parse('a,b\n1,2\n3,4') // => []
-
-records // => [{ a: '1', b: '2' }, { a: '3', b: '4' }]
-```
-
-
-## Embed JSON in a field (non-strict mode)
-
-Set `strict: false` to let a field hold jsonic content — JSON objects, arrays,
-and quoted/escaped strings. Non-strict mode also turns `trim`, `comment`, and
-`number` on by default:
-
-```js
-import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
-import { Markdown } from '@tabnas/markdown'
-
-const j = new Tabnas().use(jsonic).use(Markdown, { strict: false })
-
-j.parse('a,b\ntrue,[1,2]') // => [{ a: true, b: [1, 2] }]
-```
-
-A field that starts as a container but has trailing junk is a syntax error:
-
-```js
-import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
-import { Markdown } from '@tabnas/markdown'
-
-const j = new Tabnas().use(jsonic).use(Markdown, { strict: false })
-
-const code = (fn) => { try { fn(); return null } catch (e) { return e.code } }
-
-code(() => j.parse('a\n{x:1}y')) // => 'unexpected'
+gfm.parse('~~delete~~') // => { type: 'document', children: [{ type: 'paragraph', children: [{ type: 'delete', children: [{ type: 'text', value: 'delete' }] }] }] }
 ```

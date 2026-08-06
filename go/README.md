@@ -1,14 +1,15 @@
 # markdown plugin (Go)
 
 A [Tabnas](https://github.com/tabnas/parser) grammar plugin that parses
-delimited record text — a header row, comma-separated fields, one record per
-line, with RFC-4180 quoting — into Go slices of maps or slices. Despite the
-name it is a configurable CSV/TSV-family reader, with support for headers,
-quoted fields, custom delimiters, streaming, and strict / non-strict modes.
+**CommonMark / GFM Markdown** into a JSON AST — headings, paragraphs,
+blockquotes, lists, code blocks, thematic breaks, HTML, and inline (emphasis,
+strong, code, links, images, strikethrough). Despite the name's history as a
+CSV-family reader, this package now parses **prose Markdown** (the Go port of
+the canonical TypeScript package [`@tabnas/markdown`](../ts/README.md)).
 
-This is the Go port of the canonical TypeScript package
-[`@tabnas/markdown`](../ts/README.md); the two share one grammar and a common
-fixture suite.
+This is the Go port of the canonical TypeScript package; the two share one
+grammar source (`markdown-grammar.jsonic`) and a common fixture suite in
+`test/spec/`.
 
 ## Install
 
@@ -35,22 +36,21 @@ func main() {
     j := tabnasjsonic.Make()
     j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
 
-    result, _ := j.Parse("name,age\nAlice,30\nBob,25")
+    result, _ := j.Parse("# Hello\n\nHello *world*")
     fmt.Println(result)
-    // [{[name age] map[age:30 name:Alice]} {[name age] map[age:25 name:Bob]}]
+    // map[children:[map[children:[map[type:text value:Hello]] depth:1 type:heading] map[children:[map[type:text value:Hello ] map[children:[map[type:text value:world]] type:emphasis]] type:paragraph]] type:document]
 }
 ```
 
-Object records keep key order (they are an ordered map, printed as
-`{[key order] map[...]}`). For directly indexable output, use
-`object: false` to get one `[]any` per row.
+The result is always a single `document` node (`map[string]any{"type":"document",
+"children":[]any{...}}`). Each block and inline node has a `type` field.
 
 ## Documentation
 
 Documentation follows the [Diátaxis](https://diataxis.fr) framework:
 
 - [Tutorial](doc/tutorial.md) — a guided first run.
-- [How-to guide](doc/guide.md) — task recipes (delimiters, no-header, streaming, errors).
+- [How-to guide](doc/guide.md) — task recipes (headings, lists, code, links, GFM).
 - [Reference](doc/reference.md) — the full API, every option, output types, and the grammar.
 - [Concepts](doc/concepts.md) — how it works on the engine, plus *Differences from the TS version*.
 
@@ -66,4 +66,4 @@ top-level [`markdown-grammar.jsonic`](../markdown-grammar.jsonic), embedded into
 
 ## License
 
-Copyright (c) 2021-2025 Richard Rodger and other contributors, MIT License.
+Copyright (c) 2021-2026 Richard Rodger and other contributors, MIT License.

@@ -4,173 +4,121 @@ Background and design rationale, plus the differences between the Go port and
 the canonical TypeScript implementation. For the API see the
 [reference](reference.md).
 
+## It is a grammar plugin, not a parser — but the prose complexity lives in Go
 
-## It is a grammar plugin, not a parser
-
-The package contains no parser. It is a **plugin for the tabnas engine** that,
-with the jsonic base grammar, configures the engine to read delimited records:
+The package is a **plugin for the tabnas engine**, ported from the canonical
+TypeScript package `@tabnas/markdown`. The pipeline is:
 
 ```
-tabnasjsonic.Make()                                  // engine + jsonic base grammar (val/map/list/pair/elem rules, tokens)
-  .UseDefaults(tabnasmarkdown.Markdown, Defaults)    // layer the record grammar on top
-  .Parse(src)
+tabnasjsonic.Make()                                  // engine + jsonic base grammar
+  .UseDefaults(tabnasmarkdown.Markdown, Defaults)    // layer the Markdown grammar
+  .Parse(src)                                        // => document node
 ```
 
-The Go jsonic package re-exports the engine API (`tabnasjsonic.Jsonic`,
-`tabnasjsonic.Options`, `tabnasjsonic.Rule`, `tabnasjsonic.LexOptions`, …), so the plugin imports
-`jsonic`, not a separate engine package.
+The engine itself is a deterministic, backtracking-free rule machine. Markdown's
+block grammar — headings interrupting paragraphs, lists inside blockquotes, fenced
+code boundaries — could be encoded as many declarative alts, but at CommonMark
+scale the indentation and line-prefix logic is clearer as a small line scanner.
 
-> The package is named *markdown* but installs a record/field (CSV-family)
-> grammar — header rows, `,`-separated fields, one record per line, RFC-4180
-> quoting. It was ported from the TS package, which was built from the
-> `@tabnas/csv` template.
+So the `markdown` rule is intentionally tiny (see `markdown-grammar.jsonic` and
+`dx-report.md` §2.1):
 
+- `bo` (`markdown-bo`) reads the full source via `ctx.Src` and calls `parseDocument(src, opts)` to build a `document` node.
+- `open: [{s:'#AA', r:'markdown'}, {}]` and `close: [{s:'#ZZ'}, {}]` then consume the underlying token stream so the engine's trailing-content check (`lex` must end at `#ZZ`) passes.
 
-## The record model
+The *actual* Markdown — ATX/Setext headings, thematic breaks, fenced/indented
+code, blockquotes, lists (ordered/unordered, nested), paragraphs, HTML — is
+parsed by `parseDocument` and its helper `parseBlocks`, which operate
+line-by-line. Inline structure (emphasis/strong/code/links/images/autolinks/breaks/strikethrough)
+is parsed by `parseInline`, invoked per block (headings, paragraphs, list items).
 
-A document is a sequence of **records** (rows); a record is a **list** of
-**fields** separated by a delimiter (`,` by default), ending at a record
-separator (newline) or end of input. The grammar rules:
+This keeps one grammar to maintain, lets `debug.model()` stay honest (a single
+`markdown` rule), and makes TS→Go parity a matter of porting `parseDocument`/`parseInline`,
+not of replicating a large declarative alt table. The railroad diagram therefore
+shows `markdown → document` rather than a fine-grained CFG — an explicit trade-off.
 
-- `markdown` — entry rule; loops rows, dispatching blank lines to `newline`
-  and content rows to `record`.
-- `newline` — absorbs blank lines (so they don't become records, unless
-  `record.empty`).
-- `record` — one row; pushes `list`, closes at newline / end of input. Its
-  close action (`@record-bc`) turns the row into a map or slice, applies the
-  header, runs `field.exact`, and appends to the result.
-- `list` / `elem` / `val` — the field machinery.
-- `text` — concatenates `VAL`/`SP` tokens into one field string so in-field
-  whitespace survives.
+## Why the bare engine (not jsonic base)
 
-`markdown`, `newline`, `record`, and `text` come from the embedded grammar
-text; `list`, `elem`, and `val` are built in code (`j.Rule(...)`) because the
-two modes need different versions of them.
+`zon/TEMPLATE.md` says: JSON-family formats layer on `@tabnas/jsonic` (and strip
+what they don't need via `rule.exclude`); non-JSON-family formats use the bare
+engine directly. Markdown is not JSON-shaped, so this package disables the
+`string`/`comment`/`number`/`value` lexers that would otherwise turn backticks
+or `# headings` into bad tokens before `parseDocument` runs, and sets
+`lex.emptyResult` to `{type:"document", children:[]}`. The dependency on
+`github.com/tabnas/jsonic/go` is still present because the Go test harness and
+engine API are re-exported through it, but the Markdown prose parser does not
+use jsonic's `val`/`map`/`list` rules.
 
+## Blocks — a line scanner, then recursion
 
-## Significant whitespace and newlines
+`parseDocument(src)` splits on `\r?\n` and calls `parseBlocks(lines, 0, opts)`. Precedence matters (see `go/markdown.go`):
 
-In plain jsonic, `#SP` (space), `#LN` (newline) and `#CM` (comment) are
-*ignored* tokens. A record grammar can't allow that, so the plugin rewrites the
-`IGNORE` token set:
+1. Blank lines (skipped; significant inside lists/blockquote via spread)
+2. Fenced code (`^ {0,3}(`{3,}|~{3,})` …) — content consumed until matching closing fence; language and meta split on first space.
+3. Indented code (`^ {4}|\t` and not a list marker)
+4. ATX heading (`^ {0,3}#{1,6}[ \t]+…`)
+5. Thematic break (`---` `***` `___` with spaces) — but `---` as a setext underline for a preceding paragraph is handled inside the paragraph path.
+6. Blockquote (`^ {0,3}>\s?`) — lines collected, `>` stripped, recursive `parseBlocks` for the inner content.
+7. HTML block (`<...>` line until blank or block boundary) — raw.
+8. List (`-*+` / `\d+[.)]`) — consecutive items grouped into one `list`; each item's lines (including indented continuations and blank lines) are joined and recursively `parseBlocks`-ed to produce its `children: Block[]`.
+9. Paragraph — lines until blank or block boundary; if the last collected line is a setext underline (`===`/`---`) and at least two lines were collected, the paragraph is reinterpreted as a Setext heading.
 
-- `#LN` is removed from `IGNORE` in every mode — row breaks are structural.
-- `#SP` is removed in strict mode so in-field spaces reach the `text` rule; in
-  non-strict mode `#SP` stays ignored (which is why non-strict defaults `trim`
-  on).
-- `#CM` stays ignored, so comment tokens (when comment lexing is enabled) drop
-  out.
+`spread` on `list`/`listItem` records whether blank lines occurred inside the item — callers that render to HTML can use it to decide tight vs loose wrapping.
 
+## Inline — a delimiter scanner
 
-## Strict vs non-strict
+`parseInline(text, opts)` walks the text, emitting `Text` by default and flushing on delimiters:
 
-**Strict mode (default).** jsonic value parsing is off
-(`rule.exclude: 'jsonic,imp'`), the JSON structural tokens `#OB #CB #OS #CS
-#CL` are disabled, and a field is raw text. Numbers and keywords need the
-`number` / `value` opt-ins. Quoting uses the plugin's RFC-4180 string matcher
-(doubled quotes).
+- Escapes (`\*` → `*`, etc.)
+- Code spans (`` ` ``, `` `` ``) — trimmed and internal newlines collapsed to spaces.
+- Images (`![alt](url "title")`) and links (`[label](url "title")`) — handled before emphasis so `[ *a* ](url)` parses `*a*` inside the label.
+- Autolinks (`<https://example.com>`, `<mailto>`, `<a@b>` email) — gated on `gfm`
+- Strong (`**`/`__`) before emphasis (`*`/`_`) so `**a *b* c**` nests correctly; `_` inside `foo_bar_baz` is word-boundary-checked and left as text (per CommonMark).
+- GFM strikethrough (`~~`, gated on `opts.gfm`)
+- Breaks: a single `\n` inside a paragraph source becomes a `break` when preceded by two spaces or when `opts.breaks:true`; otherwise a soft break becomes a single space inside the current text run.
 
-**Non-strict mode (`strict: false`).** jsonic's `val` / `list` / `map`
-alternatives are preserved so a field *can* contain jsonic content —
-`a,b\ntrue,[1,2]` gives `{a: true, b: [1,2]}` — and `trim` / `comment` /
-`number` / `value` all default on.
-
-
-## How a row becomes a record
-
-The `@record-bc` action does the per-row work:
-
-1. The first non-blank record, when `header: true`, is captured as the field
-   names (`ctx.Meta["fields"]`) and not emitted.
-2. Each later record becomes the output value: an ordered map (when
-   `object: true`) keyed by header/`names` with extras under
-   `field.nonameprefix + index`, or a `[]any` (when `object: false`).
-3. Missing fields are replaced with `field.empty`.
-4. With `field.exact`, a width mismatch sets `ctx.ParseErr` to a `#BD` token
-   carrying `markdown_extra_field` / `markdown_missing_field`, which the engine
-   then reports.
-5. The record is appended to the result — or, when `stream` is set, handed to
-   the callback and not stored.
-
-The Go object record is a `*jsonic.OrderedMap` — part of the engine's public
-API — which keeps insertion order, so the parity fixtures (which compare
-against ordered JSON) line up with the TS objects, and callers can read or
-marshal a record directly.
-
+`parseInline` recurses for nested delimiters (`**a *b* c**` → strong containing emphasis).
 
 ## The embedded grammar and `@`-refs
 
-The four record rules are authored once in the top-level
-`markdown-grammar.jsonic` and embedded verbatim into `go/markdown.go` (and
-`ts/src/markdown.ts`) by `embed-grammar.js` during the TS build. Never
-hand-edit the embedded block.
+The prose grammar is intentionally trivial (`markdown-grammar.jsonic` contains a single `markdown` rule with `open: [{s:'#ZZ'}]` etc., whose `bo` action is the JS/Go block scanner). It is embedded verbatim into `go/markdown.go` (and `ts/src/markdown.ts`) by `ts/embed-grammar.js` during the TS build. Never hand-edit the embedded block.
 
-At init, the grammar text is parsed by a standalone jsonic instance
-(`tabnasjsonic.Make().Parse(grammarText)`), converted to a `*tabnasjsonic.GrammarSpec` by
-`parseGrammarText` / `buildGrammarAlts`, given the `refs` map, and applied with
-`j.Grammar(...)`. `@`-prefixed names resolve against `refs`: state actions by
-the `@rulename-{bo,ao,bc,ac}` convention, alt actions / conditions / dynamic
-rule names explicitly. This is the same declarative pattern as the TS plugin,
-which is what keeps the two ports aligned from one grammar source.
-
+At runtime the GramSpec is built from that text and wired into the engine; `@`-prefixed names resolve against the `refs` map (`@markdown-bo` etc.). This is the same declarative pattern as the TS plugin, which is what keeps the two ports aligned from one grammar source.
 
 ## Re-invocation guard
 
 `Use` re-runs a plugin on later `SetOptions` calls, so the Go plugin guards
 against double-application with a decoration (`j.Decoration("markdown-init")`).
-That keeps the in-code rule rewrites idempotent.
-
+That keeps the plugin idempotent.
 
 ## Differences from the TS version
 
 The TypeScript implementation is canonical and the Go package is a port. The
-parity fixtures in `test/fixtures/` keep them aligned for the cases they cover,
-but a few shape and behaviour differences remain:
+parity fixtures in `test/spec/` keep them aligned for the cases they cover, but a
+few shape and behaviour differences remain:
 
 ### API shape
 
 | | TypeScript | Go |
 |---|---|---|
-| Construct | `new Tabnas().use(jsonic).use(Markdown, opts)` | `tabnasjsonic.Make()` then `j.UseDefaults(Markdown, Defaults, opts)` |
-| Options | a partial `MarkdownOptions` object | `map[string]any` (nested groups are `map[string]any` too) |
+| Construct | `new Tabnas().use(Markdown, opts)` | `tabnasjsonic.Make()` then `j.UseDefaults(Markdown, Defaults, opts)` |
+| Options | a partial `MarkdownOptions` object | `map[string]any` |
 | Defaults merge | the plugin fills defaults itself | you pass `Defaults` to `UseDefaults` |
 | Parse | `j.parse(src)` returns the value, throws on error | `j.Parse(src)` returns `(any, error)` |
-| String matcher | `buildMarkdownStringMatcher` is **exported** | unexported (internal only) |
+| Helpers | `parseDocument`, `parseInline` are exported | unexported (internal only) |
 
 ### Value types
 
 | Value | TypeScript | Go |
 |---|---|---|
-| Object record | plain JS object — read fields directly | `*jsonic.OrderedMap` — type-assert it, read `.Vals[k]`, range `.Keys` for order, or `json.Marshal` it |
-| Array record | JS array | `[]any` |
-| number | JS `number` | `float64` |
-| `null` keyword | JS `null` | Go `nil` |
-| empty / blank result | `[]` | empty `[]any` |
+| Document | plain JS object `{type:"document", children:[...]}` | `map[string]any` with same shape — type-assert to `map[string]any`, read `["children"].([]any)` |
+| Block/Inline | plain objects | `map[string]any` / `[]any` |
+| `null` | JS `null` | Go `nil` (appears as `nil` in `map`, `<nil>` when printed; `null` after `json.Marshal`) |
+| Empty | `{type:"document", children:[]}` | same |
 
 ### Behaviour
 
-- **`field.exact` error code.** TS throws an error whose `.code` is the
-  specific `markdown_extra_field` / `markdown_missing_field`. Go returns a
-  `*tabnasjsonic.JsonicError` whose `.Code` is `"unexpected"`; the specific code
-  appears only in the message text. Both fail on the same inputs; only the
-  surfaced code differs.
+- **`gfm`/`breaks` only.** The legacy CSV options (`field.*`, `record.*`, `string.*`, `header`, `object`, `strict`, `trim`, `comment`, `number`, `value`, `stream`) are not part of the prose parser in either runtime; the Go `concepts.md` previously documented them because it was copied from the `csv` template — now removed.
+- **HTML block detection.** Go's `isHtmlBlockLine` uses `reHtmlTag = ^<\/?[a-zA-Z][\w-]*(?:\s[^>]*)?>` so `<https://example.com>` is not mistaken for an HTML block (it is an autolink). This matches the TS `isHtmlBlockLine` regex change made for the autolink fix.
 
-Everything else — strict-mode text fields, headers, custom delimiters and
-record separators, RFC-4180 quoting, `number` / `value` / `trim` / `comment`,
-`record.empty`, `field.names` / `field.empty` / `field.nonameprefix`, and
-streaming — behaves the same across both runtimes, as enforced by
-`test/fixtures/`.
-
-
-## Accepted vs rejected — worked edge cases
-
-| Input | Options | Result | Why |
-|---|---|---|---|
-| `a\n"b""c"` | default | `[{[a] map[a:b"c]}]` | `""` is one escaped quote (RFC 4180). |
-| `a\n b ` | default | `[{[a] map[a: b ]}]` | strict keeps significant whitespace. |
-| `a\n1` | default | `[{[a] map[a:1]}]` (string) | strict: a field is text. |
-| `a\n1` | `number: true` | `[{[a] map[a:1]}]` (`float64`) | number lexing. |
-| `a\n# b` | `comment: true` | `[]` | the line is a comment. |
-| `a\n1\n\n2` | `record.empty: true` | `[{[a] map[a:1]} {[a] map[a:]} {[a] map[a:2]}]` | blank becomes empty record. |
-| `a,b\n1,2,3` | `field.exact: true` | error (`.Code unexpected`) | width must match header. |
-| `a,b\ntrue,[1,2]` | `strict: false` | `[{[a b] map[a:true b:[1 2]]}]` | non-strict keeps jsonic's container alts. |
+Everything else — ATX/Setext headings, thematic breaks, fenced/indented code, blockquotes, lists, paragraphs, HTML, and inline (emphasis/strong/code/links/images/autolinks/breaks/delete) — behaves the same across both runtimes, as enforced by `test/spec/`.

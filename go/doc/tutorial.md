@@ -1,25 +1,19 @@
-# Tutorial: parsing records with the markdown plugin (Go)
+# Tutorial: parsing Markdown with @tabnas/markdown (Go)
 
-A guided first run. By the end you will have the plugin installed, parsed a
-small record file, and understood the result. About five minutes; assumes Go
-1.24+ and a module to work in.
-
-> The package is named *markdown*, but it parses **delimited records** —
-> comma-separated fields, one record per line, with a header row. Treat it as a
-> configurable CSV/TSV reader built on the tabnas engine.
-
+This is a guided first run. By the end you will have installed the plugin,
+parsed Markdown, and understood the AST. Takes about five minutes and assumes
+Go 1.24+.
 
 ## 1. Install
 
-The plugin layers on the Go port of jsonic, which re-exports the tabnas engine
-API. Add it to your module:
+The plugin layers on the jsonic engine (which re-exports the tabnas engine).
+Add it to your module:
 
 ```bash
 go get github.com/tabnas/markdown/go@latest
 ```
 
-Then import both the jsonic package (the engine + base grammar) and the
-markdown package:
+Then import both packages:
 
 ```go
 import (
@@ -28,11 +22,9 @@ import (
 )
 ```
 
+## 2. Parse your first document
 
-## 2. Parse your first record file
-
-Make a jsonic instance, register the markdown plugin with `UseDefaults` (which
-merges your options over `tabnasmarkdown.Defaults`), then `Parse`:
+Make a jsonic instance, register the markdown plugin, then `Parse`:
 
 ```go
 package main
@@ -48,120 +40,63 @@ func main() {
     j := tabnasjsonic.Make()
     j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
 
-    result, _ := j.Parse("name,age\nAlice,30\nBob,25")
+    result, _ := j.Parse("# Hello\n")
     fmt.Println(result)
-    // [{[name age] map[age:30 name:Alice]} {[name age] map[age:25 name:Bob]}]
+    // map[children:[map[children:[map[type:text value:Hello]] depth:1 type:heading]] type:document]
 }
 ```
 
-What happened:
-
-- The **first line** (`name,age`) is the header; its fields become the keys.
-- Each later line is one **record**, split on commas into **fields**.
-- You get back `[]any`, one record per data row.
-
-Each record is an **ordered map** (`*jsonic.OrderedMap`) — it keeps insertion
-order. Range `.Keys` for the field order and read `.Vals[k]` for the data, or
-hand the whole result to `json.Marshal`, which emits the fields in order.
-
-Every value is a **string** (`age:30`, not `30`). In the default *strict* mode
-the plugin does not interpret field contents — you opt into typed values next.
-
+What happened: `# Hello` became a `heading` node with `depth: 1` and a `text` child.
+The result is always a single `document` node (a `map[string]any` with `type:"document"`).
 
 ## 3. Read the result
-
-`Parse` returns `any`. Assert it to `[]any` to get the records. Each record's
-own type depends on the `object` option.
-
-Object records are `*jsonic.OrderedMap`: type-assert one and read
-`rec.Vals["age"]`, or range `rec.Keys` in field order. **Array output**
-(`object: false`) is still handy when you want positional access — each record
-is a plain `[]any` you can index directly. Add `header: false` so the first row
-is data too:
-
-```go
-package main
-
-import (
-    "fmt"
-
-    tabnasjsonic "github.com/tabnas/jsonic/go"
-    tabnasmarkdown "github.com/tabnas/markdown/go"
-)
-
-func main() {
-    j := tabnasjsonic.Make()
-    j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
-        "header": false,
-        "object": false,
-    })
-
-    result, _ := j.Parse("Alice,30\nBob,25")
-    rows := result.([]any)
-
-    fmt.Println(len(rows)) // 2
-
-    first := rows[0].([]any)
-    fmt.Println(first[0], first[1]) // Alice 30
-}
-```
-
-With the default `object: true`, records keep their key order but you read them
-through `fmt`/printing rather than a type assertion — see the
-[reference](reference.md#output-types) for the full type table.
-
-
-## 4. Get numbers instead of strings
-
-Turn on `number` (and `value` for `true`/`false`/`null`) to type the fields:
-
-```go
-j := tabnasjsonic.Make()
-j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults, map[string]any{
-    "number": true,
-    "value":  true,
-})
-
-result, _ := j.Parse("a,b,c\n1,true,null")
-fmt.Println(result)
-// [{[a b c] map[a:1 b:true c:<nil>]}]
-```
-
-`1` is now a number, `true` a boolean, and `null` becomes Go `nil` (printed as
-`<nil>`).
-
-
-## 5. Quoted fields
-
-A field wrapped in double quotes may contain commas, line breaks, or quotes. A
-literal quote is doubled (`""`), per RFC 4180:
 
 ```go
 j := tabnasjsonic.Make()
 j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
 
-result, _ := j.Parse("a\n\"b\"\"c\"")
-fmt.Println(result)
-// [{[a] map[a:b"c]}]
+result, _ := j.Parse("# Title\n\nHello *world*")
+doc := result.(map[string]any)
+fmt.Println(doc["type"]) // document
+children := doc["children"].([]any)
+fmt.Println(children[0].(map[string]any)["type"]) // heading
+fmt.Println(children[1].(map[string]any)["type"]) // paragraph
 ```
 
-The two quotes collapse to one, so the field value is `b"c`.
+Each node's `type` field discriminates the AST. `document` contains `children: Block[]`.
+Blocks include `heading`, `paragraph`, `blockquote`, `list`, `code`, `html`, `thematicBreak`.
 
+## 4. Inline markup
+
+Paragraphs and headings contain inline children:
+
+```go
+result, _ := j.Parse("Hello **world**")
+// document -> paragraph -> [text "Hello ", strong [text "world"]]
+
+result, _ = j.Parse("[link](https://example.com)")
+// document -> paragraph -> [link url:"https://example.com" title:<nil> children:[text "link"]]
+```
+
+## 5. Lists and code
+
+```go
+result, _ = j.Parse("- a\n- b\n- c")
+// document -> list{ordered:false} -> [listItem -> paragraph "a", ...]
+
+result, _ = j.Parse("```js\nconsole.log(\"hi\")\n```")
+// document -> code{lang:"js", value:"console.log(\"hi\")"}
+```
 
 ## You have arrived
 
 You can now:
 
-- install the plugin and register it on a jsonic instance,
-- parse a header-and-records file into `[]any` of ordered maps,
-- get numbers and booleans with `number` / `value`,
-- handle quoted fields.
+- install the plugin and parse a Markdown document to a `document` AST,
+- read headings, paragraphs, lists, and code blocks from the result.
 
 Next:
 
-- **[How-to guide](guide.md)** — recipes: custom delimiters, no-header mode,
-  streaming, error handling.
-- **[Reference](reference.md)** — the full option list, output types, and
-  accepted grammar.
-- **[Concepts](concepts.md)** — how it works on the engine, plus *Differences
-  from the TS version*.
+- **[How-to guide](guide.md)** — recipes for GFM, breaks, lists, etc.
+- **[Reference](reference.md)** — the full API, every option, and the AST shape.
+- **[Concepts](concepts.md)** — how it works on the engine, plus *Differences from the TS version*.

@@ -27,8 +27,7 @@ const grammarText = `
 
 // Defaults mirrors TS Markdown.defaults.
 var Defaults = map[string]any{
-	"gfm":    true,
-	"breaks": false,
+	"gfm": true,
 }
 
 // Markdown is the tabnas plugin for CommonMark/GFM prose. It expects a
@@ -67,22 +66,38 @@ func Markdown(j *jsonic.Jsonic, options map[string]any) error {
 		Rule: &jsonic.RuleOptions{Start: "markdown"},
 	})
 
-	// Rule markdown: bo builds the document from ctx.Src, open/close
+	// Rule markdown: bo builds the document from ctx.Src(), open/close
 	// consume the token stream via #AA wildcard so trailing-content check passes.
-	_ = grammarText
-
-	j.Rule("markdown", func(rs *jsonic.RuleSpec, _ *jsonic.Parser) {
-		rs.Clear()
-		rs.AddBO(func(r *jsonic.Rule, ctx *jsonic.Context) {
-			src := ctx.Src
+	refs := map[jsonic.FuncRef]any{
+		"@markdown-bo": jsonic.StateAction(func(r *jsonic.Rule, ctx *jsonic.Context) {
+			src := ctx.Src()
 			if strings.Trim(src, "\r\n\t ") == "" {
 				r.Node = map[string]any{"type": "document", "children": []any{}}
 				return
 			}
 			r.Node = parseDocument(src, opts)
-		})
-		rs.AddOpen(&jsonic.AltSpec{S: [][]jsonic.Tin{{jsonic.TinAA}}, R: "markdown"}, &jsonic.AltSpec{})
-		rs.AddClose(&jsonic.AltSpec{S: [][]jsonic.Tin{{jsonic.TinZZ}}}, &jsonic.AltSpec{})
+		}),
+	}
+
+	// Install minimal grammar spec via jsonic's grammar helper?
+	// We do it via direct Rule API to avoid parsing grammarText through jsonic.
+	// The embedded grammarText is kept for embed-grammar parity but not used
+	// for parsing (the prose complexity lives in parseDocument).
+	_ = refs
+	_ = grammarText
+
+	j.Rule("markdown", func(rs *jsonic.RuleSpec) *jsonic.RuleSpec {
+		return rs.Clear().
+			BO(func(r *jsonic.Rule, ctx *jsonic.Context) {
+				src := ctx.Src()
+				if strings.Trim(src, "\r\n\t ") == "" {
+					r.Node = map[string]any{"type": "document", "children": []any{}}
+					return
+				}
+				r.Node = parseDocument(src, opts)
+			}).
+			Open([]*jsonic.GrammarAltSpec{{S: "#AA", R: "markdown"}, {S: ""}}).
+			Close([]*jsonic.GrammarAltSpec{{S: "#ZZ"}, {S: ""}})
 	})
 
 	return nil
@@ -104,8 +119,7 @@ var (
 	reBlockquoteLine   = regexp.MustCompile(`^ {0,3}>\s?`)
 	reUnorderedItem    = regexp.MustCompile(`^ {0,3}([*+-])[ \t]+(.*)$`)
 	reOrderedItem      = regexp.MustCompile(`^ {0,3}(\d+)([.)])[ \t]+(.*)$`)
-	reHtmlBlock        = regexp.MustCompile(`^ {0,3}<`)
-	reHtmlTag          = regexp.MustCompile(`^<\/?[a-zA-Z][\w-]*(?:\s[^>]*)?>`)
+	reHtmlBlockLine    = regexp.MustCompile(`^ {0,3}<`)
 )
 
 // ---------------------------------------------------------------------------
@@ -503,9 +517,9 @@ func isHtmlBlockLine(line string) bool {
 	if strings.HasPrefix(t, "<!--") || strings.HasPrefix(t, "<![CDATA[") || strings.HasPrefix(strings.ToUpper(t), "<!DOCTYPE") || strings.HasPrefix(t, "<?") {
 		return true
 	}
-	// Match tag-like <div> / </a> / <br> etc., not autolink <https://...>
-	if reHtmlTag.MatchString(t) {
-		return true
+	// Simple tag check
+	if len(t) > 1 && ((t[1] >= 'a' && t[1] <= 'z') || (t[1] >= 'A' && t[1] <= 'Z') || t[1] == '/') {
+		return strings.Contains(t, ">")
 	}
 	return false
 }
@@ -870,70 +884,3 @@ func stringsParseInt(s string) (int, bool) {
 }
 
 func boolPtr(b bool) *bool { return &b }
-
-// BuildMarkdownStringMatcher is retained for the export test (TS: buildMarkdownStringMatcher).
-// It implements RFC-4180 double-quote escaping ("a""b" → a"b) on top of the
-// default string matcher, matching the old CSV behaviour.
-func BuildMarkdownStringMatcher(stringOpts map[string]any) jsonic.MakeLexMatcher {
-	// This is a minimal port of the TS buildMarkdownStringMatcher: it
-	// returns a matcher that handles ""-escaped quotes inside a quoted
-	// field. The implementation delegates to the standard JSON matcher
-	// for other cases but ensures "" is collapsed to ".
-	return func(cfg *jsonic.LexConfig, _ *jsonic.Options) jsonic.LexMatcher {
-		return func(lex *jsonic.Lex, _ *jsonic.Rule) *jsonic.Token {
-			q := "\""
-			if v, ok := stringOpts["quote"].(string); ok && v != "" {
-				q = v
-			}
-			qMap := map[byte]bool{q[0]: true}
-			pnt := lex.Cursor()
-			src := lex.Src
-			sI := pnt.SI
-			if sI >= len(src) || !qMap[src[sI]] {
-				return nil
-			}
-			qR := pnt.RI
-			sI++
-			pnt.CI++
-			var buf []byte
-			for sI < len(src) {
-				pnt.CI++
-				c := src[sI]
-				if c == q[0] {
-					sI++
-					pnt.CI++
-					if sI < len(src) && src[sI] == q[0] {
-						buf = append(buf, q[0])
-					} else {
-						break
-					}
-				} else {
-					bI := sI
-					qc := q[0]
-					cc := src[sI]
-					for sI < len(src) && cc >= 32 && cc != qc {
-						sI++
-						if sI < len(src) {
-							cc = src[sI]
-						}
-						pnt.CI++
-					}
-					pnt.CI--
-					if sI < len(src) && src[sI] < 32 {
-						return lex.Bad("unprintable")
-					}
-					buf = append(buf, src[bI:sI]...)
-					sI--
-				}
-				sI++
-			}
-			if sI == 0 || src[sI-1] != q[0] {
-				pnt.RI = qR
-				return lex.Bad("unterminated_string")
-			}
-			tkn := lex.Token("#ST", jsonic.TinST, string(buf), src[pnt.SI:sI])
-			pnt.SI = sI
-			return tkn
-		}
-	}
-}

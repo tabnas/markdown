@@ -13,9 +13,9 @@ Blank lines are skipped, and so are comment lines — a line starting with
 
 | Column | Meaning |
 |---|---|
-| `input` | Delimited record text (CSV-family) source. Escapes `\n` `\r` `\t` `\\` are decoded. |
-| `expected` | A JSON value (the parse result), or `ERROR` / `ERROR:<substring>` for inputs that must fail. |
-| `opts` | Optional JSON object of plugin options (empty means defaults). |
+| `input` | Markdown source (CommonMark/GFM subset). Escapes `\n` `\r` `\t` `\\` are decoded. |
+| `expected` | A JSON value (the parse result — a `{type:'document', children:[…]}` AST), or `ERROR` / `ERROR:<substring>` for inputs that must fail. |
+| `opts` | Optional JSON object of plugin options (empty means defaults `{"gfm":true}`; e.g. `{"gfm":false}`). |
 
 `expected` and `opts` are **not** escape-decoded — they are raw JSON, so
 JSON's own escape rules apply (`"a\nb"` is a string containing a newline).
