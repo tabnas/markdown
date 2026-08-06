@@ -1,15 +1,46 @@
 # markdown plugin (Go)
 
-A [Tabnas](https://github.com/tabnas/parser) grammar plugin that parses
-**CommonMark / GFM Markdown** into a JSON AST — headings, paragraphs,
-blockquotes, lists, code blocks, thematic breaks, HTML, and inline (emphasis,
-strong, code, links, images, strikethrough). Despite the name's history as a
-CSV-family reader, this package now parses **prose Markdown** (the Go port of
-the canonical TypeScript package [`@tabnas/markdown`](../ts/README.md)).
+A CommonMark parser for the [Tabnas](https://github.com/tabnas/parser) engine, scoring
+**652/652 on the CommonMark 0.31.2 spec suite**, with one GFM extension (strikethrough).
+This is the Go port of the canonical TypeScript package
+[`@tabnas/markdown`](../ts/README.md); the two are verified to agree on every example.
 
-This is the Go port of the canonical TypeScript package; the two share one
-grammar source (`markdown-grammar.jsonic`) and a common fixture suite in
-`test/spec/`.
+## Two outputs
+
+**The AST is the primary output.** `ParseDocument` returns it directly, as a
+`map[string]any`; the renderer does not run.
+
+```go
+opts := tabnasmarkdown.DefaultOptions
+
+doc := tabnasmarkdown.ParseDocument("# Hello\n\nHello *world*", opts)
+fmt.Println(doc["type"]) // document
+fmt.Println(doc["children"])
+// [map[children:[map[type:text value:Hello]] depth:1 type:heading] map[children:[map[type:text value:Hello ] map[children:[map[type:text value:world]] type:emphasis]] type:paragraph]]
+```
+
+**HTML is available, on request, via `ToHTML`.** The CommonMark suite scores HTML output,
+so the renderer is what makes the 652/652 claim measurable; that it is useful to callers
+is a consequence.
+
+```go
+fmt.Print(tabnasmarkdown.ToHTML("# Hello\n\nHello *world*", opts))
+// <h1>Hello</h1>
+// <p>Hello <em>world</em></p>
+```
+
+**The HTML is not sanitized.** Raw HTML blocks and inline tags pass through verbatim, as
+CommonMark specifies, and GFM's disallowed-raw-HTML filter is not implemented. Put a
+sanitizer downstream of any untrusted Markdown.
+
+```go
+fmt.Print(tabnasmarkdown.ToHTML("<script>alert(1)</script>", opts))
+// <script>alert(1)</script>
+```
+
+`ParseTree` returns the native CommonMark node tree instead — it keeps `SourcePos` on
+block nodes, and `RenderHTML` renders it, so you can parse, walk or mutate, then render.
+See the [reference](doc/reference.md).
 
 ## Install
 
@@ -17,52 +48,58 @@ grammar source (`markdown-grammar.jsonic`) and a common fixture suite in
 go get github.com/tabnas/markdown/go@latest
 ```
 
-Requires Go 1.24+. The plugin depends on `github.com/tabnas/jsonic/go`, which
-re-exports the tabnas engine API.
+Requires Go 1.24+. `go.mod` requires `github.com/tabnas/parser/go` — the bare engine — and
+nothing else. There is no jsonic dependency and there are no indirect dependencies.
 
-## Example
+## Specific to this runtime
+
+`Make` returns an engine with the plugin already installed, the counterpart of
+`new Tabnas().use(Markdown)` in TypeScript. Its `Parse` returns the same AST as
+`ParseDocument`.
 
 ```go
 package main
 
 import (
-    "fmt"
+	"fmt"
 
-    tabnasjsonic "github.com/tabnas/jsonic/go"
-    tabnasmarkdown "github.com/tabnas/markdown/go"
+	tabnasmarkdown "github.com/tabnas/markdown/go"
 )
 
 func main() {
-    j := tabnasjsonic.Make()
-    j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
+	j := tabnasmarkdown.Make()
 
-    result, _ := j.Parse("# Hello\n\nHello *world*")
-    fmt.Println(result)
-    // map[children:[map[children:[map[type:text value:Hello]] depth:1 type:heading] map[children:[map[type:text value:Hello ] map[children:[map[type:text value:world]] type:emphasis]] type:paragraph]] type:document]
+	result, err := j.Parse("# Hello")
+	fmt.Println(result, err)
+	// map[children:[map[children:[map[type:text value:Hello]] depth:1 type:heading]] type:document] <nil>
 }
 ```
 
-The result is always a single `document` node (`map[string]any{"type":"document",
-"children":[]any{...}}`). Each block and inline node has a `type` field.
+To install the plugin on an engine you already have, use `j.Use(tabnasmarkdown.Markdown, nil)`.
+
+Options are a struct, not a map: `tabnasmarkdown.Options{GFM: bool, Breaks: bool}`, with
+`DefaultOptions` being `{GFM: true, Breaks: false}`. `ResolveOptions` converts the plugin
+option map form. `GFM` gates strikethrough and nothing else: tables, task list items,
+autolink literals (bare `www.` / `https://` without angle brackets), footnotes and
+disallowed-raw-HTML filtering are not implemented.
+
+The parser is engine-free — nothing under `commonmark.go` imports the engine — so the
+conformance suite runs on its own:
+
+```bash
+go test -run TestCommonMarkSpec -v ./...   # 652/652
+```
 
 ## Documentation
 
 Documentation follows the [Diátaxis](https://diataxis.fr) framework:
 
-- [Tutorial](doc/tutorial.md) — a guided first run.
-- [How-to guide](doc/guide.md) — task recipes (headings, lists, code, links, GFM).
-- [Reference](doc/reference.md) — the full API, every option, output types, and the grammar.
-- [Concepts](doc/concepts.md) — how it works on the engine, plus *Differences from the TS version*.
+- [Tutorial](doc/tutorial.md) — first parse, start to finish.
+- [How-to guide](doc/guide.md) — task recipes.
+- [Reference](doc/reference.md) — API, options, AST node types.
+- [Concepts](doc/concepts.md) — how it works, and why, plus *Differences from the TS version*.
 
-For the TypeScript version, see [../ts/README.md](../ts/README.md).
-
-## Grammar diagram
-
-The railroad diagram of the live grammar lives in the TS package
-([`ts/doc/grammar.svg`](../ts/doc/grammar.svg),
-[`ts/doc/grammar.txt`](../ts/doc/grammar.txt)). The grammar source is the
-top-level [`markdown-grammar.jsonic`](../markdown-grammar.jsonic), embedded into
-[`markdown.go`](markdown.go).
+Top-level [README](../README.md) · TypeScript version: [ts/README.md](../ts/README.md).
 
 ## License
 
