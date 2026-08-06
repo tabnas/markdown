@@ -173,3 +173,34 @@ func TestSourcePosColumnsCountCharacters(t *testing.T) {
 		}
 	}
 }
+
+// TestDestinationsDecodedInAST pins where percent-encoding happens.
+//
+// normalizeURI belongs to rendering. Applying it at parse time was invisible
+// in the HTML — it is idempotent over its own output, so conformance stayed at
+// 652/652 — but it put "/%C3%A4" in the public AST where mdast, and every
+// previous release, promises "/ä". No .tsv fixture held a non-ASCII URL, so
+// nothing caught it; both runtimes were wrong in exactly the same way, which
+// also hid it from the cross-runtime comparison.
+func TestDestinationsDecodedInAST(t *testing.T) {
+	first := func(src string) map[string]any {
+		doc := ParseDocument(src, Options{})
+		para := doc["children"].([]any)[0].(map[string]any)
+		return para["children"].([]any)[0].(map[string]any)
+	}
+
+	for _, c := range []struct{ in, wantURL, wantHTML string }{
+		{"[l](/ä)", "/ä", "<p><a href=\"/%C3%A4\">l</a></p>\n"},
+		{"![i](/ö)", "/ö", "<p><img src=\"/%C3%B6\" alt=\"i\" /></p>\n"},
+		{"<https://x.com/ä>", "https://x.com/ä", "<p><a href=\"https://x.com/%C3%A4\">https://x.com/ä</a></p>\n"},
+		// Already encoded: left alone, not double-encoded.
+		{"[l](/a%20b)", "/a%20b", "<p><a href=\"/a%20b\">l</a></p>\n"},
+	} {
+		if got := first(c.in)["url"]; got != c.wantURL {
+			t.Errorf("%q: AST url = %q, want %q", c.in, got, c.wantURL)
+		}
+		if got := ToHTML(c.in, Options{}); got != c.wantHTML {
+			t.Errorf("%q: HTML = %q, want %q", c.in, got, c.wantHTML)
+		}
+	}
+}

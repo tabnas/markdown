@@ -200,18 +200,76 @@ function inlineChildren(node: MdNode, opts: ParserOptions): Inline[] {
   return out
 }
 
+/** Containers whose children are blocks rather than inlines. */
+const BLOCK_CONTAINERS: Record<string, true> = {
+  document: true,
+  block_quote: true,
+  list: true,
+  item: true,
+}
+
+/**
+ * Project a container's block children.
+ *
+ * Iterative rather than recursive, because the recursion depth here is the
+ * document's container nesting depth, which untrusted input controls directly:
+ * `'> '.repeat(4000)` is 8 KB of Markdown that the block parser and the HTML
+ * renderer both handle, but that overflowed the stack in this projection —
+ * crashing the package's primary API on input the rest of the pipeline
+ * survives.
+ *
+ * Two passes. The first walks the block tree with an explicit stack, recording
+ * nodes in an order where every parent precedes its descendants. Building in
+ * reverse then guarantees a node's children are already built when it is
+ * reached, so `buildBlock` can look them up instead of recursing.
+ *
+ * The Go port keeps the recursive form: goroutine stacks grow on demand and it
+ * projects 100k-deep nesting without trouble, so the same defect does not
+ * arise there.
+ */
 function blockChildren(node: MdNode, opts: ParserOptions): Block[] {
+  const order: MdNode[] = []
+  const stack: MdNode[] = []
+
+  for (let c = node.lastChild; c; c = c.prev) stack.push(c)
+  while (0 < stack.length) {
+    const n = stack.pop() as MdNode
+    order.push(n)
+    if (true === BLOCK_CONTAINERS[n.type]) {
+      for (let c = n.lastChild; c; c = c.prev) stack.push(c)
+    }
+  }
+
+  const built = new Map<MdNode, Block>()
+  for (let i = order.length - 1; 0 <= i; i--) {
+    const n = order[i]
+    const block = buildBlock(n, opts, built)
+    if (null !== block) built.set(n, block)
+  }
+
   const out: Block[] = []
-  let child = node.firstChild
-  while (child) {
-    const block = toBlock(child, opts)
-    if (null !== block) out.push(block)
-    child = child.next
+  for (let c = node.firstChild; c; c = c.next) {
+    const b = built.get(c)
+    if (undefined !== b) out.push(b)
   }
   return out
 }
 
-function toBlock(node: MdNode, opts: ParserOptions): Block | null {
+/** Children of `n` that have already been built, in source order. */
+function builtChildren(n: MdNode, built: Map<MdNode, Block>): Block[] {
+  const out: Block[] = []
+  for (let c = n.firstChild; c; c = c.next) {
+    const b = built.get(c)
+    if (undefined !== b) out.push(b)
+  }
+  return out
+}
+
+function buildBlock(
+  node: MdNode,
+  opts: ParserOptions,
+  built: Map<MdNode, Block>,
+): Block | null {
   switch (node.type) {
     case 'paragraph':
       return { type: 'paragraph', children: inlineChildren(node, opts) }
@@ -227,7 +285,7 @@ function toBlock(node: MdNode, opts: ParserOptions): Block | null {
       return { type: 'thematicBreak' }
 
     case 'block_quote':
-      return { type: 'blockquote', children: blockChildren(node, opts) }
+      return { type: 'blockquote', children: builtChildren(node, built) }
 
     case 'code_block': {
       const info = (node.info ?? '').trim()
@@ -264,7 +322,7 @@ function toBlock(node: MdNode, opts: ParserOptions): Block | null {
           items.push({
             type: 'listItem',
             spread: itemIsSpread(child),
-            children: blockChildren(child, opts),
+            children: builtChildren(child, built),
           })
         }
         child = child.next
@@ -279,8 +337,9 @@ function toBlock(node: MdNode, opts: ParserOptions): Block | null {
     }
 
     case 'item':
-      // Only reachable if an item is somehow detached from its list.
-      return { type: 'listItem', spread: itemIsSpread(node), children: blockChildren(node, opts) }
+      // Only reachable if an item is somehow detached from its list; a list
+      // builds its own items above.
+      return { type: 'listItem', spread: itemIsSpread(node), children: builtChildren(node, built) }
 
     default:
       return null

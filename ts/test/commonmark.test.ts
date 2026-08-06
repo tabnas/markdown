@@ -19,6 +19,7 @@ import { join } from 'node:path'
 
 import { parse } from '../dist/commonmark'
 import { renderHTML } from '../dist/html'
+import { parseDocument, toHtml } from '../dist/markdown'
 
 type SpecCase = {
   markdown: string
@@ -108,5 +109,40 @@ describe('sourcepos', () => {
     measure(1000)
     const ratio = measure(20000) / measure(5000)
     assert.ok(ratio < 10, `4x input took ${ratio.toFixed(1)}x time; expected roughly linear`)
+  })
+})
+
+describe('ast projection', () => {
+  // Codex review on PR #28 caught both of these; neither was visible to the
+  // conformance suite, which only ever compares HTML.
+
+  test('destinations are decoded in the AST, encoded only in HTML', () => {
+    // normalizeURI belongs to rendering. Applying it at parse time was
+    // invisible in the HTML (it is idempotent over its own output) but put
+    // `/%C3%A4` in the public AST where mdast promises `/ä`.
+    const doc: any = parseDocument('[l](/ä)', { gfm: false })
+    assert.equal(doc.children[0].children[0].url, '/ä')
+    assert.equal(toHtml('[l](/ä)', { gfm: false }), '<p><a href="/%C3%A4">l</a></p>\n')
+
+    const img: any = parseDocument('![i](/ö)', { gfm: false })
+    assert.equal(img.children[0].children[0].url, '/ö')
+
+    const auto: any = parseDocument('<https://x.com/ä>', { gfm: false })
+    assert.equal(auto.children[0].children[0].url, 'https://x.com/ä')
+
+    // An already-encoded destination is left alone, not double-encoded.
+    const pre: any = parseDocument('[l](/a%20b)', { gfm: false })
+    assert.equal(pre.children[0].children[0].url, '/a%20b')
+    assert.equal(toHtml('[l](/a%20b)', { gfm: false }), '<p><a href="/a%20b">l</a></p>\n')
+  })
+
+  test('deep container nesting does not overflow the stack', () => {
+    // 8 KB of Markdown. The block parser and the renderer always handled this;
+    // the projection recursed once per container and threw RangeError at ~4000,
+    // so untrusted input could crash the primary API.
+    for (const depth of [4000, 20000]) {
+      const src = '> '.repeat(depth) + 'x\n'
+      assert.doesNotThrow(() => parseDocument(src, { gfm: false }), `depth ${depth}`)
+    }
   })
 })

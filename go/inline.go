@@ -431,7 +431,8 @@ func (p *inlineParser) parseAutolink(block *MdNode) bool {
 func (p *inlineParser) makeAutolink(destination string, label string) *MdNode {
 	// Autolink text is literal: no backslash escapes, no entity references.
 	node := NewNode(NodeLink)
-	node.Destination = normalizeURI(destination)
+	// Not percent-encoded here — see parseLinkDestination.
+	node.Destination = destination
 	node.Title = ""
 	node.HasTitle = false
 	node.AppendChild(textNode(label))
@@ -705,12 +706,20 @@ func (p *inlineParser) parseLinkTitle() (string, bool) {
 	return unescapeString(title[1 : len(title)-1]), true
 }
 
+// parseLinkDestination returns a destination that is backslash-unescaped and
+// entity-decoded, but **not** percent-encoded: [l](/ä) yields /ä, not /%C3%A4.
+//
+// Encoding is a rendering concern and html.go applies normalizeURI when it
+// writes the attribute. Doing it here too would be invisible in the HTML
+// (normalizeURI is idempotent over its own output) but would put the encoded
+// form in the public AST, where mdast — and every previous release of this
+// package — promises the decoded one.
 // parseLinkDestination reads either `<...>`, or a bare run with balanced
 // unescaped parentheses and no ASCII control characters or spaces. The bool
 // is false when there is no destination here.
 func (p *inlineParser) parseLinkDestination() (string, bool) {
 	if braced, ok := p.match(reLinkDestinationBraces); ok {
-		return normalizeURI(unescapeString(braced[1 : len(braced)-1])), true
+		return unescapeString(braced[1 : len(braced)-1]), true
 	}
 	if p.peek() == '<' {
 		return "", false
@@ -763,7 +772,7 @@ scan:
 		return "", false
 	}
 
-	return normalizeURI(unescapeString(p.subject[savepos:p.pos])), true
+	return unescapeString(p.subject[savepos:p.pos]), true
 }
 
 // parseLinkLabel returns the byte length of the link label at pos, brackets

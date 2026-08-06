@@ -5,7 +5,13 @@
 // imports them in turn.
 
 export type ParserOptions = {
-  /** GFM extensions: strikethrough, tables, task lists, autolink literals. */
+  /**
+   * Enable GFM strikethrough (`~~x~~`). Default true.
+   *
+   * Strikethrough is the only GFM extension implemented; tables, task list
+   * items, autolink literals, footnotes and raw-HTML filtering are not, and
+   * this flag does not gate them.
+   */
   gfm: boolean
   /** Render soft line breaks as hard breaks. */
   breaks: boolean

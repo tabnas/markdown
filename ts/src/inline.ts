@@ -33,7 +33,6 @@ import {
   isUnicodePunctuation,
   isUnicodeWhitespace,
   normalizeReference,
-  normalizeURI,
   unescapeString,
 } from './common.ts'
 
@@ -336,7 +335,8 @@ class InlineParser {
   makeAutolink(destination: string, label: string): MdNode {
     // Autolink text is literal: no backslash escapes, no entity references.
     const node = new MdNode('link')
-    node.destination = normalizeURI(destination)
+    // Not percent-encoded here — see parseLinkDestination.
+    node.destination = destination
     node.title = null
     node.appendChild(text(label))
     return node
@@ -592,10 +592,20 @@ class InlineParser {
    * Link destination: either `<...>`, or a bare run with balanced unescaped
    * parentheses and no ASCII control characters or spaces.
    */
+  /**
+   * A destination is backslash-unescaped and entity-decoded, but **not**
+   * percent-encoded: `[l](/ä)` yields `/ä`, not `/%C3%A4`.
+   *
+   * Encoding is a rendering concern and `html.ts` applies `normalizeURI` when
+   * it writes the attribute. Doing it here too would be invisible in the HTML
+   * (`normalizeURI` is idempotent over its own output) but would put the
+   * encoded form in the public AST, where mdast — and every previous release
+   * of this package — promises the decoded one.
+   */
   parseLinkDestination(): string | null {
     const braced = this.match(reLinkDestinationBraces)
     if (null !== braced) {
-      return normalizeURI(unescapeString(braced.slice(1, braced.length - 1)))
+      return unescapeString(braced.slice(1, braced.length - 1))
     }
     if (C_LESSTHAN === this.peek()) return null
 
@@ -634,7 +644,7 @@ class InlineParser {
     if (this.pos === savepos && C_CLOSE_PAREN !== c) return null
     if (0 !== openparens) return null
 
-    return normalizeURI(unescapeString(this.subject.slice(savepos, this.pos)))
+    return unescapeString(this.subject.slice(savepos, this.pos))
   }
 
   /** Length of the link label at `pos`, including brackets; 0 if invalid. */
