@@ -1,102 +1,235 @@
 # Tutorial: parsing Markdown with @tabnas/markdown (Go)
 
-This is a guided first run. By the end you will have installed the plugin,
-parsed Markdown, and understood the AST. Takes about five minutes and assumes
-Go 1.24+.
+This is a guided first run. By the end you will have added the module to a
+program, parsed a document into an AST, rendered the same document to HTML, and
+changed one option. Takes about five minutes and assumes Go 1.24+.
+
+Two answers before you start, because they shape everything below:
+
+- **The AST is the primary output.** `ParseDocument` returns it, as a
+  `map[string]any`. Nothing else runs — the HTML renderer is never touched.
+- **Yes, there is an HTML emitter**: `ToHTML`. The CommonMark test suite scores
+  HTML output, so the renderer is the instrument that makes this package's
+  652/652 conformance score measurable. You get to use it too.
+
+You will meet both in this lesson, in that order.
 
 ## 1. Install
 
-The plugin layers on the jsonic engine (which re-exports the tabnas engine).
-Add it to your module:
+Make a directory for this lesson, start a module in it, and add the package:
 
 ```bash
+mkdir mdnotes && cd mdnotes
+go mod init mdnotes
 go get github.com/tabnas/markdown/go@latest
 ```
 
-Then import both packages:
+That adds this package and the bare tabnas engine it requires, and nothing else.
 
-```go
-import (
-    tabnasjsonic "github.com/tabnas/jsonic/go"
-    tabnasmarkdown "github.com/tabnas/markdown/go"
-)
-```
+Now make a file called `main.go` in that directory. Every code block below is
+the whole of that file, and you run it with `go run .`.
 
-## 2. Parse your first document
+## 2. Parse a document
 
-Make a jsonic instance, register the markdown plugin, then `Parse`:
+Put this in `main.go`:
 
 ```go
 package main
 
 import (
-    "fmt"
+	"encoding/json"
+	"fmt"
 
-    tabnasjsonic "github.com/tabnas/jsonic/go"
-    tabnasmarkdown "github.com/tabnas/markdown/go"
+	tabnasmarkdown "github.com/tabnas/markdown/go"
 )
 
 func main() {
-    j := tabnasjsonic.Make()
-    j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
+	src := `# Notes
 
-    result, _ := j.Parse("# Hello\n")
-    fmt.Println(result)
-    // map[children:[map[children:[map[type:text value:Hello]] depth:1 type:heading]] type:document]
+A *short* note with a [link](https://example.com).
+`
+
+	doc := tabnasmarkdown.ParseDocument(src, tabnasmarkdown.DefaultOptions)
+
+	out, _ := json.MarshalIndent(doc, "", "  ")
+	fmt.Println(string(out))
 }
 ```
 
-What happened: `# Hello` became a `heading` node with `depth: 1` and a `text` child.
-The result is always a single `document` node (a `map[string]any` with `type:"document"`).
+Run it:
 
-## 3. Read the result
-
-```go
-j := tabnasjsonic.Make()
-j.UseDefaults(tabnasmarkdown.Markdown, tabnasmarkdown.Defaults)
-
-result, _ := j.Parse("# Title\n\nHello *world*")
-doc := result.(map[string]any)
-fmt.Println(doc["type"]) // document
-children := doc["children"].([]any)
-fmt.Println(children[0].(map[string]any)["type"]) // heading
-fmt.Println(children[1].(map[string]any)["type"]) // paragraph
+```bash
+go run .
 ```
 
-Each node's `type` field discriminates the AST. `document` contains `children: Block[]`.
-Blocks include `heading`, `paragraph`, `blockquote`, `list`, `code`, `html`, `thematicBreak`.
+You will see the AST. It is built from plain `map[string]any`, `[]any`, `string`
+and `int` — no structs to learn, no cycles, and `encoding/json` marshals it
+directly:
 
-## 4. Inline markup
-
-Paragraphs and headings contain inline children:
-
-```go
-result, _ := j.Parse("Hello **world**")
-// document -> paragraph -> [text "Hello ", strong [text "world"]]
-
-result, _ = j.Parse("[link](https://example.com)")
-// document -> paragraph -> [link url:"https://example.com" title:<nil> children:[text "link"]]
+```json
+{
+  "children": [
+    {
+      "children": [
+        {
+          "type": "text",
+          "value": "Notes"
+        }
+      ],
+      "depth": 1,
+      "type": "heading"
+    },
+    {
+      "children": [
+        {
+          "type": "text",
+          "value": "A "
+        },
+        {
+          "children": [
+            {
+              "type": "text",
+              "value": "short"
+            }
+          ],
+          "type": "emphasis"
+        },
+        {
+          "type": "text",
+          "value": " note with a "
+        },
+        {
+          "children": [
+            {
+              "type": "text",
+              "value": "link"
+            }
+          ],
+          "title": null,
+          "type": "link",
+          "url": "https://example.com"
+        },
+        {
+          "type": "text",
+          "value": "."
+        }
+      ],
+      "type": "paragraph"
+    }
+  ],
+  "type": "document"
+}
 ```
 
-## 5. Lists and code
+The keys come out alphabetically because that is how `encoding/json` marshals a
+map; the order carries no meaning. What does carry meaning is `type`, which
+tells you what each node is, and `children`, which holds the nodes underneath
+it.
+
+The top of the tree is always a `document` node, and its `children` are the
+blocks of the file in source order: the heading, then the paragraph.
+
+## 3. Read the AST
+
+Blocks that hold prose — headings, paragraphs, list items — have their own
+`children`, holding the inline nodes. Because every node is a `map[string]any`,
+reading the tree means asserting the type at each step. Replace the body of
+`main()` with:
 
 ```go
-result, _ = j.Parse("- a\n- b\n- c")
-// document -> list{ordered:false} -> [listItem -> paragraph "a", ...]
+	doc := tabnasmarkdown.ParseDocument("# Notes\n\nA *short* note.\n", tabnasmarkdown.DefaultOptions)
 
-result, _ = j.Parse("```js\nconsole.log(\"hi\")\n```")
-// document -> code{lang:"js", value:"console.log(\"hi\")"}
+	fmt.Println(doc["type"]) // document
+
+	children := doc["children"].([]any)
+	fmt.Println(len(children)) // 2
+
+	heading := children[0].(map[string]any)
+	fmt.Println(heading["type"], heading["depth"]) // heading 1
+
+	para := children[1].(map[string]any)
+	inlines := para["children"].([]any)
+	fmt.Println(inlines[1]) // map[children:[map[type:text value:short]] type:emphasis]
 ```
 
-## You have arrived
+You can drop the `encoding/json` import now; `go run .` will tell you if you
+forget.
 
-You can now:
+Notice the shape of that last line: `*short*` did not stay as text with
+asterisks in it. It became an `emphasis` node with a `text` child. That is the
+whole point of the AST — you read structure, not punctuation.
 
-- install the plugin and parse a Markdown document to a `document` AST,
-- read headings, paragraphs, lists, and code blocks from the result.
+## 4. Render the same document to HTML
 
-Next:
+The same input, one different function:
 
-- **[How-to guide](guide.md)** — recipes for GFM, breaks, lists, etc.
-- **[Reference](reference.md)** — the full API, every option, and the AST shape.
-- **[Concepts](concepts.md)** — how it works on the engine, plus *Differences from the TS version*.
+```go
+	src := "# Notes\n\nA *short* note.\n"
+
+	fmt.Printf("%q\n", tabnasmarkdown.ToHTML(src, tabnasmarkdown.DefaultOptions))
+	// "<h1>Notes</h1>\n<p>A <em>short</em> note.</p>\n"
+```
+
+`%q` rather than `%s` so you can see where the newlines fall. That string is
+byte-for-byte what the CommonMark 0.31.2 test suite expects, trailing newline
+included.
+
+One caution, from your very first render: **the HTML is not sanitized.**
+CommonMark passes raw HTML through by specification, so `<script>alert(1)</script>`
+in the Markdown comes out as `<script>alert(1)</script>` in the HTML. That is
+correct behaviour, not a bug. When you get to rendering Markdown that other
+people wrote, run a sanitizer over the output; the [how-to guide](guide.md) has
+a recipe.
+
+## 5. Change one option: breaks
+
+Options are a struct, `tabnasmarkdown.Options`. To change one setting, copy
+`DefaultOptions` and assign the field — that way the other settings stay at
+their defaults.
+
+A single newline inside a paragraph is a *soft* break. By default it reads as a
+space in the AST, and as a newline in the HTML:
+
+```go
+	src := "line one\nline two\n"
+
+	doc := tabnasmarkdown.ParseDocument(src, tabnasmarkdown.DefaultOptions)
+	para := doc["children"].([]any)[0].(map[string]any)
+	fmt.Println(para["children"]) // [map[type:text value:line one line two]]
+
+	fmt.Printf("%q\n", tabnasmarkdown.ToHTML(src, tabnasmarkdown.DefaultOptions))
+	// "<p>line one\nline two</p>\n"
+```
+
+Set `Breaks` and every soft break becomes a hard one — a `break` node in the
+AST, a `<br />` in the HTML:
+
+```go
+	src := "line one\nline two\n"
+
+	opts := tabnasmarkdown.DefaultOptions
+	opts.Breaks = true
+
+	doc := tabnasmarkdown.ParseDocument(src, opts)
+	para := doc["children"].([]any)[0].(map[string]any)
+	fmt.Println(para["children"])
+	// [map[type:text value:line one] map[type:break] map[type:text value:line two]]
+
+	fmt.Printf("%q\n", tabnasmarkdown.ToHTML(src, opts))
+	// "<p>line one<br />\nline two</p>\n"
+```
+
+Both functions take the same `Options` value, and both were parsed by the same
+parser. That is the pattern for everything else in this package.
+
+## 6. Where to go next
+
+You have the two outputs and one option. That is enough to be useful.
+
+- [How-to guide](guide.md) — recipes: the plugin, walking the AST, walking the
+  native tree, rewriting a document and re-rendering it, rendering untrusted
+  input safely, source positions, running the conformance suite.
+- [Reference](reference.md) — every exported symbol, every option, every node
+  type.
+- [Concepts](concepts.md) — why the parser is built the way it is, plus
+  *Differences from the TS version*.
