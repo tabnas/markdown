@@ -343,6 +343,31 @@ func charCount(s string) int {
 	return utf8.RuneCountInString(s)
 }
 
+// sourceColumn is the number of characters of currentLine before byte offset —
+// i.e. charCount(p.currentLine[:offset]), which is what a sourcepos column
+// needs.
+//
+// The TypeScript writes this as plain `offset`, because there an offset is
+// already a UTF-16 index. Counting it here is the one place the byte-offset
+// port would change the *complexity* rather than just the code: addChild calls
+// this once per container opened, so a naive count from the start of the line
+// makes a line of n nested containers — `> - > - > - …` — cost O(n²). The
+// canonical runtime is linear on that input, and untrusted Markdown decides n.
+//
+// So the count is carried forward from the last offset already counted.
+// addChild's offsets advance monotonically as a line is consumed, which makes
+// this amortized O(1); a smaller offset than the anchor is still handled
+// correctly, just by counting from the start again.
+func (p *blockParser) sourceColumn(offset int) int {
+	if offset < p.colAnchorOffset {
+		p.colAnchorOffset = 0
+		p.colAnchorChars = 0
+	}
+	p.colAnchorChars += charCount(p.currentLine[p.colAnchorOffset:offset])
+	p.colAnchorOffset = offset
+	return p.colAnchorChars
+}
+
 // jsTrim, which cuts a fenced code block's info string identically in both
 // runtimes, lives in common.go \u2014 inline.go needs the same set to decide hard
 // line breaks, and normalizeReference needs it for \u00A74.7 label matching.
@@ -1008,6 +1033,13 @@ type blockParser struct {
 	// were partly consumed.
 	partiallyConsumedTab bool
 
+	// colAnchorOffset/colAnchorChars memoize the last byte offset in
+	// currentLine whose character count is known, so sourcepos columns cost
+	// amortized O(1) rather than a fresh count from the start of the line. Both
+	// reset to 0 with each new line. See sourceColumn.
+	colAnchorOffset int
+	colAnchorChars  int
+
 	nextNonspace       int
 	nextNonspaceColumn int
 	// indent is the columns between column and the next non-space character.
@@ -1150,7 +1182,7 @@ func (p *blockParser) addChild(tag NodeType, offset int) *MdNode {
 		p.finalize(tip, p.lineNumber-1)
 	}
 
-	columnNumber := charCount(p.currentLine[:offset]) + 1 // offset 0 is column 1
+	columnNumber := p.sourceColumn(offset) + 1 // offset 0 is column 1
 	node := NewNode(tag)
 	node.SourcePos = SourcePos{{p.lineNumber, columnNumber}, {0, 0}}
 	p.openTip().AppendChild(node)
@@ -1219,6 +1251,8 @@ func (p *blockParser) incorporateLine(ln string) {
 	p.partiallyConsumedTab = false
 	p.lineNumber += 1
 	p.currentLine = ln
+	p.colAnchorOffset = 0
+	p.colAnchorChars = 0
 
 	// Step 1: walk the open blocks, consuming continuation markers. Stop at the
 	// first block that does not match; `container` is then the last matched one.
