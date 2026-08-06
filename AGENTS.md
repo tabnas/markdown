@@ -37,7 +37,7 @@ There are two implementations that must behave identically — TypeScript
 | [`markdown-grammar.jsonic`](markdown-grammar.jsonic) | The grammar, **intentionally trivial** for prose: a single `markdown` rule whose `bo` calls `parseDocument(ctx.src())`; `open: [{s:'#AA', r:'markdown'}, {}]` / `close: [{s:'#ZZ'}, {}]` merely consumes the token stream so the engine's trailing-content check passes. The prose complexity lives in JS (`parseDocument`/`parseInline`), not in declarative alts — see `dx-report.md` §2.1. |
 | [`ts/embed-grammar.js`](ts/embed-grammar.js) | Embeds `markdown-grammar.jsonic` verbatim into both `ts/src/markdown.ts` and `go/markdown.go` between `BEGIN/END EMBEDDED` markers. Run `node ts/embed-grammar.js`. The grammar may not contain backticks (Go raw-string limitation). |
 | [`test/spec/`](test/spec/) | Shared **prose** conformance fixtures (`input → expected` JSON, `opts` JSON), run by both runtimes. Auto-discovered (`*.tsv`). See `test/AGENTS.md`. |
-| [`test/fixtures/`](test/fixtures/) | Legacy CSV fixtures retained only for provenance; not used by the prose suite. Prose cases live in `test/spec`. |
+| [`test/commonmark/`](test/commonmark/) | Vendored CommonMark 0.31.2 spec suite (`spec.json`, 652 examples). The conformance contract for both runtimes. |
 | `ts/doc/{tutorial,guide,reference,concepts}.md`, `go/doc/{tutorial,guide,reference,concepts}.md` | Per-runtime Diátaxis docs (tutorial / how-to / reference / concepts). The `reference` documents the `DocumentNode`/`Block`/`Inline` AST. |
 | `dx-report.md` | Running rescope notes: why prose is a single rule + JS scanner, block precedence, inline handling, deferred scope (reference links, GFM tables/task lists, loose/tight). |
 

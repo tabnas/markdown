@@ -77,7 +77,8 @@ A vertical ASCII version is in [`ts/doc/grammar.txt`](ts/doc/grammar.txt). The g
 |---|---|
 | [`ts/`](ts/) | TypeScript / JavaScript implementation (canonical). |
 | [`go/`](go/) | Go port. |
-| [`test/spec/`](test/spec/) | Shared conformance fixtures (prose), run by both runtimes. |
+| [`test/spec/`](test/spec/) | Shared AST fixtures, run by both runtimes. |
+| [`test/commonmark/`](test/commonmark/) | Vendored CommonMark 0.31.2 spec suite (652 examples). |
 
 ## License
 
