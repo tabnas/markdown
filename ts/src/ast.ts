@@ -104,16 +104,21 @@ function collectAltText(node: MdNode): string {
 }
 
 /**
- * An item is spread when it holds more than one block-level child separated by
- * a blank line. The block parser records looseness on the parent list, so an
- * item inside a loose list that itself holds a single paragraph is not spread.
+ * mdast semantics: an item is spread when two of its children are separated by
+ * a *blank line* — not merely when it has more than one child. `- a\n  - b`
+ * holds a paragraph and a nested list with no blank line between them, and is
+ * not spread; `- a\n\n  - b` is.
+ *
+ * Derived from the block parser's `sourcepos` rather than tracked separately:
+ * consecutive children whose line ranges are not adjacent must have had a
+ * blank line between them.
  */
 function itemIsSpread(item: MdNode): boolean {
-  let count = 0
   let child = item.firstChild
-  while (child) {
-    count++
-    if (1 < count) return true
+  while (child && child.next) {
+    const endLine = child.sourcepos[1][0]
+    const nextStartLine = child.next.sourcepos[0][0]
+    if (nextStartLine > endLine + 1) return true
     child = child.next
   }
   return false
@@ -237,7 +242,13 @@ function toBlock(node: MdNode, opts: ParserOptions): Block | null {
           meta = info.slice(sp + 1).trim() || null
         }
       }
-      return { type: 'code', lang, meta, value: node.literal ?? '' }
+      // The native tree keeps the trailing newline because the spec's HTML
+      // for `<pre><code>` includes it; mdast's `code.value` does not. Strip
+      // exactly one, not all, so a block that genuinely ends in a blank line
+      // keeps it.
+      const raw = node.literal ?? ''
+      const value = raw.endsWith('\n') ? raw.slice(0, -1) : raw
+      return { type: 'code', lang, meta, value }
     }
 
     case 'html_block':

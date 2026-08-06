@@ -24,14 +24,18 @@ const reEntity = new RegExp('^' + ENTITY + '$', 'i')
  * excludes some of what the spec counts, and emphasis flanking (§6.4) is
  * decided on exactly this set.
  */
-export const UNICODE_WHITESPACE_RE = /[\t\n\f\r    -     　]/
+export const UNICODE_WHITESPACE_RE = /[\t\n\f\r    - \u2028\u2029  　]/
 
 /**
- * §2.1 Unicode punctuation. Used only by the flanking rules. Built from the
- * ASCII punctuation block plus the Unicode P* and S* general categories, which
- * 0.31.2 folded into the definition.
+ * §2.1 Unicode punctuation. Used only by the emphasis flanking rules.
+ *
+ * 0.31.2 widened this from the P* categories alone to **P* union S***, which
+ * is why `$ + < = > ^ ` | ~ £ EUR` count as punctuation here. Expressed with
+ * Unicode property escapes rather than an enumerated code-point table: the
+ * table form silently rots against each Unicode revision, and a P-only table
+ * is exactly the near-miss that costs emphasis-flanking examples.
  */
-export const UNICODE_PUNCTUATION_RE = /[!-#%-\*,-\/:;\?@\[-\]_\{\}¡§«¶·»¿;·՚-՟։֊־׀׃׆׳״؉؊،؍؛؝-؟٪-٭۔܀-܍߷-߹࠰-࠾࡞।॥॰৽੶૰౷಄෴๏๚๛༄-༒༔༺-༽྅࿐-࿔࿙࿚၊-၏჻፠-፨᐀᙮᚛᚜᛫-᛭᜵᜶។-៖៘-៚᠀-᠊᥄᥅᨞᨟᪠-᪦᪨-᪭᭚-᭠᭽᭾᯼-᯿᰻-᰿᱾᱿᳀-᳇᳓‐-‧‰-⁃⁅-⁑⁓-⁞⁽⁾₍₎⌈-⌋〈〉❨-❵⟅⟆⟦-⟯⦃-⦘⧘-⧛⧼⧽⳹-⳼⳾⳿⵰⸀-⸮⸰-⹏⹒-⹝、-〃〈-】〔-〟〰〽゠・꓾꓿꘍-꘏꙳꙾꛲-꛷꡴-꡷꣎꣏꣸-꣺꣼꤮꤯꥟꧁-꧍꧞꧟꩜-꩟꫞꫟꫰꫱꯫﴾﴿︐-︙︰-﹒﹔-﹡﹣﹨﹪﹫！-＃％-＊，-／：；？＠［-］＿｛｝｟-･]|\ud800[\udd00-\udd02\udf9f\udfd0]|\ud801[\udd6f]|\ud802[\udc57\udd1f\udd3f\ude50-\ude58\ude7f\udef0-\udef6\udf39-\udf3f\udf99-\udf9c]|\ud803[\udf55-\udf59]|\ud804[\udc47-\udc4d\udcbb\udcbc\udcbe-\udcc1\udd40-\udd43\udd74\udd75\uddc5-\uddc9\uddcd\udddb\udddd-\udddf\ude38-\ude3d\udea9]|\ud805[\udc4b-\udc4f\udc5b\udc5d\udcc6\uddc1-\uddd7\ude41-\ude43\ude60-\ude6c\udf3c-\udf3e]|\ud806[\udc3b\udde2\ude3f-\ude46\ude9a-\ude9c\ude9e-\udea2]|\ud807[\udc41-\udc45\udc70\udc71\udef7\udef8\udfff]|\ud809[\udc70-\udc74]|\ud80b[\udff1\udff2]|\ud81a[\ude6e\ude6f\udef5\udf37-\udf3b\udf44]|\ud81b[\ude97-\ude9a\udfe2]|\ud82f[\udc9f]|\ud836[\ude87-\ude8b]|\ud83a[\udd5e\udd5f]/
+export const UNICODE_PUNCTUATION_RE = /[\p{P}\p{S}]/u
 
 export function isUnicodeWhitespace(ch: string): boolean {
   return UNICODE_WHITESPACE_RE.test(ch)
