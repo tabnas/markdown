@@ -4,14 +4,18 @@ import { describe, test } from 'node:test'
 import assert from 'node:assert'
 
 import { Tabnas } from '@tabnas/parser'
-import { jsonic } from '@tabnas/jsonic'
 import { Markdown } from '../dist/markdown'
 
-// makeMarkdownParser builds a fresh Tabnas instance with jsonic + the Markdown
-// plugin. Building the engine and applying the embedded markdown grammar is
-// the expensive part; parsing a tiny document is comparatively cheap.
+// makeMarkdownParser builds a fresh Tabnas instance with the Markdown plugin
+// on the BARE engine — the supported configuration since the prose rescope
+// (dx-report §2.1). Measuring the jsonic-based path instead would time a
+// setup real callers no longer use, and jsonic setup would dominate the
+// number this test is comparing.
+//
+// Building the engine and applying the embedded markdown grammar is the
+// expensive part; parsing a tiny document is comparatively cheap.
 function makeMarkdownParser(): Tabnas {
-  return new Tabnas().use(jsonic).use(Markdown)
+  return new Tabnas().use(Markdown)
 }
 
 describe('perf', () => {

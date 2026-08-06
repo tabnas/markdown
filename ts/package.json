@@ -45,6 +45,7 @@
   ],
   "devDependencies": {
     "@tabnas/debug": "*",
+    "@tabnas/jsonic": "*",
     "@tabnas/parser": "*",
     "@tabnas/railroad": "*",
     "@types/node": "25.6.0",
