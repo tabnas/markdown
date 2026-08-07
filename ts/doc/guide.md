@@ -459,12 +459,14 @@ go test -run TestCommonMarkSpec -v ./...
 go test -run TestGFMSpec -v ./...
 ```
 
-The 36 shared AST fixtures in `test/spec/*.tsv` are asserted by both runtimes —
+The 39 shared AST fixtures in `test/spec/*.tsv` are asserted by both runtimes —
 `npm test` (after `npm run build`) on the TypeScript side, `go test ./...` on
 the Go side. They pin the AST through the plugin path; they are a regression
 net, not a proof that the runtimes agree.
 
-The claim that the runtimes agree rests on a wider comparison: all 652 spec
-inputs under all four `gfm` × `breaks` combinations — 2608 records — with both
-the AST and the HTML compared on each, and 0 differences in either. Neither
-check covers `sourcepos`, which the AST drops and the HTML does not encode.
+The claim that the runtimes agree rests on a wider comparison: all 652
+CommonMark spec inputs under all four `gfm` × `breaks` combinations — 2608
+records — with both the AST and the HTML compared on each, and 0 differences in
+either; extending the same run to the 24 GFM examples makes it 676 inputs and
+2704 records, again with none. Neither check covers `sourcepos`, which the AST
+drops and the HTML does not encode.

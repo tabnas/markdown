@@ -61,7 +61,7 @@ npm install @tabnas/markdown @tabnas/parser
 | | |
 |---|---|
 | Package | `@tabnas/markdown` |
-| Version | 0.4.2 |
+| Version | 0.5.0 |
 | Module type | CommonJS (`main: dist/markdown.js`, `types: dist/markdown.d.ts`) |
 | Peer dependencies | `@tabnas/parser` (`>=0`) |
 | Runtime dependencies | none |
@@ -670,9 +670,10 @@ All 26 sections pass.
 | Paragraphs | 8 | Soft line breaks | 2 |
 | Blank lines | 1 | Textual content | 3 |
 
-Runtime parity is checked separately: 652 examples across 4 option combinations
-(`gfm` × `breaks`) is 2608 records, with 0 differing ASTs and 0 differing HTML outputs
-between TypeScript and Go. The 36 shared AST fixtures in `test/spec/*.tsv` pass in both.
+Runtime parity is checked separately: 676 examples (652 CommonMark + 24 GFM) across 4
+option combinations (`gfm` × `breaks`) is 2704 records, with 0 differing ASTs and 0
+differing HTML outputs between TypeScript and Go. The 39 shared AST fixtures in
+`test/spec/*.tsv` pass in both.
 
 ### GFM
 
@@ -688,11 +689,11 @@ The extension set is complete: **24/24** on the vendored GFM extension corpus.
 
 | Section | Examples |
 |---|---|
-| Tables | 8 |
-| Task list items | 2 |
-| Strikethrough | 2 |
-| Autolinks | 11 |
-| Disallowed Raw HTML | 1 |
+| Tables (extension) | 8 |
+| Task list items (extension) | 2 |
+| Strikethrough (extension) | 2 |
+| Autolinks (extension) | 11 |
+| Disallowed Raw HTML (extension) | 1 |
 
 | Extension | Status | Phase |
 |---|---|---|
@@ -701,10 +702,10 @@ The extension set is complete: **24/24** on the vendored GFM extension corpus.
 | Strikethrough (`~~x~~`, `~x~`) | Implemented, gated on `gfm` | Inline scanner |
 | Autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`) | Implemented, gated on `gfm` | Post-pass over the inline tree |
 | Disallowed raw HTML filtering | Implemented, gated on `gfm` | Renderer |
-| Footnotes | Not implemented | — |
+| Footnotes | Not implemented — a GitHub product feature, not a section of the GFM spec suite | — |
 
 `gfm: false` disables all five together, and the output is then plain CommonMark —
-byte-identical to a pure-CommonMark parse over 1360 checked records. Both runtimes
+byte-identical to a pure-CommonMark parse over 1430 checked records. Both runtimes
 implement all five.
 
 **Tables.** A delimiter row on the line directly after an open paragraph whose last line
@@ -753,7 +754,7 @@ toHtml('Text[^1]\n\n[^1]: /note\n') // => '<p>Text<a href="/note">^1</a></p>\n'
 ```
 
 **Single-tilde subscript.** GFM strikethrough accepts a single `~`, which collides with
-the `H~2~O` subscript syntax of other dialects. Under `gfm: true`, `H~2~O` is
+the `H~2~O` subscript syntax of other dialects. Under `gfm: true`, `H~2~O` renders as
 `H<del>2</del>O`.
 
 ```js

@@ -1280,16 +1280,44 @@ func isEmailLocalChar(c byte) bool {
 // the beginning of a line, after whitespace, or any of the delimiting
 // characters `*`, `_`, `~`, `(`."
 //
-// The start of a text node counts as the beginning of a line: by the time this
-// runs, everything the inline scanner consumed — an emphasis delimiter, a code
-// span, a soft break — has already ended the previous text node, so offset 0
-// is never in the middle of a word.
-func isAutolinkStart(s string, i int) bool {
+// Offset 0 has no preceding character in s at all, so the caller answers for it
+// through atStart — see startsAfterDelimiter.
+func isAutolinkStart(s string, i int, atStart bool) bool {
 	if 0 == i {
-		return true
+		return atStart
 	}
 	c := s[i-1]
 	return isAutolinkSpace(c) || '*' == c || '_' == c || '~' == c || '(' == c
+}
+
+// startsAfterDelimiter reports whether offset 0 of a text node may begin an
+// autolink, given the sibling in front of it.
+//
+// The rule above is about the source character immediately before the match,
+// and by the time this pass runs the tree no longer carries source offsets —
+// but the previous sibling's *type* names that character exactly:
+//
+//   - NodeEmph and NodeStrong end on the `*` or `_` that closed them, and
+//     NodeDel on its second `~`. All three are delimiters the rule allows, so
+//     `*a*www.b.com` links.
+//   - NodeCode ends on a backtick, NodeLink and NodeImage on `)`, `]` or `>`,
+//     and NodeHTMLInline on `>`. None are delimiters, so `x`www.a.com,
+//     `[l](/u)www.a.com` and `<b>www.a.com` do not link.
+//   - a NodeSoftbreak or NodeLinebreak puts offset 0 at the beginning of a
+//     line, and so does having no previous sibling — that is the first inline
+//     of the block, or of the emphasis span this pass descended into.
+//
+// A NodeText never appears here: linkifyChildren merges every run of adjacent
+// text siblings before handing the first of them over.
+func startsAfterDelimiter(prev *MdNode) bool {
+	if nil == prev {
+		return true
+	}
+	switch prev.Type {
+	case NodeSoftbreak, NodeLinebreak, NodeEmph, NodeStrong, NodeDel:
+		return true
+	}
+	return false
 }
 
 // matchesIgnoreCase is an ASCII case-insensitive comparison against an
@@ -1430,7 +1458,7 @@ type autolinkMatch struct {
 // scanAutolinks returns every autolink literal in one text run, left to right
 // and non-overlapping. It returns nil when there is nothing to do, which is
 // the overwhelmingly common case and saves the caller a slice and a splice.
-func scanAutolinks(s string) []autolinkMatch {
+func scanAutolinks(s string, atStart bool) []autolinkMatch {
 	length := len(s)
 	var out []autolinkMatch
 
@@ -1450,16 +1478,34 @@ func scanAutolinks(s string) []autolinkMatch {
 		// --- email: found by its `@`, then rewound to the start of the local
 		// part
 		if '@' == c {
-			k := i
+			// The rewind is bounded to keep this pass linear, and RFC 5321
+			// bounds a local part in the same place anyway, so the cap costs no
+			// real address.
+			capped := i - maxEmailLocal
 			floor := lastEnd
-			if i-maxEmailLocal > floor {
-				floor = i - maxEmailLocal
+			if capped > floor {
+				floor = capped
 			}
+			k := i
 			for k > floor && isEmailLocalChar(s[k-1]) {
 				k--
 			}
 
-			if k < i && isAutolinkStart(s, k) {
+			// Stopping *on* the cap is not the same as finding a boundary. If
+			// the character just outside it still belongs to the local part,
+			// the local part is longer than the cap allows and there is no
+			// address here at all: accepting the match would link the
+			// 64-character tail of a longer run and leave the rest as text,
+			// inventing an address the source never wrote. k can only reach
+			// capped when the cap, rather than lastEnd, is what ended the loop;
+			// and k of 0 is the start of the string, where there is no
+			// character outside the cap to disqualify anything.
+			if k == capped && 0 < k && isEmailLocalChar(s[k-1]) {
+				i++
+				continue
+			}
+
+			if k < i && isAutolinkStart(s, k, atStart) {
 				// After the `@`: alphanumerics, `.`, `-`, `_`; at least one
 				// period; a trailing `.` is not part of the address, and a
 				// trailing `-` or `_` invalidates the whole thing.
@@ -1487,7 +1533,7 @@ func scanAutolinks(s string) []autolinkMatch {
 		}
 
 		// --- www / scheme: both need a valid start and a valid domain
-		if !couldStartURL(c) || !isAutolinkStart(s, i) {
+		if !couldStartURL(c) || !isAutolinkStart(s, i, atStart) {
 			i++
 			continue
 		}
@@ -1573,7 +1619,7 @@ func hasPeriod(s string, from int, to int) bool {
 // literal implies.
 func linkifyTextNode(node *MdNode) {
 	s := node.Literal
-	matches := scanAutolinks(s)
+	matches := scanAutolinks(s, startsAfterDelimiter(node.Prev))
 	if nil == matches {
 		return
 	}

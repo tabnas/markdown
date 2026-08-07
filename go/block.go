@@ -1423,6 +1423,16 @@ type blockParser struct {
 	lineNumber     int
 	lastLineLength int
 
+	// prevLineLength is the length of the line before the one lastLineLength
+	// measures.
+	//
+	// finalize dates a block's end from lastLineLength, which is right for
+	// every block that ends on the line before the current one. A GFM table
+	// splits its paragraph *two* lines back — the header row is the previous
+	// line and stays with the table, so the paragraph left behind ends on the
+	// line before that — and needs this one instead.
+	prevLineLength int
+
 	// offset is a byte index into currentLine (the TypeScript's is a UTF-16
 	// index; see the file header).
 	offset int
@@ -1451,8 +1461,8 @@ type blockParser struct {
 	// table rows. See maxAutocompletedCells.
 	autocompletedCells int
 
-	// lastAddedLine is the text addLine last appended, and lastAddedTo the
-	// block it went to.
+	// lastAddedLine is the text addLine last appended, lastAddedColumn the
+	// column it started in, and lastAddedTo the block it went to.
 	//
 	// tryOpenTable needs the *last line* of an open paragraph, and reading it
 	// back out of StringContent is not affordable in the canonical runtime:
@@ -1468,8 +1478,13 @@ type blockParser struct {
 	// very paragraph" is the extension's own rule, not a cache-validity trick:
 	// a header row is by definition the line immediately above the delimiter
 	// row. If some other block took that line, there is no header row.
-	lastAddedLine string
-	lastAddedTo   *MdNode
+	//
+	// The column is what a table's sourcepos starts at: a table opens on its
+	// header row, which is a line already consumed by the time the delimiter row
+	// identifies it, so its column has to have been recorded when it went past.
+	lastAddedLine   string
+	lastAddedColumn int
+	lastAddedTo     *MdNode
 
 	// maybeSpecial is step 2's fast reject, widened for a table's delimiter row
 	// when GFM is on. A field rather than a branch at the call site so that a
@@ -1496,6 +1511,7 @@ func newBlockParser(options Options) *blockParser {
 		oldtip:               doc,
 		lastMatchedContainer: doc,
 		allClosed:            true,
+		lastAddedColumn:      1,
 		maybeSpecial:         fastReject,
 		htmlBlockTypes:       map[*MdNode]int{},
 	}
@@ -1594,6 +1610,9 @@ func (p *blockParser) findNextNonspace() {
 // addLine adds the rest of the current line to the tip's raw content.
 func (p *blockParser) addLine() {
 	tip := p.openTip()
+	// Taken before the tab fixup below moves offset, so a line's recorded
+	// column is the one addChild would report for that same position.
+	column := p.sourceColumn(p.offset) + 1 // offset 0 is column 1
 	var text string
 	if p.partiallyConsumedTab {
 		p.offset += 1 // step over the tab
@@ -1605,6 +1624,7 @@ func (p *blockParser) addLine() {
 	tip.StringContent = append(tip.StringContent, text...)
 	tip.StringContent = append(tip.StringContent, '\n')
 	p.lastAddedLine = text
+	p.lastAddedColumn = column
 	p.lastAddedTo = tip
 }
 
@@ -1665,15 +1685,18 @@ func (p *blockParser) tryOpenTable(container *MdNode) bool {
 	p.closeUnmatchedBlocks()
 
 	headerLine := p.lineNumber - 1
+	headerColumn := p.lastAddedColumn
 	// StringContent ends with that same line plus the newline addLine put after
 	// it, so the header row starts this far in — no scan needed, and the
 	// content is only ever touched on the split branch, at most once per table.
 	content := container.StringContent
 	headerStart := len(content) - len(p.lastAddedLine) - 1
 	if 0 < headerStart {
-		// Split: everything above the header row stays a paragraph.
+		// Split: everything above the header row stays a paragraph. It ends two
+		// lines back, not one, so finalize's default end column — the previous
+		// line's, which here is the header row's — would be somebody else's.
 		container.StringContent = content[:headerStart]
-		p.finalize(container, headerLine-1)
+		p.finalizeAt(container, headerLine-1, p.prevLineLength)
 	} else {
 		parent := container.Parent
 		container.Unlink()
@@ -1681,12 +1704,21 @@ func (p *blockParser) tryOpenTable(container *MdNode) bool {
 	}
 
 	table := p.addChild(NodeTable, p.nextNonspace)
-	// The table begins at the header row, one line above the delimiter row that
-	// addChild dated it from.
+	// addChild both dated and placed the table from the delimiter row, and
+	// neither belongs to it: the table begins on the header row, one line above,
+	// in the column where *that* row's content starts. The two rows are indented
+	// independently, so the delimiter row's column is simply somebody else's —
+	// `  a | b` over `| - | -` starts in column 3, and `a | b` over `  | - | -`
+	// starts in column 1.
 	table.SourcePos[0][0] = headerLine
+	table.SourcePos[0][1] = headerColumn
 	table.TableAlign = align
 
-	addTableRow(p, table, headerCells, true, headerLine, p.lastLineLength)
+	// The row is measured over its own text, exactly as finalizeTable measures
+	// the body rows: lastLineLength counts the whole source line, container
+	// markers included, so inside a block quote it would end the header row two
+	// columns past where every body row of the same table ends.
+	addTableRow(p, table, headerCells, true, headerLine, charCount(p.lastAddedLine))
 	return true
 }
 
@@ -1708,10 +1740,20 @@ func (p *blockParser) closeUnmatchedBlocks() {
 }
 
 // finalize closes a block, records its end position, and runs its finalizer.
+// The end column is the previous line's length, which is where every block that
+// ends on lineNumber ends.
 func (p *blockParser) finalize(block *MdNode, lineNumber int) {
+	p.finalizeAt(block, lineNumber, p.lastLineLength)
+}
+
+// finalizeAt is finalize with the end column given rather than assumed. Only a
+// table's paragraph split needs it: that one closes a block two lines back,
+// where finalize's default is one line too recent. (The TypeScript spells this
+// as a defaulted third parameter on finalize itself.)
+func (p *blockParser) finalizeAt(block *MdNode, lineNumber int, endColumn int) {
 	above := block.Parent
 	block.Open = false
-	block.SourcePos[1] = [2]int{lineNumber, p.lastLineLength}
+	block.SourcePos[1] = [2]int{lineNumber, endColumn}
 	handlerFor(block.Type).finalize(p, block)
 	delete(p.htmlBlockTypes, block)
 	p.tip = above
@@ -1743,6 +1785,12 @@ func (p *blockParser) consumeReferenceDefs(block *MdNode) bool {
 func (p *blockParser) incorporateLine(ln string) {
 	allMatched := true
 	container := p.doc
+
+	// lastLineLength still measures the previous line here. Captured before
+	// anything can overwrite it — an HTML block closing mid-line does — and
+	// installed as prevLineLength at whichever exit updates lastLineLength, so
+	// the two always describe consecutive lines.
+	lengthBeforeThisLine := p.lastLineLength
 
 	p.oldtip = p.openTip()
 	p.offset = 0
@@ -1822,6 +1870,7 @@ func (p *blockParser) incorporateLine(ln string) {
 		// Lazy continuation (§5.1 rule 2): the markers are missing but an open
 		// paragraph absorbs the line anyway, and its containers stay open.
 		p.addLine()
+		p.prevLineLength = lengthBeforeThisLine
 		p.lastLineLength = charCount(ln)
 		return
 	}
@@ -1868,6 +1917,7 @@ func (p *blockParser) incorporateLine(ln string) {
 		p.addLine()
 	}
 
+	p.prevLineLength = lengthBeforeThisLine
 	p.lastLineLength = charCount(ln)
 }
 

@@ -4,11 +4,25 @@
 
 `@tabnas/markdown` is a **CommonMark 0.31.2 parser** for the
 [`tabnas`](https://github.com/tabnas/parser) parsing engine. It is not a
-subset. Both runtimes score **652/652 on the CommonMark 0.31.2 spec
-suite**, across all 26 sections.
+subset.
 
-On top of CommonMark it implements a set of GFM extensions, all gated on
-the single `gfm` option (default `true`). The two runtimes are level:
+**The parser is conformant to CommonMark 0.31.2** — all 652 examples of
+the spec suite, across all 26 sections, in both runtimes. The suite is
+vendored at `test/commonmark/spec.json`, so the claim is one a reader can
+run rather than one they have to take:
+
+```bash
+cd ts && npm run conformance                    # 652/652
+cd go && go test -run TestCommonMarkSpec ./...  # 652/652
+```
+
+State it that way — conformant, with the command that substantiates it —
+in docs and commit messages. A bare score reads as a benchmark result;
+conformance is the claim, and the vendored suite is the evidence.
+
+On top of CommonMark it implements **five GFM extensions**, all gated on
+the single `gfm` option (default `true`). That is the complete GFM
+extension set. The two runtimes are level:
 
 | Extension | TypeScript | Go |
 |---|---|---|
@@ -20,10 +34,28 @@ the single `gfm` option (default `true`). The two runtimes are level:
 | Footnotes | no | no |
 
 Both score **24/24** on the vendored GFM extension corpus
-(`test/gfm/spec.json`). `node ts/tools/gfm-conformance.mjs` and
+(`test/gfm/spec.json`) — every section, nothing failing.
+`node ts/tools/gfm-conformance.mjs` and
 `go test -run TestGFMSpec -v ./...` print the same per-section table.
 
-`gfm:false` turns all of them off and the output is plain CommonMark,
+Still **not** implemented, and worth saying as precisely as what is:
+
+* **Footnotes.** A GitHub product feature, not part of the GFM spec suite.
+* **Everything outside CommonMark+GFM** — math, front matter, definition
+  lists, heading attributes, admonitions, wiki links, emoji shortcodes,
+  highlight, sub/superscript. Each would need its own opt-in flag; `gfm`
+  gates the GFM dialect and must not grow to mean "everything".
+
+Two consequences of that, which the docs state and you should not let
+drift out of them:
+
+* `[^1]` is a valid CommonMark link label, so a footnote authored on
+  GitHub renders here as a **broken link**, silently — there is no error.
+* `H~2~O` becomes `H<del>2</del>O` under `gfm:true`, because GFM's
+  single-tilde strikethrough collides with the subscript syntax other
+  dialects use.
+
+`gfm:false` turns all five off and the output is plain CommonMark,
 byte for byte — the 652-example suite runs that way, so it is a hard
 contract, not a convenience. When you describe this package — in code
 comments, in docs, in commit messages — say "CommonMark, with GFM
@@ -34,25 +66,42 @@ footnotes too.
 project. If you ever see those five parity rows fail again, the fixtures
 are right and the runtime is wrong — do not "fix" it by editing them.
 
-Where the four newer extensions live is deliberate, and the two runtimes
-keep the same placement:
+Where each extension lives is deliberate, and the two runtimes keep the
+same placement:
 
-* **Tables** — `block.ts` / `block.go`, as a block start tried *last*, after
-  every built-in start has refused the line (which is where cmark-gfm reaches
-  its extensions from, and is what keeps `foo` over `---` an `<h2>` and
-  `- | -` a list item). `tryOpenTable` reads the delimiter row, matches its
-  cell count against the last line of the open paragraph, and splits that
-  paragraph; body rows accumulate raw and are split at finalize. Three node
-  types (`table`/`table_row`/`table_cell`), `tableAlign` (Go: `TableAlign`)
-  and `isHeaderRow` (Go: `IsHeaderRow`) on the node, a `table_cell` entry in
-  the inline phase's content-block set, and cases in `html.*` and `ast.*`.
+* **Tables** — three files, one concern each: block detection in
+  `block.ts` / `block.go`, rendering in `html.ts` / `html.go`, projection to
+  the public AST in `ast.ts` / `ast.go`.
+
+  The block start is tried *last*, after every built-in start has refused the
+  line (which is where cmark-gfm reaches its extensions from, and is what
+  keeps `foo` over `---` an `<h2>` and `- | -` a list item). `tryOpenTable`
+  reads the delimiter row, matches its cell count against the last line of
+  the open paragraph, and splits that paragraph; body rows accumulate raw and
+  are split at finalize. Three node types (`table`/`table_row`/`table_cell`),
+  `tableAlign` (Go: `TableAlign`) and `isHeaderRow` (Go: `IsHeaderRow`) on the
+  node, and a `table_cell` entry in the inline phase's content-block set.
   `\|` becomes a literal `|` at *split* time, before inline parsing, which is
-  the only way a code span in a cell can hold a pipe. Two costs are bounded
-  deliberately: `lastAddedLine`/`lastAddedTo` on the parser keep "the
-  paragraph's last line" O(1) instead of re-reading accumulated content per
-  line, and `MAX_AUTOCOMPLETED_CELLS` / `maxAutocompletedCells` caps the empty
-  cells inserted to pad short rows — the one place a table's node count is not
-  bounded by its input.
+  the only way a code span in a cell can hold a pipe.
+
+  The renderer has no `<thead>`/`<tbody>` node to walk: the header row is the
+  row flagged as such, and `<tbody>` is written by the *first* body row, so a
+  header-only table emits no `<tbody>` at all. The projection drops the flag
+  instead of exposing it — the public AST is mdast's shape, where the
+  **first** row is the header row by convention — and pads or truncates
+  nothing itself, because the block phase already made every row exactly as
+  wide as `align`.
+
+  Two costs are bounded deliberately: `lastAddedLine`/`lastAddedTo` on the
+  parser keep "the paragraph's last line" O(1) instead of re-reading
+  accumulated content per line, and `MAX_AUTOCOMPLETED_CELLS` /
+  `maxAutocompletedCells` caps the empty cells inserted to pad short rows —
+  the one place a table's node count is not bounded by its input.
+* **Strikethrough** — `inline.ts` / `inline.go`, in the delimiter stack
+  beside `*` and `_`. A tilde run is stackable only at length one or two
+  (longer runs stay literal), opener and closer runs must be equal length,
+  and the pair produces a `del` node. It is the one extension the inline
+  scanner owns, and predates the other four.
 * **Task list items** — `block.ts` / `block.go` (`markTaskListItems`, at
   the end of the block phase, over `stringContent` / `StringContent`),
   plus `MdNode.checked` (Go: `Checked` + `HasChecked`), plus a branch in
@@ -74,10 +123,13 @@ keep the same placement:
   boundary the pass computes can land inside a rune.
 * **Disallowed raw HTML** — `html.ts` / `html.go`
   (`filterDisallowedTags`) only. The tree and the AST keep the original
-  text. Because it is a render-time concern and `renderHTML(tree)` may be
-  called with no options, `MdNode.gfm` / `MdNode.GFM` records the
-  parse-time flag on the **document** node and the TS renderer defaults to
-  it. Go's `RenderHTML(doc, opts Options)` takes an already-resolved
+  text. It is **not a sanitizer**: it escapes the opening `<` of nine tag
+  names (`title`, `textarea`, `style`, `xmp`, `iframe`, `noembed`,
+  `noframes`, `script`, `plaintext`) and does nothing else — never let a
+  document imply otherwise. Because it is a render-time concern and
+  `renderHTML(tree)` may be called with no options, `MdNode.gfm` /
+  `MdNode.GFM` records the parse-time flag on the **document** node and
+  the TS renderer defaults to it. Go's `RenderHTML(doc, opts Options)` takes an already-resolved
   `Options` and so has no absent case to default from; the field is still
   set, and `RenderHTML(tree, Options{GFM: tree.GFM})` is the Go spelling.
   The TypeScript's regex uses a lookahead, which RE2 has not, so the Go
@@ -95,7 +147,7 @@ There are three public outputs, in both runtimes:
 The AST is what the plugin's `.parse()` / `.Parse()` returns, and asking
 for it runs no renderer. The HTML emitter is not incidental: the spec
 suite scores HTML output, so the renderer is the instrument that makes
-the 652/652 claim measurable. **The HTML is not sanitized** — CommonMark
+the conformance claim measurable. **The HTML is not sanitized** — CommonMark
 passes raw HTML through verbatim by specification. Every document that
 shows HTML output must say so.
 
@@ -117,11 +169,13 @@ There are two implementations that must behave identically — TypeScript
 |---|---|
 | [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/markdown` package. Depends on `@tabnas/parser` only, and only in `src/markdown.ts`. |
 | [`go/`](go/) | Go port — `github.com/tabnas/markdown/go`, package `tabnasmarkdown`. |
-| [`test/spec/`](test/spec/) | 36 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) in `*.tsv`, auto-discovered and run by both runtimes. The TS/Go parity contract. See `test/AGENTS.md`. |
+| [`test/spec/`](test/spec/) | 39 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) in `*.tsv`, auto-discovered and run by both runtimes. The TS/Go parity contract. See `test/AGENTS.md`. |
 | [`test/commonmark/spec.json`](test/commonmark/) | Vendored CommonMark 0.31.2 suite, 652 examples of Markdown → expected **HTML**. The conformance contract for both runtimes. See `test/AGENTS.md`. |
+| [`test/gfm/spec.json`](test/gfm/) | Vendored GFM extension corpus, 24 examples of Markdown → expected **HTML**, run with `gfm:true`. The extension contract for both runtimes. See `test/AGENTS.md`. |
 | [`markdown-grammar.jsonic`](markdown-grammar.jsonic) | The engine entry rule. **Inert** — see "The grammar is inert" below. |
 | [`ts/embed-grammar.js`](ts/embed-grammar.js) | Embeds `markdown-grammar.jsonic` verbatim into both `ts/src/markdown.ts` and `go/markdown.go` between `BEGIN/END EMBEDDED` markers. |
 | [`ts/tools/conformance.mjs`](ts/tools/conformance.mjs) | Runs the 652-example suite straight off `ts/src/*.ts` — no build step, no engine. `npm run conformance`. |
+| [`ts/tools/gfm-conformance.mjs`](ts/tools/gfm-conformance.mjs) | Runs the 24-example GFM corpus the same way, with `gfm:true`. `node tools/gfm-conformance.mjs`. |
 | [`ts/tools/check-doc-examples.mjs`](ts/tools/check-doc-examples.mjs) | Runs the `// =>` assertions in the docs without the engine, using a stand-in for it. The CI equivalent is `ts/test/doc-examples.test.ts`. |
 | `ts/doc/{tutorial,guide,reference,concepts}.md`, `go/doc/{tutorial,guide,reference,concepts}.md` | Per-runtime Diátaxis docs. Keep the four modes distinct — see "Documentation rules". |
 | `dx-report.md` | Running design notes. **Append-only**: new dated entries at the bottom, corrections to earlier sections stated as corrections in the new entry, never as edits to the original text. |
@@ -164,16 +218,18 @@ what lets the conformance suite and `check-doc-examples.mjs` run with no
 engine installed. `markdown.ts` imports `commonmark.ts`; never the
 reverse.
 
-## Executable contracts — do not weaken either
+## Executable contracts — do not weaken any of them
 
-Two things in this repo are contracts, not samples:
+Three things in this repo are contracts, not samples:
 
 1. **The conformance corpus.** `test/commonmark/spec.json` is the
    vendored 0.31.2 suite, unmodified. Both runtimes are at 652/652. A
    change that drops an example is a regression, not a trade-off. Do not
    edit `spec.json`, do not skip examples, do not add a tolerance to the
    comparison — it is a byte-for-byte HTML match and must stay one.
-2. **The doc-example assertions.** Every ` ```js ` block in `README.md`,
+2. **The GFM extension corpus.** `test/gfm/spec.json`, same rules, run
+   with `gfm:true`. Both runtimes are at 24/24, every section asserted.
+3. **The doc-example assertions.** Every ` ```js ` block in `README.md`,
    `ts/README.md`, `go/README.md` and `ts/doc/` that contains a `// =>`
    line is executed by `ts/test/doc-examples.test.ts`. A wrong expected
    value is a failing test. Fix the doc or fix the code; do not delete
@@ -200,8 +256,8 @@ them against the real package — a scratch test under `/tmp` run with
    `../../test/spec`; Go: `go/parity_test.go` → `../test/spec`).
 4. Mirror unit cases across `ts/test/markdown.test.ts` and
    `go/markdown_test.go`.
-5. Run both suites, plus both conformance runs, and confirm green before
-   landing.
+5. Run both suites, plus the CommonMark and GFM conformance runs in each
+   runtime, and confirm green before landing.
 
 Do not let Go drift from TS. Where Go differs on purpose it is because
 the standard library is the better tool (entity decoding, Unicode
@@ -249,6 +305,7 @@ npm install            # resolves file: siblings
 npm run build          # embeds grammar, then tsc --build src test
 npm test               # node --test over dist-test/*.test.js
 npm run conformance    # 652-example suite off src/*.ts — no build, no engine
+node tools/gfm-conformance.mjs             # the 24-example GFM corpus, gfm:true
 node tools/check-doc-examples.mjs --verbose   # the // => assertions, no engine
 ```
 
@@ -256,8 +313,9 @@ Go (from `go/`):
 
 ```bash
 go build ./...
-go test -v ./...                          # unit + shared fixtures + conformance
+go test -v ./...                          # unit + shared fixtures + both corpora
 go test -run TestCommonMarkSpec -v ./...   # conformance only, per-section table
+go test -run TestGFMSpec -v ./...          # the GFM corpus, per-section table
 ```
 
 `npm run conformance` and `check-doc-examples.mjs` both stage `src/*.ts`
@@ -314,10 +372,11 @@ org-standard `polyglot-ci` caller in `.github/workflows/ci.yml`.
   mis-lexed first. `lex.emptyResult` returns an empty document for `""`.
   `rule.clear()` is required before defining `markdown`, or inherited
   `val` alts try to match a leading `#`.
-* **Options**: `gfm` (default `true`; gates every GFM extension at once)
-  and `breaks` (default `false`). `Markdown.defaults` / `Defaults` carry
-  the same pair. `gfm` is the only option besides `breaks` that the
-  renderer reads, and only for the raw-HTML tag filter.
+* **Options**: `gfm` (default `true`; gates all five GFM extensions at
+  once) and `breaks` (default `false`). `Markdown.defaults` / `Defaults`
+  carry the same pair. `gfm` is the only option besides `breaks` that the
+  renderer reads, and only for the raw-HTML tag filter: tables reach the
+  renderer as nodes, which only a `gfm:true` parse produces.
 
 ## Documentation rules
 
@@ -340,3 +399,17 @@ screen of the README and near the top of each quadrant document: does
 this emit HTML (yes, `toHtml` / `ToHTML`), and can I just have the AST
 (yes, it is the primary output and costs nothing extra). Keep the
 Diátaxis cross-link table in `README.md` current.
+
+Three things must not fall out of the docs as they change:
+
+* **The conformance claim, stated plainly and early** — at the top of
+  `README.md`, `ts/README.md` and `go/README.md`, and near the top of
+  every tutorial, guide and reference: conformant to CommonMark 0.31.2,
+  652 examples, 26 sections, both runtimes, with the command that shows
+  it. A reader meeting the package should not have to hunt for it.
+* **The unsanitized-HTML warning**, wherever HTML output is documented —
+  including the note that the disallowed-raw-HTML filter is not a
+  sanitizer.
+* **What is not implemented**, as precisely as what is: footnotes, and
+  everything outside CommonMark+GFM. Both gotchas above (`[^1]`,
+  `H~2~O`) belong wherever a reader is likely to hit them.

@@ -188,7 +188,10 @@ cd ts && npm run conformance                    # no build step, no engine neede
 cd go && go test -run TestCommonMarkSpec -v ./...
 ```
 
-Both report 652/652.
+Both report 652/652, run with the GFM extensions off — which is what measuring
+CommonMark conformance means. GFM deliberately changes the output of nine of those
+examples (six raw-HTML, three autolink), so with `gfm: true` the same suite reports
+643/652. That is the extensions working, not a conformance failure.
 
 The GFM corpus is vendored the same way, at [`test/gfm/spec.json`](test/gfm/) (24
 examples, covering all five extensions):
@@ -200,9 +203,10 @@ cd go && go test -run TestGFMSpec -v ./...
 
 Both report 24/24.
 
-Parity between the runtimes is checked separately: 652 examples across 4 option
-combinations (`gfm` x `breaks`) is 2608 records, with 0 differing ASTs and 0 differing
-HTML outputs. The 36 shared AST fixtures in [`test/spec/`](test/spec/) also run in both.
+Parity between the runtimes is checked separately: 676 examples (652 CommonMark + 24 GFM)
+across 4 option combinations (`gfm` x `breaks`) is 2704 records, with 0 differing ASTs and
+0 differing HTML outputs. The 39 shared AST fixtures in [`test/spec/`](test/spec/) also run
+in both.
 
 ## Changes you may notice
 
@@ -236,7 +240,7 @@ Per-language hubs: [ts/README.md](ts/README.md) · [go/README.md](go/README.md).
 |---|---|
 | [`ts/`](ts/) | TypeScript / JavaScript implementation (canonical). |
 | [`go/`](go/) | Go port. |
-| [`test/spec/`](test/spec/) | 36 shared AST fixtures, run by both runtimes. |
+| [`test/spec/`](test/spec/) | 39 shared AST fixtures, run by both runtimes. |
 | [`test/commonmark/`](test/commonmark/) | Vendored CommonMark 0.31.2 spec suite (652 examples). |
 | [`test/gfm/`](test/gfm/) | Vendored GFM extension corpus (24 examples), run by both runtimes. |
 | [`markdown-grammar.jsonic`](markdown-grammar.jsonic) | The engine entry rule, embedded into both runtimes by [`ts/embed-grammar.js`](ts/embed-grammar.js). It is inert: block structure is decided by the line algorithm, not by declarative alts. Kept because the embedder embeds it. |

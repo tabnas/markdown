@@ -1,13 +1,17 @@
 # Agents Guide — shared test corpora
 
 Three corpora live here, and they test different things. Know which one a
-change belongs in before you add to either.
+change belongs in before you add to any of them.
 
-| Directory | Contents | Compares | Canonical for |
-|---|---|---|---|
-| [`spec/`](spec/) | 36 hand-written cases in `*.tsv` | the **JSON AST**, through the engine | TS ↔ Go parity, and the shape of the public AST |
-| [`commonmark/`](commonmark/) | the vendored CommonMark 0.31.2 suite, 652 examples in `spec.json` | the **HTML** output, byte for byte | spec conformance |
-| [`gfm/`](gfm/) | the extension sections of the GFM spec, 24 examples in `spec.json` | the **HTML** output, byte for byte | the GFM extensions |
+| Directory | Contents | Compares | Canonical for | Add to it? |
+|---|---|---|---|---|
+| [`spec/`](spec/) | 39 hand-written cases across 8 `*.tsv` files | the **JSON AST**, through the engine | TS ↔ Go parity, and the shape of the public AST | **yes** — this is where cases of our own go |
+| [`commonmark/`](commonmark/) | the vendored CommonMark 0.31.2 suite, 652 examples in `spec.json` | the **HTML** output, byte for byte | spec conformance | no — upstream data |
+| [`gfm/`](gfm/) | the extension sections of the GFM spec, 24 examples in `spec.json` | the **HTML** output, byte for byte | the GFM extensions | no — upstream data |
+
+Scores, both runtimes: **652/652** on the CommonMark suite — the parser
+is conformant to CommonMark 0.31.2, all 26 sections — and **24/24** on
+the GFM corpus, which is the complete GFM extension set.
 
 All three are executable contracts: do not weaken any of them to make a
 change pass. All three are run by both runtimes.
@@ -22,9 +26,22 @@ case goes through a real engine instance with the plugin installed
 (`Tabnas().use(Markdown).parse()` / `parser.Make()` + `UseDefaults`), so
 this corpus covers the plugin path, not just the parser.
 
-This is where the public AST is pinned. The CommonMark suite cannot do
-that job: it scores HTML, and the AST is a lossy projection of the tree
-the renderer walks, so a projection change can leave 652/652 untouched.
+This is where the public AST is pinned. Neither HTML corpus can do that
+job: they score HTML, and the AST is a lossy projection of the tree the
+renderer walks, so a projection change can leave 652/652 and 24/24 both
+untouched.
+
+39 cases in 8 files, one construct each: `blockquote.tsv` (2),
+`code.tsv` (4), `heading.tsv` (7), `inline.tsv` (13), `list.tsv` (3),
+`mixed.tsv` (1), `paragraph.tsv` (4), `thematic.tsv` (5). Five of those
+rows carry `listItem.checked`, which is the task-list extension's AST
+surface; if they fail, the fixtures are right and the runtime is wrong.
+
+What this corpus does **not** yet pin: the table node types — `table`
+(with `align`), `tableRow` and `tableCell`. They are asserted per runtime
+instead, in `ts/test/commonmark.test.ts` and `go/gfm_test.go`, which are
+mirrored by hand rather than shared. A fixture here would be the stronger
+place for them.
 
 ## Format
 
@@ -83,11 +100,16 @@ both runtimes without touching either runner.
 
 The CommonMark 0.31.2 specification suite, vendored verbatim: 652 examples
 across 26 sections, each a Markdown source and the exact HTML a conformant
-implementation must produce. **Both runtimes pass 652/652.**
+implementation must produce. **Both runtimes pass 652/652, all 26
+sections.**
 
 The comparison is a byte-for-byte string equality on rendered HTML. It is
 the conformance contract, and the reason the HTML renderer exists — without
-a renderer there is nothing to score.
+a renderer there is nothing to score. It is also the evidence behind the
+conformance claim the READMEs and the doc quadrants make: they state that
+the parser is conformant to CommonMark 0.31.2 and print the command that
+runs this corpus, so a reader can check it. Keep it runnable in one
+command from each runtime.
 
 Run with GFM **off** (`{gfm:false, breaks:false}`). The suite is pure
 CommonMark; strikethrough changes the expected output for several examples.
@@ -136,7 +158,15 @@ cmark-gfm tracks CommonMark 0.29, and nine of its emphasis cases expect
 pre-0.31.2 output this parser correctly no longer produces. Core
 conformance is `commonmark/spec.json`, against 0.31.2.
 
-**24/24 today, in both runtimes.** Every section passes in both.
+**24/24 today, in both runtimes.** Every section passes in both, and every
+section is asserted in both — there is nothing failing and nothing
+reported-but-tolerated. That covers the whole extension set the spec
+defines: tables, task list items, autolink literals, strikethrough and
+disallowed raw HTML.
+
+Footnotes are not here, and their absence is not a gap in this corpus:
+they are a GitHub product feature rather than part of the GFM spec suite.
+Nothing outside CommonMark+GFM belongs here either.
 
 ## Who runs what
 
@@ -147,7 +177,17 @@ conformance is `commonmark/spec.json`, against 0.31.2.
 - Go: `go/gfm_test.go` (`go test -run TestGFMSpec -v ./...`) prints the
   same per-section table, and asserts every section.
 
+Both loaders assert the file still holds exactly 24 examples, the same
+guard the CommonMark loaders use.
+
 ## Editing it
 
 Don't — same rule as the CommonMark suite. It is upstream data, and the
 score is only meaningful because the corpus is unmodified.
+
+Cases of our own go in `spec/*.tsv` (for AST shape) or in the runtimes'
+unit tests (for HTML and for behaviour the 24 upstream examples do not
+reach — delimiter-row forms, paragraph splitting, escaped pipes, row
+padding and truncation, `gfm:false` inertness). `ts/test/commonmark.test.ts`
+and `go/gfm_test.go` already hold that layer; mirror any addition across
+both, since nothing shares it for you.

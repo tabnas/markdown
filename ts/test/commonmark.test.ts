@@ -537,6 +537,97 @@ describe('gfm tables', () => {
     assert.equal(item.children[0].type, 'table')
   })
 
+  // --- sourcepos ---
+
+  // A table is opened by its delimiter row but begins on the header row above
+  // it, and the two rows are indented independently. Taking the start column
+  // from the delimiter row therefore reports a column belonging to a different
+  // line — visible through `parseTree`, which is public.
+  const tableStart = (src: string) => {
+    const w = parse(src, GFM).walker()
+    let e
+    while ((e = w.next())) {
+      if (e.entering && 'table' === e.node.type) return e.node.sourcepos[0]
+    }
+    return null
+  }
+
+  test('a table starts at the header row, in the header row’s own column', () => {
+    assert.deepEqual(tableStart('a | b\n| - | -\n'), [1, 1], 'control: neither row indented')
+    assert.deepEqual(tableStart('  a | b\n| - | -\n'), [1, 3], 'the header row is indented')
+    assert.deepEqual(tableStart('a | b\n  | - | -\n'), [1, 1], 'only the delimiter row is')
+    assert.deepEqual(tableStart('  a | b\n  | - | -\n'), [1, 3], 'both rows are')
+  })
+
+  test('the header row supplies the column even when the paragraph splits', () => {
+    // Here the header row is the *last* line of a longer paragraph, so the
+    // column cannot come from the paragraph node either — that one belongs to
+    // the first line, which stays a paragraph.
+    assert.deepEqual(tableStart('x\n  a | b\n| - | -\n'), [2, 3])
+    assert.deepEqual(tableStart('  x\na | b\n| - | -\n'), [2, 1])
+    // A table inside a block quote counts columns from the start of the line,
+    // marker included, exactly as every other block does.
+    assert.deepEqual(tableStart('> a | b\n> | - | -\n'), [1, 3])
+    assert.deepEqual(tableStart('>   a | b\n> | - | -\n'), [1, 5])
+  })
+
+  test('the paragraph a table splits ends on its own last line', () => {
+    // The split closes a block *two* lines back — the header row in between
+    // belongs to the table — so the end column cannot come from the previous
+    // line the way every other finalize takes it. Taking it from there reports
+    // the header row's length on a line that is not the header row.
+    const paraEnd = (src: string) => {
+      const w = parse(src, GFM).walker()
+      let e
+      while ((e = w.next())) {
+        if (e.entering && 'paragraph' === e.node.type) return e.node.sourcepos[1]
+      }
+      return null
+    }
+
+    // `aaaaaaaaaa` is 10 characters and the header row below it is 9, so the
+    // wrong column here is a *shorter* one, which no clamp could explain.
+    assert.deepEqual(paraEnd('aaaaaaaaaa\n| a | b |\n| - | - |\n'), [1, 10])
+    // …and the other way round: `aa` is 2 characters under a 20-character
+    // header row, so there the wrong column is a longer one.
+    assert.deepEqual(paraEnd('aa\n| aaaaaaaaaaaa | b |\n| - | - |\n'), [1, 2])
+    // Every other interrupter already ends this paragraph at column 10; the
+    // table must not be the odd one out.
+    for (const after of ['# h\n', '```\nx\n```\n', '> q\n', '- i\n', '***\n', '<div>\n', '\nx\n']) {
+      assert.deepEqual(paraEnd('aaaaaaaaaa\n' + after), [1, 10], JSON.stringify(after))
+    }
+  })
+
+  test('every row of one table is measured on the same basis', () => {
+    // Rows span their own text, so two rows of the same table on equally
+    // indented lines must report the same end column. The header row is built
+    // in `tryOpenTable` and the body rows in `finalizeTable`; measuring the
+    // header against the whole source line would put it two columns past the
+    // body rows inside a block quote.
+    const rowSpans = (src: string) => {
+      const out: unknown[] = []
+      const w = parse(src, GFM).walker()
+      let e
+      while ((e = w.next())) {
+        if (e.entering && 'table_row' === e.node.type) out.push(e.node.sourcepos)
+      }
+      return out
+    }
+
+    assert.deepEqual(rowSpans('| a | b |\n| - | - |\n| c | d |\n'), [
+      [[1, 1], [1, 9]],
+      [[3, 1], [3, 9]],
+    ])
+    assert.deepEqual(rowSpans('> | a | b |\n> | - | - |\n> | c | d |\n'), [
+      [[1, 1], [1, 9]],
+      [[3, 1], [3, 9]],
+    ])
+    assert.deepEqual(rowSpans('  | a | b |\n  | - | - |\n  | c | d |\n'), [
+      [[1, 1], [1, 9]],
+      [[3, 1], [3, 9]],
+    ])
+  })
+
   // --- gfm:false ---
 
   test('gfm:false produces no table nodes and byte-identical paragraph HTML', () => {
@@ -841,6 +932,60 @@ describe('gfm autolink literals', () => {
     }
   })
 
+  // The rule is about the SOURCE character immediately before the match, and
+  // the post-pass runs over a tree that no longer carries source offsets. At
+  // offset 0 of a text node that character lives in the previous sibling, and
+  // the sibling's *type* names it exactly — so each row below states the type,
+  // the character it ends on, and whether an autolink may start after it.
+  //
+  // Rejecting offset 0 whenever there is any previous sibling is the obvious
+  // wrong fix: it breaks the four `true` rows in the middle of this table.
+  const boundaryRows: Array<[string, string, string, boolean]> = [
+    // previous sibling, prefix that produces it, its last source character, links?
+    ['(none)', '', 'start of line', true],
+    ['softbreak', 'a\n', 'start of line', true],
+    ['linebreak', 'a\\\n', 'start of line', true],
+    ['emph', '*a*', '*', true],
+    ['strong', '**a**', '*', true],
+    ['del', '~~a~~', '~', true],
+    ['code', '`a`', '`', false],
+    ['link', '[a](/u)', ')', false],
+    ['image', '![a](/u)', ')', false],
+    ['html_inline', '<b>', '>', false],
+  ]
+
+  for (const [prevType, prefix, lastChar, links] of boundaryRows) {
+    test(`offset 0 after ${prevType} (source ends ${lastChar}): ${links ? 'links' : 'no link'}`, () => {
+      // The row's first column, asserted rather than assumed: with an inert
+      // word in place of the URL, the paragraph ends in a text node whose
+      // previous sibling is exactly the node this row names.
+      const para: any = parse(prefix + 'X\n', GFM).firstChild
+      const tail = para.lastChild
+      assert.equal(tail.type, 'text')
+      assert.equal(tail.literal, 'X')
+      assert.equal(null === tail.prev ? '(none)' : tail.prev.type, prevType)
+
+      const out = html(prefix + 'www.a.com\n')
+      assert.equal(out.includes('href="http://www.a.com"'), links, out)
+    })
+  }
+
+  test('emphasis is still a delimiter an autolink may follow', () => {
+    // Called out on its own because it is what the obvious wrong fix breaks.
+    assert.equal(
+      html('*a*www.b.com\n'),
+      '<p><em>a</em>' + a('http://www.b.com', 'www.b.com') + '</p>\n',
+    )
+    // And its counterpart, which must not link.
+    assert.equal(html('`x`www.a.com\n'), '<p><code>x</code>www.a.com</p>\n')
+  })
+
+  test('the boundary applies to email addresses too', () => {
+    assert.equal(html('*a*b@c.de\n'), '<p><em>a</em>' + a('mailto:b@c.de', 'b@c.de') + '</p>\n')
+    assert.equal(html('`x`b@c.de\n'), '<p><code>x</code>b@c.de</p>\n')
+    assert.equal(html('[l](/u)b@c.de\n'), '<p>' + a('/u', 'l') + 'b@c.de</p>\n')
+  })
+
   test('a valid domain needs a period and no underscore in its last two segments', () => {
     assert.ok(html('x www.a.b.com y\n').includes('<a href'))
     assert.ok(!html('x www.foo_bar.com y\n').includes('<a href'), 'second-to-last segment')
@@ -915,6 +1060,35 @@ describe('gfm autolink literals', () => {
     assert.equal(html('a.b-c_d@a.b-\n'), '<p>a.b-c_d@a.b-</p>\n')
     assert.equal(html('a.b-c_d@a.b_\n'), '<p>a.b-c_d@a.b_</p>\n')
     assert.equal(html('foo@bar\n'), '<p>foo@bar</p>\n', 'the domain needs a period')
+  })
+
+  test('a local part of 65 characters or more is not recognised at all', () => {
+    // The rewind that finds the start of a local part stops after 64
+    // characters, which is what keeps this pass linear and is RFC 5321's own
+    // limit. Stopping there is a cap, not a boundary: when the character just
+    // outside it still belongs to the local part, the address is over-long and
+    // there is no address — linking the 64-character tail would invent one.
+    for (const [local, linked] of [
+      ['a'.repeat(63), true],
+      ['a'.repeat(64), true],
+      ['a'.repeat(65), false],
+      ['a'.repeat(100), false],
+      // A leading `_` is itself a local-part character, so these are the same
+      // four lengths shifted by one — 64 links, 65 does not.
+      ['_' + 'a'.repeat(63), true],
+      ['_' + 'a'.repeat(64), false],
+      ['_' + 'a'.repeat(65), false],
+      ['_' + 'a'.repeat(100), false],
+    ] as Array<[string, boolean]>) {
+      const addr = local + '@b.co'
+      const out = html(addr + '\n')
+      const label = local.length + '-character local part'
+      if (linked) {
+        assert.equal(out, '<p>' + a('mailto:' + addr, addr) + '</p>\n', label)
+      } else {
+        assert.equal(out, '<p>' + addr + '</p>\n', label)
+      }
+    }
   })
 
   test('a match spanning inline nodes is still one link', () => {

@@ -288,7 +288,7 @@ one delimiter character the scanner previously ignored.
 
 That keeps the machinery that decides code spans, raw HTML, emphasis and links exactly as
 CommonMark specifies it, and the consequence is that `gfm: false` is not an approximation
-of CommonMark but the same parse: byte-identical output over 1360 checked records, not a
+of CommonMark but the same parse: byte-identical output over 1430 checked records, not a
 resemblance. Turning the extensions on does move nine of the 652 spec examples — six in
 HTML blocks, where the disallowed-raw-HTML filter escapes the `<script>`, `<style>` and
 `<textarea>` the suite expects verbatim, and three in Autolinks, where text the suite
@@ -306,7 +306,7 @@ destination it is a link reference definition, and the footnote marker silently 
 real link to it.
 
 The other collision is inherited from GFM itself. Strikethrough accepts a single `~`, and
-several other dialects spell subscript with single tildes, so `H~2~O` becomes
+several other dialects spell subscript with single tildes, so `H~2~O` renders as
 `H<del>2</del>O` under `gfm: true`. There is no way to have GFM strikethrough and not have
 that; the only escape is `gfm: false` or escaping the tildes in the source.
 
@@ -365,8 +365,8 @@ incidental pipe in it from dragging the next line into a table. The 652 examples
 check on all of that: they are scored with `gfm: false`, and run again under every
 `gfm` × `breaks` combination as a standing assertion that no example throws.
 
-Escaped pipes are the second consequence of reaching backwards, and the one place where
-the extension has to break the usual order of operations. A cell is delimited by unescaped
+Escaped pipes are the second place where tables have to break the usual order of
+operations, and this one is about phases rather than blocks. A cell is delimited by unescaped
 pipes, so splitting a row means understanding `\|` — that much is unavoidable. What is
 less obvious is that `\|` must be *resolved* to a literal `|` at split time, before the
 inline phase ever sees the cell, rather than being left for the ordinary escape handling

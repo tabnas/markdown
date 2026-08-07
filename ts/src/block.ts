@@ -1013,6 +1013,17 @@ class BlockParser {
   lineNumber = 0
   lastLineLength = 0
 
+  /**
+   * The length of the line before the one `lastLineLength` measures.
+   *
+   * `finalize` dates a block's end from `lastLineLength`, which is right for
+   * every block that ends on the line before the current one. A GFM table
+   * splits its paragraph *two* lines back — the header row is the previous
+   * line and stays with the table, so the paragraph left behind ends on the
+   * line before that — and needs this one instead.
+   */
+  prevLineLength = 0
+
   // Memoize the last offset in `currentLine` whose character count is known,
   // so sourcepos columns cost amortized O(1). Both reset per line.
   // See `sourceColumn`.
@@ -1037,7 +1048,8 @@ class BlockParser {
   autocompletedCells = 0
 
   /**
-   * The text `addLine` last appended, and the block it went to.
+   * The text `addLine` last appended, the column it started in, and the block
+   * it went to.
    *
    * `tryOpenTable` needs the *last line* of an open paragraph, and reading it
    * back out of `stringContent` is not affordable: that content is built by
@@ -1050,8 +1062,13 @@ class BlockParser {
    * very paragraph" is the extension's own rule, not a cache-validity trick:
    * a header row is by definition the line immediately above the delimiter
    * row. If some other block took that line, there is no header row.
+   *
+   * The column is what a table's sourcepos starts at: a table opens on its
+   * header row, which is a line already consumed by the time the delimiter row
+   * identifies it, so its column has to have been recorded when it went past.
    */
   lastAddedLine = ''
+  lastAddedColumn = 1
   lastAddedTo: MdNode | null = null
 
   /** Step 2's fast reject, widened for a table's delimiter row when `gfm` is on. */
@@ -1157,6 +1174,9 @@ class BlockParser {
   /** Add the rest of the current line to the tip's raw content. */
   addLine(): void {
     const tip = this.openTip
+    // Taken before the tab fixup below moves `offset`, so a line's recorded
+    // column is the one `addChild` would report for that same position.
+    const column = this.sourceColumn(this.offset) + 1 // offset 0 is column 1
     let text = ''
     if (this.partiallyConsumedTab) {
       this.offset += 1 // step over the tab
@@ -1166,6 +1186,7 @@ class BlockParser {
     text += this.currentLine.slice(this.offset)
     tip.stringContent += text + '\n'
     this.lastAddedLine = text
+    this.lastAddedColumn = column
     this.lastAddedTo = tip
   }
 
@@ -1244,15 +1265,18 @@ class BlockParser {
     this.closeUnmatchedBlocks()
 
     const headerLine = this.lineNumber - 1
+    const headerColumn = this.lastAddedColumn
     // `stringContent` ends with that same line plus the newline `addLine` put
     // after it, so the header row starts this far in — no scan needed, and the
     // content is only ever touched on the split branch, at most once per table.
     const content = container.stringContent
     const headerStart = content.length - this.lastAddedLine.length - 1
     if (0 < headerStart) {
-      // Split: everything above the header row stays a paragraph.
+      // Split: everything above the header row stays a paragraph. It ends two
+      // lines back, not one, so `finalize`'s default end column — the previous
+      // line's, which here is the header row's — would be somebody else's.
       container.stringContent = content.slice(0, headerStart)
-      this.finalize(container, headerLine - 1)
+      this.finalize(container, headerLine - 1, this.prevLineLength)
     } else {
       const parent = container.parent
       container.unlink()
@@ -1260,12 +1284,21 @@ class BlockParser {
     }
 
     const table = this.addChild('table', this.nextNonspace)
-    // The table begins at the header row, one line above the delimiter row
-    // that `addChild` dated it from.
+    // `addChild` both dated and placed the table from the delimiter row, and
+    // neither belongs to it: the table begins on the header row, one line
+    // above, in the column where *that* row's content starts. The two rows are
+    // indented independently, so the delimiter row's column is simply somebody
+    // else's — `  a | b` over `| - | -` starts in column 3, and `a | b` over
+    // `  | - | -` starts in column 1.
     table.sourcepos[0][0] = headerLine
+    table.sourcepos[0][1] = headerColumn
     table.tableAlign = align
 
-    addTableRow(this, table, headerCells, true, headerLine, this.lastLineLength)
+    // The row is measured over its own text, exactly as `finalizeTable`
+    // measures the body rows: `lastLineLength` counts the whole source line,
+    // container markers included, so inside a block quote it would end the
+    // header row two columns past where every body row of the same table ends.
+    addTableRow(this, table, headerCells, true, headerLine, charCount(this.lastAddedLine))
     return true
   }
 
@@ -1281,11 +1314,18 @@ class BlockParser {
     this.allClosed = true
   }
 
-  /** Close a block, record its end position, and run its finalizer. */
-  finalize(block: MdNode, lineNumber: number): void {
+  /**
+   * Close a block, record its end position, and run its finalizer.
+   *
+   * `endColumn` defaults to the previous line's length, which is where every
+   * block that ends on `lineNumber` ends. Only a table's paragraph split
+   * passes it: that one closes a block two lines back, where the default is
+   * one line too recent.
+   */
+  finalize(block: MdNode, lineNumber: number, endColumn: number = this.lastLineLength): void {
     const above = block.parent
     block.open = false
-    block.sourcepos[1] = [lineNumber, this.lastLineLength]
+    block.sourcepos[1] = [lineNumber, endColumn]
     handlerFor(block.type).finalize(this, block)
     this.htmlBlockTypes.delete(block)
     this.tip = above
@@ -1297,6 +1337,12 @@ class BlockParser {
   incorporateLine(ln: string): void {
     let allMatched = true
     let container = this.doc
+
+    // `lastLineLength` still measures the previous line here. Captured before
+    // anything can overwrite it — an HTML block closing mid-line does — and
+    // installed as `prevLineLength` at whichever exit updates `lastLineLength`,
+    // so the two always describe consecutive lines.
+    const lengthBeforeThisLine = this.lastLineLength
 
     this.oldtip = this.openTip
     this.offset = 0
@@ -1378,6 +1424,7 @@ class BlockParser {
       // Lazy continuation (§5.1 rule 2): the markers are missing but an open
       // paragraph absorbs the line anyway, and its containers stay open.
       this.addLine()
+      this.prevLineLength = lengthBeforeThisLine
       this.lastLineLength = charCount(ln)
       return
     }
@@ -1430,6 +1477,7 @@ class BlockParser {
       this.addLine()
     }
 
+    this.prevLineLength = lengthBeforeThisLine
     this.lastLineLength = charCount(ln)
   }
 

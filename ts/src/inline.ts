@@ -1063,13 +1063,11 @@ function isEmailLocalChar(c: number): boolean {
  * "All such recognized autolinks can only come at the beginning of a line,
  * after whitespace, or any of the delimiting characters `*`, `_`, `~`, `(`."
  *
- * The start of a text node counts as the beginning of a line: by the time this
- * runs, everything the inline scanner consumed — an emphasis delimiter, a code
- * span, a soft break — has already ended the previous text node, so offset 0
- * is never in the middle of a word.
+ * Offset 0 has no preceding character in `s` at all, so the caller answers for
+ * it through `atStart` — see `startsAfterDelimiter`.
  */
-function isAutolinkStart(s: string, i: number): boolean {
-  if (0 === i) return true
+function isAutolinkStart(s: string, i: number, atStart: boolean): boolean {
+  if (0 === i) return atStart
   const c = s.charCodeAt(i - 1)
   return (
     isAutolinkSpace(c) ||
@@ -1078,6 +1076,33 @@ function isAutolinkStart(s: string, i: number): boolean {
     C_TILDE === c ||
     C_OPEN_PAREN === c
   )
+}
+
+/**
+ * Whether offset 0 of a text node may begin an autolink, given the sibling in
+ * front of it.
+ *
+ * The rule above is about the source character immediately before the match,
+ * and by the time this pass runs the tree no longer carries source offsets —
+ * but the previous sibling's *type* names that character exactly:
+ *
+ *   * `emph` and `strong` end on the `*` or `_` that closed them, and `del` on
+ *     its second `~`. All three are delimiters the rule allows, so
+ *     `*a*www.b.com` links.
+ *   * `code` ends on a backtick, `link` and `image` on `)`, `]` or `>`, and
+ *     `html_inline` on `>`. None are delimiters, so `` `x`www.a.com ``,
+ *     `[l](/u)www.a.com` and `<b>www.a.com` do not link.
+ *   * a `softbreak` or `linebreak` puts offset 0 at the beginning of a line,
+ *     and so does having no previous sibling — that is the first inline of the
+ *     block, or of the emphasis span this pass descended into.
+ *
+ * A `text` node never appears here: `linkifyChildren` merges every run of
+ * adjacent text siblings before handing the first of them over.
+ */
+function startsAfterDelimiter(prev: MdNode | null): boolean {
+  if (null === prev) return true
+  const t = prev.type
+  return 'softbreak' === t || 'linebreak' === t || 'emph' === t || 'strong' === t || 'del' === t
 }
 
 /** ASCII case-insensitive comparison against an already-lowercase literal. */
@@ -1209,7 +1234,7 @@ type AutolinkMatch = { start: number; end: number; href: string }
  * Returns null when there is nothing to do, which is the overwhelmingly common
  * case and saves the caller an array and a splice.
  */
-function scanAutolinks(s: string): AutolinkMatch[] | null {
+function scanAutolinks(s: string, atStart: boolean): AutolinkMatch[] | null {
   const len = s.length
   let out: AutolinkMatch[] | null = null
 
@@ -1228,11 +1253,27 @@ function scanAutolinks(s: string): AutolinkMatch[] | null {
 
     // --- email: found by its `@`, then rewound to the start of the local part
     if (C_AT === c) {
+      // The rewind is bounded to keep this pass linear, and RFC 5321 bounds a
+      // local part in the same place anyway, so the cap costs no real address.
+      const capped = i - MAX_EMAIL_LOCAL
+      const floor = Math.max(lastEnd, capped)
       let k = i
-      const floor = Math.max(lastEnd, i - MAX_EMAIL_LOCAL)
       while (k > floor && isEmailLocalChar(s.charCodeAt(k - 1))) k--
 
-      if (k < i && isAutolinkStart(s, k)) {
+      // Stopping *on* the cap is not the same as finding a boundary. If the
+      // character just outside it still belongs to the local part, the local
+      // part is longer than the cap allows and there is no address here at
+      // all: accepting the match would link the 64-character tail of a longer
+      // run and leave the rest as text, inventing an address the source never
+      // wrote. `k` can only reach `capped` when the cap, rather than `lastEnd`,
+      // is what ended the loop; and `k` of 0 is the start of the string, where
+      // there is no character outside the cap to disqualify anything.
+      if (k === capped && 0 < k && isEmailLocalChar(s.charCodeAt(k - 1))) {
+        i++
+        continue
+      }
+
+      if (k < i && isAutolinkStart(s, k, atStart)) {
         // After the `@`: alphanumerics, `.`, `-`, `_`; at least one period; a
         // trailing `.` is not part of the address, and a trailing `-` or `_`
         // invalidates the whole thing.
@@ -1259,7 +1300,7 @@ function scanAutolinks(s: string): AutolinkMatch[] | null {
     }
 
     // --- www / scheme: both need a valid start and a valid domain
-    if (!couldStartUrl(c) || !isAutolinkStart(s, i)) {
+    if (!couldStartUrl(c) || !isAutolinkStart(s, i, atStart)) {
       i++
       continue
     }
@@ -1336,7 +1377,7 @@ function hasPeriod(s: string, from: number, to: number): boolean {
 /** Replace one text node with the text/link/text run its literal implies. */
 function linkifyTextNode(node: MdNode): void {
   const s = node.literal ?? ''
-  const matches = scanAutolinks(s)
+  const matches = scanAutolinks(s, startsAfterDelimiter(node.prev))
   if (null === matches) return
 
   let at = 0

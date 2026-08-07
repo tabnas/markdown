@@ -732,3 +732,263 @@ entity decoding has now been wrong twice.
 * **A TypeScript-side entity table test** is not needed — `entities.ts`
   *is* the table — but nothing currently asserts that the generator's
   output still matches upstream `entities.json`.
+
+---
+
+# 2026-08-07 — GFM tables: the extension set is complete (24/24, still 652/652)
+
+## 30. What landed
+
+Tables, in both runtimes, in one change: block detection in `block.ts` /
+`block.go`, rendering in `html.ts` / `html.go`, projection in `ast.ts` /
+`ast.go`, three native node types (`table`, `table_row`, `table_cell`) in
+`node.ts` / `node.go`. With this the **GFM extension set is complete**:
+tables, task list items, autolink literals, strikethrough and disallowed
+raw HTML — five extensions, all gated on `gfm` (default `true`).
+
+Scores: GFM extension corpus **24/24 in both runtimes**, up from 17/24,
+with the Tables section going 0/8 → 8/8 and nothing else moving.
+CommonMark **652/652 in both, unchanged**, all 26 sections. The parser is
+conformant to CommonMark 0.31.2 and that is now the claim the READMEs and
+the doc quadrants make, each with the command that runs the vendored
+suite.
+
+## 31. The public AST is mdast's, and has no header flag
+
+The three public node types are the mdast ones, spelled exactly as mdast
+spells them:
+
+    { type: 'table', align: ('left'|'right'|'center'|null)[], children: TableRowNode[] }
+    { type: 'tableRow',  children: TableCellNode[] }
+    { type: 'tableCell', children: Inline[] }
+
+`align` has one entry per column, `null` where the delimiter cell carried
+no colon. Every row has exactly as many cells as `align` has entries: the
+block phase pads short rows with empty cells and truncates long ones, so
+no consumer has to reconcile a ragged table. Go projects `align` as
+`[]any` with `nil` entries rather than a typed slice, so it marshals as
+`[null, "center"]` and matches the TypeScript JSON byte for byte.
+
+The one shape decision worth arguing is what is *not* there. The native
+tree carries `isHeaderRow` / `IsHeaderRow` on the row, because the
+renderer needs it to place `<thead>` and to choose `th` over `td`. The
+projection drops it: **mdast has no header flag, and the first row is the
+header row by convention.** Inventing a `header: true` field would have
+been more informative and less useful — every existing mdast consumer
+already reads position, none of them read a field this parser made up,
+and a public AST that is "mdast plus one" is not mdast. The ordering the
+tree already guarantees carries the same information.
+
+Alignment goes on the table rather than on each cell for the same reason:
+mdast puts it there, it is a property of the column and not of the cell,
+and a 200-cell table would otherwise repeat it 200 times.
+
+## 32. Why tables were held back for their own change
+
+§17 deferred tables out of the first GFM change and §24 kept them
+deferred. That was right, and the reason is narrower than "they are
+bigger": **tables are the only extension that changes how ordinary prose
+is parsed.**
+
+The other four cannot. Task list items rewrite an item's own first
+paragraph, autolink literals are a post-pass over a finished inline tree,
+disallowed raw HTML is a render-time filter, and strikethrough is a
+delimiter run that CommonMark leaves unclaimed. None of them can alter
+what a document's blocks *are*. Tables can: any paragraph line containing
+`|` is a candidate header row, and the line after it decides. A document
+that meant nothing by its pipes must still parse as it did.
+
+Two behaviours are the load-bearing ones, and both come from where the
+block start is tried:
+
+* the table start is attempted **last**, after every built-in start has
+  refused the line — which is where cmark-gfm reaches its extensions
+  from. So `foo` over `---` is still a setext `<h2>`, and `- | -` is
+  still a list item holding the text `| -`, because the setext and
+  list-item starts get the line first.
+* a delimiter row with no paragraph above it is just a paragraph.
+
+Bundling that with three extensions that provably could not move core
+conformance would have made a regression hunt read the wrong diff.
+
+## 33. Paragraph splitting — the part that could regress core conformance
+
+A table is recognised when a delimiter row follows a paragraph whose
+**last line** has a matching cell count. The header row is that last line
+only, so a paragraph with earlier lines is split: the lines above stay a
+paragraph, and the table opens after it.
+
+    para line one
+    h1 | h2
+    --- | ---
+    a | b
+
+    <p>para line one</p>
+    <table>…
+
+This is the only place in the parser where a block start reaches back
+into an already-open block and rewrites it, which is exactly why it was
+the risk. Three details make it safe:
+
+* the paragraph above is **finalized**, not discarded, so it still
+  contributes its link reference definitions. `[ref]: /u` on the first
+  line of a split paragraph still resolves a `[ref]` later in the
+  document.
+* the header row's cell count must equal the delimiter row's, or there is
+  no table and the line is nothing special — the paragraph continues, as
+  GFM spec example 6 requires.
+* "the paragraph's last line" is O(1). `lastAddedLine` / `lastAddedTo` on
+  the parser record what `addLine` last wrote and where; the accumulated
+  `stringContent` is only touched on the split branch, at most once per
+  table. Re-deriving the last line by scanning accumulated content would
+  have made every pipe-bearing paragraph quadratic in its own length.
+
+Delimiter cells are hyphens with an optional leading and/or trailing
+colon and nothing else; one `+`, one interior space, one stray character
+and the line is not a delimiter row. Leading and trailing pipes are
+optional and may differ from row to row. The table ends at a blank line
+or at the start of another block.
+
+Padding is the one part of a table whose node count is not bounded by its
+input — a 10 000-column header followed by 10 000 one-cell rows is 60 KB
+of source asking for 10^8 cells — so the empty cells inserted to pad
+short rows are capped document-wide by `MAX_AUTOCOMPLETED_CELLS` /
+`maxAutocompletedCells`, which is cmark-gfm's cap and is there for
+cmark-gfm's reason. Everything else in the extension is linear.
+
+## 34. Escaped pipes resolve before the inline phase
+
+`\|` does not split a cell, and it becomes a literal `|` at *split* time
+— before inline parsing, not during it. That ordering is not cosmetic: it
+is the only way a code span inside a cell can contain a pipe, because the
+inline scanner treats a code span's content as verbatim and would have
+kept the backslash.
+
+    | f\|oo  |
+    | ------ |
+    | b `\|` az |
+
+renders `f|oo` in the header and `b <code>|</code> az` in the body.
+
+An escaped trailing pipe is content, not the optional row delimiter, so
+the backslash run in front of a trailing `|` is counted for parity — an
+even-length run leaves the pipe unescaped and it is dropped as the
+delimiter. The split loop rewrites by segment rather than by character,
+so the common case (a cell with no escapes) still costs one slice.
+
+## 35. A header-only table emits no `<tbody>`
+
+`<thead>` and `<tbody>` have no nodes of their own — GFM's table model
+has rows, not sections — so the renderer writes them from the row it is
+on. `<thead>` comes from the row flagged as the header; `<tbody>` is
+written by the **first body row** rather than unconditionally, which is
+what makes a header-only table come out as
+
+    <table>
+    <thead>
+    <tr>
+    <th>abc</th>
+    <th>def</th>
+    </tr>
+    </thead>
+    </table>
+
+with no empty `<tbody>` in it. Writing `<tbody>` when the table opened
+would have been one line shorter and wrong against the corpus.
+
+## 36. Verification
+
+* **CommonMark held**: 652/652 in both runtimes, all 26 sections,
+  byte-for-byte HTML against the vendored 0.31.2 suite.
+* **GFM reached 24/24** in both runtimes, every section asserted in both.
+  Go's runner no longer reports a section without asserting it.
+* **`gfm:false` is byte-identical to the pre-tables commit**: both
+  corpora plus the shared parity fixtures — 652 + 24 + 39 = **715 inputs
+  × both `breaks` values = 1430 records, zero differences**, rendered by
+  HEAD and by `d97dab9` and compared byte for byte. That is the check
+  that matters here: the guarantee `gfm:false` makes is "plain
+  CommonMark, byte for byte", and tables are the extension most able to
+  break it. No `table` node is produced at all with `gfm:false`.
+
+  The figure carried into this entry from the original verification note
+  was "1360 records", which no combination of the corpora produces —
+  676 × 2 is 1352, 715 × 2 is 1430. It was quoted rather than derived.
+  1430 is the re-run count and is what the docs now say.
+* **Behaviour beyond the eight upstream examples** is pinned per runtime
+  in `ts/test/commonmark.test.ts` and `go/gfm_test.go`, mirrored
+  case-for-case: delimiter-row forms, inconsistent pipes, paragraph
+  splitting, setext and list-item precedence, escaped pipes, padding and
+  truncation, tables nested in block quotes and list items, two adjacent
+  tables, the AST projection including `align: [..., null]`, `gfm:false`
+  inertness, and the bounded-padding and linearity properties.
+
+## 37. Corrections to earlier sections
+
+* **§11, §17, §18 and §24 are superseded on tables.** "17/24", "the seven
+  failures are all Tables", "GFM tables, the remaining 7/24, still
+  deliberately out of scope in both runtimes" — all closed. The corpus is
+  24/24 in both runtimes.
+* **§11's "four of the six GFM extensions" was a miscount of the
+  denominator.** The GFM spec's extension set is five, and footnotes are
+  not in it — they are a GitHub product feature with no section in the
+  spec suite. The set is now complete at five of five; footnotes remain
+  unimplemented and are not counted against that.
+* **"36 shared fixtures" in §7, `AGENTS.md` and `test/AGENTS.md` has been
+  stale since the 0.31.2 rewrite**, which added three rows to
+  `inline.tsv` in the same commit that recorded the number. There are
+  **39** cases in 8 files. Both agent guides now say 39.
+* **`AGENTS.md`'s extension walk-through said "the four newer
+  extensions"**, which stopped being a usable label once tables joined
+  them. It now covers all five, strikethrough included, and names the
+  three files tables occupy.
+* The disallowed-raw-HTML filter is now described in `AGENTS.md` as what
+  it is — nine tag names escaped, and **not a sanitizer**. Nothing about
+  the code changed; the earlier text simply left room to read it as one.
+* **§13's "652/652 must survive `gfm:true` as well as `gfm:false`" was
+  never true, and neither was `go/doc/concepts.md`'s claim that it is a
+  structural property.** Measured in both runtimes, `gfm:true` scores
+  **643/652** — six HTML-blocks examples (170, 171, 172, 173, 176, 178)
+  where the tagfilter escapes the `<script>`, `<style>` and `<textarea>`
+  the suite expects verbatim, and three Autolinks examples (608, 611,
+  612) where text the suite expects to stay literal becomes a link.
+  Those nine are the extensions behaving exactly as specified, which is
+  why the conformance figure is measured with `gfm:false`, where the
+  specification's own options are. The real structural property is the
+  one worth claiming: `gfm:false` is byte-identical to a pure-CommonMark
+  parse. Both quadrant `concepts.md` files now say this.
+
+## 38. What is still unimplemented, and what `gfm` must not become
+
+* **Footnotes.** Not in the GFM spec suite. Worth stating in the docs
+  because `[^1]` is a valid CommonMark link label, so a footnote authored
+  on GitHub renders here as a **broken link** with no error — a silent
+  wrong answer, which is the kind that needs documenting most.
+* **Everything outside CommonMark+GFM**: math, front matter, definition
+  lists, heading attributes, admonitions, wiki links, emoji shortcodes,
+  highlight, sub/superscript. Each would need its own opt-in flag.
+
+§12 argued for one flag over four booleans, and that argument holds
+exactly as far as the GFM dialect goes: a caller asking for `gfm` is
+asking for GitHub's Markdown, and now gets all of it. It does not extend
+past that. `gfm` must not grow into "every extension anyone wants", or it
+stops meaning anything a caller can reason about — and the one collision
+already on the record is the argument in miniature: `H~2~O` becomes
+`H<del>2</del>O` under `gfm:true`, because GFM's single-tilde
+strikethrough occupies the syntax other dialects use for subscript. A
+`sub`/`sup` extension folded into the same flag would have to fight
+strikethrough for it.
+
+## 39. Follow-ups this leaves
+
+* **`test/spec/*.tsv` does not cover the table node types.** `table`,
+  `tableRow` and `tableCell` are public AST and are pinned only by
+  hand-mirrored unit tests in each runtime; the parity corpus is what
+  keeps the runtimes honest without anyone remembering to mirror. A
+  `table.tsv` would close that, and is the same gap §17 flagged when
+  `listItem.checked` was TypeScript-only.
+* **The standing cross-runtime native-tree comparison** queued in §10,
+  §17 and §24 is now overdue three times. Tables add `sourcepos` on rows
+  and cells, which the AST drops and the HTML does not encode, so it is
+  invisible to every committed check.
+* **Footnotes** remain unimplemented in both runtimes. If they are ever
+  added they need their own flag, not a widening of `gfm`.

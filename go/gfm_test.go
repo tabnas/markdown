@@ -522,6 +522,141 @@ func TestGFMTablesAST(t *testing.T) {
 	}
 }
 
+// --- sourcepos ---
+
+// tableStart is the sourcepos start of the first table in src.
+func tableStart(src string) [2]int {
+	w := ParseTree(src, gfmOpts).Walker()
+	for e := w.Next(); e != nil; e = w.Next() {
+		if e.Entering && NodeTable == e.Node.Type {
+			return e.Node.SourcePos[0]
+		}
+	}
+	return [2]int{-1, -1}
+}
+
+// TestGFMTableSourcePos covers a table opened by its delimiter row but which
+// begins on the header row above it, the two rows being indented
+// independently. Taking the start column from the delimiter row therefore
+// reports a column belonging to a different line — visible through ParseTree,
+// which is public.
+func TestGFMTableSourcePos(t *testing.T) {
+	for _, c := range []struct {
+		src  string
+		want [2]int
+		why  string
+	}{
+		{"a | b\n| - | -\n", [2]int{1, 1}, "control: neither row indented"},
+		{"  a | b\n| - | -\n", [2]int{1, 3}, "the header row is indented"},
+		{"a | b\n  | - | -\n", [2]int{1, 1}, "only the delimiter row is"},
+		{"  a | b\n  | - | -\n", [2]int{1, 3}, "both rows are"},
+	} {
+		if got := tableStart(c.src); got != c.want {
+			t.Errorf("%s: %q start = %v, want %v", c.why, c.src, got, c.want)
+		}
+	}
+}
+
+// TestGFMTableSourcePosSplitParagraph puts the header row at the *end* of a
+// longer paragraph, so the column cannot come from the paragraph node either —
+// that one belongs to the first line, which stays a paragraph.
+func TestGFMTableSourcePosSplitParagraph(t *testing.T) {
+	for _, c := range []struct {
+		src  string
+		want [2]int
+		why  string
+	}{
+		{"x\n  a | b\n| - | -\n", [2]int{2, 3}, "header row indented, paragraph's is not"},
+		{"  x\na | b\n| - | -\n", [2]int{2, 1}, "paragraph indented, header row is not"},
+		// A table inside a block quote counts columns from the start of the
+		// line, marker included, exactly as every other block does.
+		{"> a | b\n> | - | -\n", [2]int{1, 3}, "block quote"},
+		{">   a | b\n> | - | -\n", [2]int{1, 5}, "block quote, indented header row"},
+	} {
+		if got := tableStart(c.src); got != c.want {
+			t.Errorf("%s: %q start = %v, want %v", c.why, c.src, got, c.want)
+		}
+	}
+}
+
+// firstParagraphEnd is the sourcepos end of the first paragraph in src.
+func firstParagraphEnd(src string) [2]int {
+	w := ParseTree(src, gfmOpts).Walker()
+	for e := w.Next(); e != nil; e = w.Next() {
+		if e.Entering && NodeParagraph == e.Node.Type {
+			return e.Node.SourcePos[1]
+		}
+	}
+	return [2]int{-1, -1}
+}
+
+// TestGFMTableSplitParagraphEndsOnItsOwnLine covers the end of the paragraph a
+// table splits. The split closes a block *two* lines back — the header row in
+// between belongs to the table — so the end column cannot come from the
+// previous line the way every other finalize takes it. Taking it from there
+// reports the header row's length on a line that is not the header row.
+func TestGFMTableSplitParagraphEndsOnItsOwnLine(t *testing.T) {
+	// `aaaaaaaaaa` is 10 characters and the header row below it is 9, so the
+	// wrong column there is a *shorter* one, which no clamp could explain;
+	// `aa` under a 20-character header row is the other direction.
+	for _, c := range []struct {
+		src  string
+		want [2]int
+	}{
+		{"aaaaaaaaaa\n| a | b |\n| - | - |\n", [2]int{1, 10}},
+		{"aa\n| aaaaaaaaaaaa | b |\n| - | - |\n", [2]int{1, 2}},
+	} {
+		if got := firstParagraphEnd(c.src); got != c.want {
+			t.Errorf("%q paragraph end = %v, want %v", c.src, got, c.want)
+		}
+	}
+
+	// Every other interrupter already ends this paragraph at column 10; the
+	// table must not be the odd one out.
+	for _, after := range []string{"# h\n", "```\nx\n```\n", "> q\n", "- i\n", "***\n", "<div>\n", "\nx\n"} {
+		src := "aaaaaaaaaa\n" + after
+		if got := firstParagraphEnd(src); got != [2]int{1, 10} {
+			t.Errorf("%q paragraph end = %v, want [1 10]", src, got)
+		}
+	}
+}
+
+// TestGFMTableRowsShareOneBasis covers rows spanning their own text, so that
+// two rows of one table on equally indented lines report the same end column.
+// The header row is built in tryOpenTable and the body rows in finalizeTable;
+// measuring the header against the whole source line would put it two columns
+// past the body rows inside a block quote.
+func TestGFMTableRowsShareOneBasis(t *testing.T) {
+	rowSpans := func(src string) []SourcePos {
+		var out []SourcePos
+		w := ParseTree(src, gfmOpts).Walker()
+		for e := w.Next(); e != nil; e = w.Next() {
+			if e.Entering && NodeTableRow == e.Node.Type {
+				out = append(out, e.Node.SourcePos)
+			}
+		}
+		return out
+	}
+
+	want := []SourcePos{{{1, 1}, {1, 9}}, {{3, 1}, {3, 9}}}
+	for _, src := range []string{
+		"| a | b |\n| - | - |\n| c | d |\n",
+		"> | a | b |\n> | - | - |\n> | c | d |\n",
+		"  | a | b |\n  | - | - |\n  | c | d |\n",
+	} {
+		got := rowSpans(src)
+		if len(got) != len(want) {
+			t.Errorf("%q rows = %d, want %d", src, len(got), len(want))
+			continue
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("%q row %d = %v, want %v", src, i, got[i], want[i])
+			}
+		}
+	}
+}
+
 // --- gfm:false ---
 
 func TestGFMTablesDisabled(t *testing.T) {
@@ -978,6 +1113,118 @@ func TestGFMAutolinkLiterals(t *testing.T) {
 	check("~~www.a.com~~\n", "<p><del>"+anchor("http://www.a.com", "www.a.com")+"</del></p>\n", "strikethrough")
 	check("# www.a.com\n", "<h1>"+anchor("http://www.a.com", "www.a.com")+"</h1>\n", "heading")
 	check("- www.a.com\n", "<ul>\n<li>"+anchor("http://www.a.com", "www.a.com")+"</li>\n</ul>\n", "list item")
+}
+
+// TestGFMAutolinkBoundaryAtInlineNodeEdges covers offset 0 of a text node.
+//
+// The rule is about the SOURCE character immediately before the match, and the
+// post-pass runs over a tree that no longer carries source offsets. At offset 0
+// of a text node that character lives in the previous sibling, and the
+// sibling's *type* names it exactly — so each row below states the type, the
+// character it ends on, and whether an autolink may start after it.
+//
+// Rejecting offset 0 whenever there is any previous sibling is the obvious
+// wrong fix: it breaks the four `true` rows in the middle of this table.
+func TestGFMAutolinkBoundaryAtInlineNodeEdges(t *testing.T) {
+	for _, c := range []struct {
+		prevType string // previous sibling
+		prefix   string // prefix that produces it
+		lastChar string // its last source character
+		links    bool
+	}{
+		{"(none)", "", "start of line", true},
+		{"softbreak", "a\n", "start of line", true},
+		{"linebreak", "a\\\n", "start of line", true},
+		{"emph", "*a*", "*", true},
+		{"strong", "**a**", "*", true},
+		{"del", "~~a~~", "~", true},
+		{"code", "`a`", "`", false},
+		{"link", "[a](/u)", ")", false},
+		{"image", "![a](/u)", ")", false},
+		{"html_inline", "<b>", ">", false},
+	} {
+		t.Run(c.prevType, func(t *testing.T) {
+			// The row's first column, asserted rather than assumed: with an
+			// inert word in place of the URL, the paragraph ends in a text node
+			// whose previous sibling is exactly the node this row names.
+			para := Parse(c.prefix+"X\n", gfmOpts).FirstChild
+			tail := para.LastChild
+			if NodeText != tail.Type {
+				t.Fatalf("tail type = %v, want text", tail.Type)
+			}
+			if "X" != tail.Literal {
+				t.Fatalf("tail literal = %q, want %q", tail.Literal, "X")
+			}
+			gotPrev := "(none)"
+			if nil != tail.Prev {
+				gotPrev = string(tail.Prev.Type)
+			}
+			if gotPrev != c.prevType {
+				t.Fatalf("previous sibling = %s, want %s", gotPrev, c.prevType)
+			}
+
+			out := ToHTML(c.prefix+"www.a.com\n", gfmOpts)
+			if got := strings.Contains(out, `href="http://www.a.com"`); got != c.links {
+				t.Errorf("after %s (source ends %s): linked = %v, want %v\n %q",
+					c.prevType, c.lastChar, got, c.links, out)
+			}
+		})
+	}
+}
+
+// TestGFMAutolinkAfterEmphasis calls out the emphasis case on its own because
+// it is what the obvious wrong fix breaks, with its counterpart beside it.
+func TestGFMAutolinkAfterEmphasis(t *testing.T) {
+	check := func(src, want, why string) {
+		t.Helper()
+		if got := ToHTML(src, gfmOpts); got != want {
+			t.Errorf("%s: %q\n got  %q\n want %q", why, src, got, want)
+		}
+	}
+	check("*a*www.b.com\n", "<p><em>a</em>"+anchor("http://www.b.com", "www.b.com")+"</p>\n",
+		"emphasis is still a delimiter an autolink may follow")
+	check("`x`www.a.com\n", "<p><code>x</code>www.a.com</p>\n", "a code span is not")
+
+	// The boundary applies to email addresses too.
+	check("*a*b@c.de\n", "<p><em>a</em>"+anchor("mailto:b@c.de", "b@c.de")+"</p>\n", "email after emphasis")
+	check("`x`b@c.de\n", "<p><code>x</code>b@c.de</p>\n", "email after a code span")
+	check("[l](/u)b@c.de\n", "<p>"+anchor("/u", "l")+"b@c.de</p>\n", "email after a link")
+}
+
+// TestGFMAutolinkEmailLocalPartCap covers a local part of 65 characters or
+// more, which is not recognised at all.
+//
+// The rewind that finds the start of a local part stops after 64 characters,
+// which is what keeps this pass linear and is RFC 5321's own limit. Stopping
+// there is a cap, not a boundary: when the character just outside it still
+// belongs to the local part, the address is over-long and there is no address —
+// linking the 64-character tail would invent one.
+func TestGFMAutolinkEmailLocalPartCap(t *testing.T) {
+	for _, c := range []struct {
+		local  string
+		linked bool
+	}{
+		{strings.Repeat("a", 63), true},
+		{strings.Repeat("a", 64), true},
+		{strings.Repeat("a", 65), false},
+		{strings.Repeat("a", 100), false},
+		// A leading `_` is itself a local-part character, so these are the same
+		// four lengths shifted by one — 64 links, 65 does not.
+		{"_" + strings.Repeat("a", 63), true},
+		{"_" + strings.Repeat("a", 64), false},
+		{"_" + strings.Repeat("a", 65), false},
+		{"_" + strings.Repeat("a", 100), false},
+	} {
+		addr := c.local + "@b.co"
+		got := ToHTML(addr+"\n", gfmOpts)
+		want := "<p>" + addr + "</p>\n"
+		if c.linked {
+			want = "<p>" + anchor("mailto:"+addr, addr) + "</p>\n"
+		}
+		if got != want {
+			t.Errorf("%d-character local part\n got  %q\n want %q", len(c.local), got, want)
+		}
+	}
 }
 
 func TestGFMAutolinkAST(t *testing.T) {

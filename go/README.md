@@ -4,7 +4,9 @@ A CommonMark parser for the [Tabnas](https://github.com/tabnas/parser) engine.
 
 **This parser is conformant to CommonMark 0.31.2** — all 652 examples, across all 26
 sections of the spec suite, in both runtimes. The suite is vendored in this repository, so
-the claim is checkable: `go test -run TestCommonMarkSpec ./...` reports 652/652. It also
+the claim is checkable: `go test -run TestCommonMarkSpec ./...` reports 652/652. It runs
+with the GFM extensions off, which is what measuring CommonMark conformance means — with
+`GFM: true` the extensions deliberately change nine of those examples. It also
 implements **all five GFM extensions** — tables, task list items, autolink literals,
 strikethrough and disallowed raw HTML — 24/24 on the vendored GFM corpus, via
 `go test -run TestGFMSpec ./...`.

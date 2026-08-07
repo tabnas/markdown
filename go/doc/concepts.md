@@ -4,6 +4,13 @@ Background and design rationale — why the parser is shaped the way it is, what
 cost, and what porting it to Go changed. For the API see the [reference](reference.md);
 for recipes see the [how-to guide](guide.md).
 
+**The parser is conformant to CommonMark 0.31.2** — 652/652 examples, all 26 sections, in
+this runtime and in the TypeScript one — and implements the complete set of five GFM
+extensions, 24/24. Both suites are vendored (`test/commonmark/spec.json`,
+`test/gfm/spec.json`) and run by `go test -run TestCommonMarkSpec -v ./...` and
+`go test -run TestGFMSpec -v ./...`, so the claim is checkable rather than asserted. Much
+of what follows is an account of what that number cost to reach, and where it is fragile.
+
 Two things are worth settling before anything else, because they decide how you read the
 rest of this document.
 
@@ -157,7 +164,7 @@ it that way — the shared `.tsv` fixtures pass untouched. Two things did change
 tags now get their own `html` node instead of leaking into `text`, and `spread` acquired a
 meaning — see below.
 
-The projection is deliberately lossy, in three places.
+The projection is deliberately lossy, in four places.
 
 *Soft breaks collapse.* With `Breaks: false`, a soft line break becomes a single space
 inside the surrounding text run instead of a node of its own. This is long-standing
@@ -175,6 +182,11 @@ ask.
 `html_block` from `html_inline`; the AST calls both `html`. Their context makes them
 unambiguous — one appears among blocks, the other among inlines — so the distinction is
 recoverable, and one node type is simpler.
+
+*A table row's header flag disappears.* The native tree marks it, the AST does not, because
+mdast does not: the first row of a `table` is the header row by convention. Recoverable
+from position, like the one above, and the same argument applies — the AST follows mdast
+where mdast has an opinion, rather than adding a field the ecosystem would ignore.
 
 One thing the projection now does *better* is `spread`. It follows mdast semantics: a list
 is spread when it is loose, an item when it holds blank-line-separated blocks. The previous
@@ -215,6 +227,69 @@ never emitting a newline on a neighbour's or a child's behalf, so `<li>` deliber
 not end a line and a tight item comes out as `<li>a</li>` with no interior newlines at all,
 while a loose one gets its newline from its first child's own leading request. Neither case
 needs to know about the other.
+
+## Tables are a leaf block that holds nodes
+
+Tables are the only GFM extension that adds block structure, and they sit awkwardly in the
+algorithm in three separate ways. All three are visible in the API, which is why they are
+worth understanding rather than just looking up.
+
+*A table is a leaf block and a container at the same time.* To the block algorithm it is a
+leaf: no container ever opens inside one, no block-level element can be inserted in one,
+and it accepts lines the way a paragraph does. To the tree it is a container: its rows and
+cells are real nodes, and its cells hold inlines. So `NodeTable`, `NodeTableRow` and
+`NodeTableCell` are all in `containerTypes` while `block.go` treats the table itself like a
+paragraph that keeps taking lines until something ends it. Nothing else in the parser is
+on both sides of that line.
+
+*Recognition is retroactive.* The delimiter row is what tells you the line *before* it was
+a header row — so by the time the parser can recognise a table, the header row has already
+been accepted into an open paragraph. A setext heading has the same shape of problem and
+solves it by claiming the whole paragraph. A table cannot: it claims the paragraph's *last
+line only* and leaves the earlier lines behind as a paragraph in their own right, finalised
+on the spot so that they can still contribute link reference definitions. That is why the
+cell-count test is on the last line rather than on the paragraph — the earlier lines are
+not candidates, they are prose that happens to precede a table — and it is the one place
+in the parser where a block start takes a *part* of what another block already holds.
+
+*Rectangularity is enforced, not observed.* Short rows are padded with empty cells and long
+ones truncated, to the delimiter row's column count. GFM specifies this, and it is what
+makes `align` usable at all: because every row has exactly `len(align)` cells,
+`align[i]` is the alignment of cell `i` of every row, and a consumer can index cells
+without checking. The cost is that padding is the one part of a table whose node count is
+not bounded by the input length — a one-column row under a thousand-column delimiter row
+produces a thousand cells, so 60 KB of input can ask for 10⁸ of them. `block.go` therefore
+holds a document-wide budget for padding cells, cmark-gfm's `MAX_AUTOCOMPLETED_CELLS` and
+for the same reason; every other part of the extension is linear in the input, so that one
+budget is what keeps the whole of it so. `TestGFMTablePaddingIsBounded` pins it.
+
+mdast has no header flag, and this package follows mdast: the first row is the header row,
+by convention. The native tree carries `IsHeaderRow` anyway, because a `NodeWalker` reaches
+a row before it can ask anything of the table, and the renderer has to choose `<th>` over
+`<td>` right then. Recovering the flag by walking back up to the parent on every row would
+be work done to reconstruct something the block phase already knew.
+
+The escaped pipe is the one place where an extension rewrites the *middle* of what the
+inline scanner will read. Task list markers are stripped from a paragraph's raw text in the
+block phase too, but stripping a known prefix leaves the rest of the line untouched; `\|`
+is resolved to a literal `|` wherever it occurs, when the row is split into cells. It has
+to happen there. The extension requires a pipe to work inside other inline spans, and
+`` `\|` `` can only come out as `<code>|</code>` if the backslash is gone before the code
+span is scanned — no amount of unescaping *after* inline parsing produces that. It is still
+not a change to the scanner: the scanner is unmodified and simply receives different text,
+which is the weakest form of interference available and the reason the CommonMark score is
+unaffected. Every other backslash escape is left exactly as written, so no cell text is
+unescaped twice.
+
+Two Go-specific decisions follow from the shape above. `TableAlign` is a `string` type with
+`AlignNone` as the empty string rather than a `*string` or a `[]*string`, matching what
+`node.go` already does for an absent `Info` or `Destination`; `ast.go` converts it back to
+an untyped `nil` so the map AST's `align` marshals as `[null,"center"]`, identical to the
+TypeScript's `('left'|'right'|'center'|null)[]`. And the renderer keeps the current table's
+alignment slice and a cell index in its own state rather than asking each cell for its
+column: a cell in a linked tree can only find its index by counting previous siblings,
+which is quadratic in the row width. A table can never contain another table, so one slice
+and one counter are enough — no stack.
 
 ## Why the parser is engine-free
 
@@ -277,24 +352,59 @@ about attributes or `javascript:` destinations.
 
 ## What is and is not GFM
 
-The package parses CommonMark, with five GFM extensions: tables, strikethrough, task list
-items, autolink literals and disallowed raw HTML. Footnotes are not implemented, and
-`GFM` gates the five as a single switch rather than as five flags — a document is either
-GitHub-flavoured or it is not, and a per-extension matrix is configuration surface nobody
-asked for.
+The package parses CommonMark, with the complete set of five GFM extensions: tables,
+strikethrough, task list items, autolink literals and disallowed raw HTML. `GFM` gates the
+five as a single switch rather than as five flags — a document is either GitHub-flavoured
+or it is not, and a per-extension matrix is configuration surface nobody asked for. The
+switch is also what makes `GFM: false` mean something exact: pure CommonMark, byte for
+byte, which is the setting the conformance suite runs under.
 
-Four of the five are deliberately *not* in the inline scanner. Tables are a block start,
-so a cell's content reaches the inline scanner as a paragraph's would and nothing about
-emphasis or code spans changes. Task list markers are
-consumed in the block phase, over a paragraph's raw text, before the inline scanner sees
-brackets at all; autolink literals are a post-pass over the finished inline tree; the
-raw-HTML filter is a rendering step. That keeps the scanner that decides code spans, raw
-HTML, emphasis and links exactly as CommonMark specifies it — which is what makes
-"652/652 with `GFM: true` as well as `GFM: false`" a structural property rather than a
-result that has to be re-earned by every extension.
+Four of the five are deliberately *not* in the inline scanner. Tables are a block start, so
+a cell's content reaches the inline scanner as a paragraph's would and nothing about
+emphasis or code spans changes. Task list markers are consumed in the block phase, over a
+paragraph's raw text, before the inline scanner sees brackets at all; autolink literals are
+a post-pass over the finished inline tree; the raw-HTML filter is a rendering step. Only
+strikethrough is in the scanner, on the delimiter stack the emphasis algorithm already
+needs. That keeps the scanner that decides code spans, raw HTML, emphasis and links exactly
+as CommonMark specifies it, and the consequence is that `GFM: false` is not an
+approximation of CommonMark but the same parse: byte-identical output over 1430 checked
+records, not a resemblance.
 
-The honest statement of scope is still narrower than "CommonMark/GFM": a caller who needs
-footnotes knows to look elsewhere rather than discovering it at runtime.
+Turning the extensions on does move nine of the 652 spec examples — six in HTML blocks,
+where the disallowed-raw-HTML filter escapes the `<script>`, `<style>` and `<textarea>` the
+suite expects verbatim, and three in Autolinks, where text the suite expects to stay
+literal becomes a link. Those nine are the extensions doing precisely what they are
+specified to do. It is also why the conformance figure is measured where the
+specification's own options are, with `GFM: false`, rather than being quoted from a run
+that has extensions layered over it.
+
+### What is still missing, and why it stays missing
+
+The extension set is complete against the GFM specification suite, so the honest statement
+of scope is now exactly "CommonMark 0.31.2 plus the five GFM extensions" — and both halves
+of that are worth reading strictly.
+
+**Footnotes are not implemented**, and that is not an oversight in the extension set: they
+are a GitHub product feature that never entered the GFM specification, so they are not in
+the suite the 24/24 is measured against. The failure mode is the quiet kind. `[^1]` is a
+valid CommonMark link label, so a footnote authored on GitHub does not error — the
+reference falls through to literal text, and a definition line whose body happens to look
+like a destination is a perfectly good link reference definition, which turns the footnote
+into a link to somewhere the author never meant. Detecting `[^` in a corpus before you
+convert it is the only defence; the [how-to guide](guide.md) has the recipe.
+
+**GFM's strikethrough collides with other dialects' subscript.** GFM accepts a single `~`
+as well as `~~`, so `H~2~O` — subscript in Pandoc and several others — is `H<del>2</del>O`
+under the default `GFM: true`. There is no way to keep strikethrough and lose the
+collision: they are the same syntax, and the extension is the one being implemented.
+
+Everything outside CommonMark and those five extensions is absent — math, front matter,
+definition lists, heading attributes, admonitions, wiki links, emoji shortcodes, highlight,
+sub/superscript. Each of them is a dialect of somebody's, not of GFM's, and each would need
+its own opt-in flag if it were added. `GFM` means the GFM specification's extensions and
+should not grow into a word meaning "everything": the value of a single switch is that it
+names a real, published, testable set, and a flag that names a grab-bag can never be
+conformant to anything.
 
 ## The grammar file is inert
 
@@ -455,6 +565,7 @@ fixture reaches it.
 | Entity decoding | a vendored HTML5 table (`entities.ts`) | the standard library's table, gated so only semicolon-terminated references decode — `html.UnescapeString` also accepts legacy forms such as `&auml`, which §6.2 does not |
 | Unicode punctuation | a regexp character class | `unicode.IsPunct \|\| unicode.IsSymbol` |
 | Case-insensitive regexes | the `i` flag | both cases spelled out. Go folds `(?i)[A-Za-z]` over all of Unicode, so it would also match U+017F LONG S and U+212A KELVIN SIGN, and `<ſpan>` would be accepted as a tag |
+| Table alignment | `('left' \| 'right' \| 'center' \| null)[]` on the node | `[]TableAlign` on the node, with `AlignNone` as the empty string; `ast.go` projects it back to an `[]any` with untyped `nil` entries so the JSON matches |
 | `grammarText` | exported | unexported |
 
 ## The parity contract, stated exactly
@@ -462,14 +573,15 @@ fixture reaches it.
 The two runtimes are held to one standard rather than to each other: both run the vendored
 CommonMark 0.31.2 suite, and both score 652/652 across all 26 sections. That is the primary
 guarantee, and it is a byte-for-byte HTML comparison against the specification's own
-expected output.
+expected output. Both also run the vendored GFM extension suite, and both score 24/24
+across its five sections, the same way.
 
 Cross-runtime agreement is checked on top of that, and it is worth being precise about what
 each check does and does not cover, because an earlier version of this document claimed
 "everything else behaves the same across both runtimes, as enforced by `test/spec/`" — and
-`test/spec/` has 36 fixtures. Thirty-six cases cannot enforce agreement over a parser.
+`test/spec/` has 39 fixtures. Thirty-nine cases cannot enforce agreement over a parser.
 
-What `test/spec/*.tsv` actually guarantees: 36 hand-written cases, each an input plus the
+What `test/spec/*.tsv` actually guarantees: 39 hand-written cases, each an input plus the
 expected AST as JSON plus an optional options map, run through the **plugin** path
 (`j.Parse`) by `go/parity_test.go` here and `ts/test/parity.test.ts` there, and auto-
 discovered so adding a `.tsv` runs it in both. They are a regression net for the AST shapes
@@ -482,6 +594,10 @@ inputs run under all four `gfm` × `breaks` combinations in both runtimes — 26
 comparing **both** the AST and the HTML on each. The result is 0 differing ASTs and 0
 differing HTML outputs. That is a statement about 652 documents chosen to exercise every
 corner of the specification, under every option this package has, on both of its outputs.
+Extending the same run to the 24 GFM examples makes it 676 inputs and 2704 records, again
+with 0 differences. A separate comparison backs the other claim the single `GFM` switch
+makes — that with the extensions off the output is pure CommonMark and nothing else: 1430
+records, byte-identical.
 
 What none of it covers is `sourcepos`. The public AST does not carry source positions, so an
 AST comparison is blind to them, and the HTML does not encode them either. A divergence in
