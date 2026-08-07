@@ -36,6 +36,18 @@ var (
 	reWhitespaceRun       = regexp.MustCompile(`[ \t\r\n]+`)
 )
 
+// missingEntities are the WHATWG named references that the standard library's
+// table does not carry. §6.2 takes the whole WHATWG list, and ts/src/entities.ts
+// (2125 semicolon-terminated entries, generated from entities.json) has them,
+// so without this the two runtimes disagree on `&nGt;` and `&nLt;`.
+//
+// These two are the complete set of gaps: TestEntityTableMatchesTypeScript
+// checks every one of the 2125 names.
+var missingEntities = map[string]string{
+	"nGt": "≫⃒",
+	"nLt": "≪⃒",
+}
+
 // IsEscapable reports whether b is ASCII punctuation, i.e. may follow a
 // backslash (§6.1).
 func IsEscapable(b byte) bool {
@@ -94,10 +106,34 @@ func decodeEntity(text string) string {
 		return string(rune(cp))
 	}
 
+	if r, ok := missingEntities[body]; ok {
+		return r
+	}
+
 	decoded := html.UnescapeString(text)
 	if decoded == text {
 		return text
 	}
+
+	// html.UnescapeString honours the legacy semicolon-less aliases, and it
+	// honours them as a *prefix* of a longer name: `&ampa;` comes back as
+	// `&amp` followed by the leftover `a;`, and `&nbspa;` as U+00A0 followed
+	// by `a;`. §6.2 admits only the exact semicolon-terminated names, so a
+	// decode that left part of the reference behind did not resolve one at
+	// all — `&ampa;` is literal text, which is what the TypeScript's explicit
+	// 2125-entry table gives.
+	//
+	// The residue is always a non-empty suffix of the name plus the `;`.
+	// `body` is capped at 32 characters by entityPattern, so this is a
+	// bounded scan. No genuine replacement can look like residue: only
+	// `&semi;` decodes to a string ending in `;`, and a one-character result
+	// cannot end with two or more characters of its own name.
+	for k := 1; k < len(body); k++ {
+		if strings.HasSuffix(decoded, body[k:]+";") {
+			return text
+		}
+	}
+
 	return decoded
 }
 

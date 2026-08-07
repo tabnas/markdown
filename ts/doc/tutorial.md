@@ -4,13 +4,25 @@ This is a guided first run. By the end you will have installed the package,
 parsed a document into an AST, rendered the same document to HTML, and changed
 one option. Takes about five minutes and assumes Node.js (>=24).
 
+**This parser is conformant to CommonMark 0.31.2.** All 652 examples of the
+specification's own test suite pass, in all 26 sections. The suite is vendored
+in this repository, so the claim is one you can check rather than one you have
+to take on trust: clone the repository and run `npm run conformance` in `ts/`,
+and it prints the score. The Markdown you learn here is the whole language, not
+a subset of it.
+
+The package also implements the complete set of five GFM extensions — tables,
+task list items, autolink literals, strikethrough and disallowed raw HTML — and
+they are on by default. Their corpus is vendored too, 24 examples, and
+`npm run conformance-gfm` runs that one.
+
 Two answers before you start, because they shape everything below:
 
 - **The AST is the primary output.** `parseDocument()` returns it. Nothing else
   runs — the HTML renderer is never touched.
 - **Yes, there is an HTML emitter**: `toHtml()`. The CommonMark test suite
-  scores HTML output, so the renderer is the instrument that makes this
-  package's 652/652 conformance score measurable. You get to use it too.
+  scores HTML output, so the renderer is the instrument that makes the
+  conformance claim measurable. You get to use it too.
 
 You will meet both in this lesson, in that order.
 
@@ -85,6 +97,7 @@ needs a special printer:
         {
           "type": "listItem",
           "spread": false,
+          "checked": null,
           "children": [
             { "type": "paragraph", "children": [{ "type": "text", "value": "one" }] }
           ]
@@ -92,6 +105,7 @@ needs a special printer:
         {
           "type": "listItem",
           "spread": false,
+          "checked": null,
           "children": [
             { "type": "paragraph", "children": [{ "type": "text", "value": "two" }] }
           ]
@@ -180,8 +194,8 @@ parser. That is the pattern for everything else in this package.
 
 You have the two outputs and one option. That is enough to be useful.
 
-- [How-to guide](guide.md) — recipes: walking the AST, rewriting links,
-  rendering untrusted input safely, source positions, running the conformance
-  suite.
+- [How-to guide](guide.md) — recipes: walking the AST, rewriting links, reading
+  a table's alignment and cells, rendering untrusted input safely, source
+  positions, running the conformance suite.
 - [Reference](reference.md) — every export, every option, every node type.
 - [Concepts](concepts.md) — why the parser is built the way it is.

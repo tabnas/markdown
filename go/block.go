@@ -121,6 +121,25 @@ func maybeSpecial(ln string, pos int) bool {
 	}
 }
 
+// maybeSpecialGFM is the same fast reject with `|` and `:` added, used when
+// GFM is on: a GFM table's delimiter row may begin with either (`| --- |`,
+// `:-: | ---:`), and neither is a CommonMark block start.
+//
+// Kept as a separate function rather than folded into the one above so that a
+// GFM-off parse takes exactly the path it always did — same characters
+// rejected, same lines never offered to the block starts at all.
+func maybeSpecialGFM(ln string, pos int) bool {
+	if pos < 0 || pos >= len(ln) {
+		return false
+	}
+	switch c := ln[pos]; c {
+	case '#', '`', '~', '*', '+', '_', '=', '<', '>', '-', ':', '|':
+		return true
+	default:
+		return '0' <= c && c <= '9'
+	}
+}
+
 // isBlank is `!RE_NON_SPACE.test(s)` for RE_NON_SPACE = /[^ \t\f\v\r\n]/. All
 // members of the set are ASCII, so a byte scan classifies UTF-8 correctly: a
 // continuation byte is >= 0x80 and therefore counts as non-space, exactly as
@@ -293,21 +312,62 @@ const blockTags = `address|article|aside|base|basefont|blockquote|body|caption|`
 	`li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|` +
 	`section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul`
 
+// blockRawTextTags is the type 1 tag list — the four whose content is raw text.
+const blockRawTextTags = `script|pre|textarea|style`
+
+// asciiFoldPattern spells a lowercase regex literal in both cases, mapping
+// each ASCII letter to a two-element class and passing everything else through
+// (so `h[1-6]` becomes `[hH][1-6]` and `|` stays an alternation).
+//
+// This is what the TypeScript's `i` flag means and what Go's `(?i)` does not:
+// Go folds case over all of Unicode, so `(?i)script` also matches `ſcript` and
+// `(?i)[A-Za-z]` also matches U+017F LATIN SMALL LETTER LONG S and U+212A
+// KELVIN SIGN, where JavaScript's non-unicode `i` deliberately never folds a
+// non-ASCII code point onto an ASCII one. Left as `(?i)`, `<ſcript>` and
+// `<linK>` opened an HTML block here and a paragraph there — the same trap
+// inline.go's raw-HTML grammar already spells its way around.
+func asciiFoldPattern(s string) string {
+	var b strings.Builder
+	b.Grow(4 * len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case 'a' <= c && c <= 'z':
+			b.WriteByte('[')
+			b.WriteByte(c)
+			b.WriteByte(c - 32)
+			b.WriteByte(']')
+		case 'A' <= c && c <= 'Z':
+			b.WriteByte('[')
+			b.WriteByte(c + 32)
+			b.WriteByte(c)
+			b.WriteByte(']')
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
 // reHTMLBlockOpen is indexed by HTML block type 1–7; slot 0 is unused. Go's
 // `^`/`$` match at the ends of the text (never at a line break) unless (?m) is
 // set, which is what the JavaScript regexes mean too.
+//
+// Type 7 needs no case folding at all: every letter in blockOpenTag and
+// blockCloseTag is already written as a both-cases class, so the TypeScript's
+// `i` flag has nothing to do there.
 var reHTMLBlockOpen = []*regexp.Regexp{
 	nil,
-	regexp.MustCompile(`(?i)^<(?:script|pre|textarea|style)(?:[ \t]|>|$)`),
+	regexp.MustCompile(`^<(?:` + asciiFoldPattern(blockRawTextTags) + `)(?:[ \t]|>|$)`),
 	regexp.MustCompile(`^<!--`),
 	regexp.MustCompile(`^<[?]`),
 	regexp.MustCompile(`^<![A-Za-z]`),
 	regexp.MustCompile(`^<!\[CDATA\[`),
-	regexp.MustCompile(`(?i)^</?(?:` + blockTags + `)(?:[ \t]|/?>|$)`),
-	regexp.MustCompile(`(?i)^(?:` + blockOpenTag + `|` + blockCloseTag + `)[ \t]*$`),
+	regexp.MustCompile(`^</?(?:` + asciiFoldPattern(blockTags) + `)(?:[ \t]|/?>|$)`),
+	regexp.MustCompile(`^(?:` + blockOpenTag + `|` + blockCloseTag + `)[ \t]*$`),
 }
 
-var reHTMLBlockCloseRawText = regexp.MustCompile(`(?i)</(?:script|pre|textarea|style)>`)
+var reHTMLBlockCloseRawText = regexp.MustCompile(`</(?:` + asciiFoldPattern(blockRawTextTags) + `)>`)
 
 // htmlBlockClose holds the end conditions for types 1–5; types 6 and 7 end at
 // a blank line instead. The TypeScript keeps five regexes; only type 1 is
@@ -390,6 +450,195 @@ func trailingBlankRunStart(b []byte) int {
 	}
 }
 
+// --- GFM tables (extension) -------------------------------------------------
+//
+// Everything the extension needs from a line is here: how a row splits into
+// cells, and whether a line is a delimiter row. Both are pure functions of one
+// line of text, which is what lets the block start below stay a few lines
+// long.
+//
+// Byte scanning throughout, as everywhere else in this file: every character
+// these functions test for — space, tab, `|`, `\`, `-`, `:` — is ASCII, and no
+// UTF-8 continuation byte can equal one, so a byte index is as good as the
+// canonical runtime's UTF-16 index. The cell text itself is only ever *sliced*
+// at those positions, never decoded character by character, so a multi-byte
+// rune inside a cell is carried through whole.
+
+// isASCIISpace is the set cmark_isspace trims from a table cell. Not
+// isJSSpace: this is ASCII whitespace only, which is what the extension
+// trims, and it is a byte test rather than a rune test for the reason above.
+func isASCIISpace(c byte) bool {
+	return 32 == c || (9 <= c && c <= 13)
+}
+
+func trimASCIISpace(s string) string {
+	start := 0
+	end := len(s)
+	for start < end && isASCIISpace(s[start]) {
+		start++
+	}
+	for end > start && isASCIISpace(s[end-1]) {
+		end--
+	}
+	return s[start:end]
+}
+
+// splitTableRow splits one row of a table into its cell texts.
+//
+// Cells are separated by *unescaped* pipes; a leading and a trailing pipe are
+// both optional and may differ from row to row, so they are stripped before
+// the split rather than producing empty cells at the ends. A trailing pipe is
+// only a delimiter if it is itself unescaped, which is why the backslash run
+// before it is counted.
+//
+// `\|` is resolved to a literal `|` *here*, as the extension requires ("include
+// a pipe in a cell's content by escaping it, including inside other inline
+// spans"). Doing it at split time is the whole point: the inline phase never
+// sees the backslash, so a code span in the cell yields a real pipe —
+// "b `\|` az" is "b <code>|</code> az", which no amount of unescaping *after*
+// inline parsing could produce. Every other backslash escape is left exactly as
+// written for the inline phase to handle in the usual way, so no cell text is
+// unescaped twice.
+//
+// Scanning skips the byte after any backslash, so `\\` cannot shield the pipe
+// that follows it: `a\\|b` is two cells, the first holding `a\\`. Skipping one
+// byte rather than one rune is deliberate and safe: the byte after a backslash
+// is either ASCII, in which case it is the escaped character, or a UTF-8 lead
+// byte, in which case the continuation bytes that follow it can equal neither
+// `\` nor `|` and are simply copied.
+//
+// A row of nothing but whitespace has no cells at all, which is how a header
+// candidate that is really empty fails the cell-count test instead of matching
+// a one-column delimiter row.
+func splitTableRow(line string) []string {
+	start := 0
+	end := len(line)
+	for start < end && isASCIISpace(line[start]) {
+		start++
+	}
+	for end > start && isASCIISpace(line[end-1]) {
+		end--
+	}
+
+	if start == end {
+		return nil
+	}
+
+	// Optional leading pipe.
+	if '|' == line[start] {
+		start++
+	}
+
+	// Optional trailing pipe — but an escaped one is content, not a delimiter.
+	if start < end && '|' == line[end-1] {
+		bs := end - 2
+		for start <= bs && '\\' == line[bs] {
+			bs--
+		}
+		// An even-length backslash run leaves the pipe unescaped.
+		if 0 == (end-2-bs)%2 {
+			end--
+		}
+	}
+
+	cells := make([]string, 0, 4)
+	// `cur` holds the parts of the current cell that have already been
+	// rewritten; `seg` is the start of the run since then, so the common case
+	// (no escapes) costs one slice per cell rather than one per byte. A
+	// strings.Builder rather than the TypeScript's `+=`, since Go has no rope.
+	var cur strings.Builder
+	seg := start
+	i := start
+
+	for i < end {
+		c := line[i]
+		if '\\' == c && i+1 < end {
+			if '|' == line[i+1] {
+				cur.WriteString(line[seg:i])
+				cur.WriteByte('|')
+				i += 2
+				seg = i
+			} else {
+				i += 2
+			}
+			continue
+		}
+		if '|' == c {
+			cells = append(cells, trimASCIISpace(joinCell(&cur, line[seg:i])))
+			cur.Reset()
+			i++
+			seg = i
+			continue
+		}
+		i++
+	}
+	cells = append(cells, trimASCIISpace(joinCell(&cur, line[seg:end])))
+
+	return cells
+}
+
+// joinCell is `cur + tail` where cur is usually empty — the no-escapes case,
+// which must not copy the tail.
+func joinCell(cur *strings.Builder, tail string) string {
+	if 0 == cur.Len() {
+		return tail
+	}
+	cur.WriteString(tail)
+	return cur.String()
+}
+
+// reTableDelimiterCell is the TypeScript's RE_TABLE_DELIMITER_CELL,
+// /^(:?)-+(:?)$/: a delimiter cell is hyphens with an optional leading and/or
+// trailing colon, and nothing else. One `+`, one space in the middle, one
+// stray character and the line is not a delimiter row.
+//
+// A plain RE2 pattern — no lookahead, no input-derived repeat count — so
+// unlike the fence matchers above it needs no hand-coding. Go's `^`/`$` match
+// at the ends of the text only, which is what the JavaScript literal means too.
+var reTableDelimiterCell = regexp.MustCompile(`^(:?)-+(:?)$`)
+
+// parseDelimiterRow reads a line as a table's delimiter row, returning one
+// alignment per column, or nil if it is not one.
+func parseDelimiterRow(line string) []TableAlign {
+	cells := splitTableRow(line)
+	if 0 == len(cells) {
+		return nil
+	}
+
+	align := make([]TableAlign, 0, len(cells))
+	for _, cell := range cells {
+		m := reTableDelimiterCell.FindStringSubmatch(cell)
+		if nil == m {
+			return nil
+		}
+		left := ":" == m[1]
+		right := ":" == m[2]
+		switch {
+		case left && right:
+			align = append(align, AlignCenter)
+		case left:
+			align = append(align, AlignLeft)
+		case right:
+			align = append(align, AlignRight)
+		default:
+			align = append(align, AlignNone)
+		}
+	}
+	return align
+}
+
+// maxAutocompletedCells caps the empty cells inserted to pad short body rows,
+// across a whole document — cmark-gfm's MAX_AUTOCOMPLETED_CELLS, and for the
+// same reason.
+//
+// Padding is the one place where a table's node count is not bounded by the
+// size of its source: a 10000-column header followed by 10000 one-cell rows is
+// 60 KB of input asking for 10^8 cells. Every other part of the extension is
+// linear in the input, so this single budget is what keeps the whole of it so.
+// Reaching it needs input that is already pathological; ordinary tables are
+// nowhere near.
+const maxAutocompletedCells = 0x80000
+
 // §5.3: two markers make the same list only if type, bullet and delimiter agree.
 func listsMatch(listData *ListData, itemData *ListData) bool {
 	if listData == nil || itemData == nil {
@@ -442,8 +691,17 @@ type blockHandler struct {
 	finalize   func(p *blockParser, block *MdNode)
 	canContain func(t NodeType) bool
 	// acceptsLines marks the leaves that accumulate raw text: code blocks,
-	// HTML blocks, paragraphs.
+	// HTML blocks, paragraphs, tables.
 	acceptsLines bool
+	// verbatim marks the blocks whose lines are literal text, so Appendix A
+	// step 2 does not look for block starts while one is the last matched
+	// container.
+	//
+	// True for exactly the two blocks the spec names — code blocks and HTML
+	// blocks. Paragraphs and GFM tables also accept lines, but a block start
+	// may still interrupt either: that is how `> bar` ends a table, and how
+	// `# h` ends a paragraph.
+	verbatim bool
 }
 
 func notItem(t NodeType) bool { return NodeItem != t }
@@ -463,6 +721,7 @@ func init() {
 			finalize:      func(*blockParser, *MdNode) {},
 			canContain:    notItem,
 			acceptsLines:  false,
+			verbatim:      false,
 		},
 
 		NodeList: {
@@ -494,6 +753,7 @@ func init() {
 			},
 			canContain:   func(t NodeType) bool { return NodeItem == t },
 			acceptsLines: false,
+			verbatim:     false,
 		},
 
 		NodeBlockQuote: {
@@ -513,6 +773,7 @@ func init() {
 			finalize:     func(*blockParser, *MdNode) {},
 			canContain:   notItem,
 			acceptsLines: false,
+			verbatim:     false,
 		},
 
 		NodeItem: {
@@ -553,6 +814,7 @@ func init() {
 			},
 			canContain:   notItem,
 			acceptsLines: false,
+			verbatim:     false,
 		},
 
 		NodeHeading: {
@@ -562,6 +824,7 @@ func init() {
 			finalize:      func(*blockParser, *MdNode) {},
 			canContain:    noChildren,
 			acceptsLines:  false,
+			verbatim:      false,
 		},
 
 		NodeThematicBreak: {
@@ -569,6 +832,7 @@ func init() {
 			finalize:      func(*blockParser, *MdNode) {},
 			canContain:    noChildren,
 			acceptsLines:  false,
+			verbatim:      false,
 		},
 
 		NodeCodeBlock: {
@@ -639,6 +903,7 @@ func init() {
 			},
 			canContain:   noChildren,
 			acceptsLines: true,
+			verbatim:     true,
 		},
 
 		NodeHTMLBlock: {
@@ -659,6 +924,7 @@ func init() {
 			},
 			canContain:   noChildren,
 			acceptsLines: true,
+			verbatim:     true,
 		},
 
 		NodeParagraph: {
@@ -678,7 +944,126 @@ func init() {
 			},
 			canContain:   noChildren,
 			acceptsLines: true,
+			verbatim:     false,
 		},
+
+		// GFM tables. The header row is built when the table opens (see
+		// tryOpenTable); every later line is accumulated raw and split into a
+		// body row at finalize, so the table behaves like a paragraph that
+		// happens to print as a grid — it ends at a blank line, and any block
+		// start interrupts it, because verbatim is false and canContain refuses
+		// everything the block starts can open.
+		NodeTable: {
+			continueBlock: func(p *blockParser, _ *MdNode) continueResult {
+				if p.blank {
+					return continueNotMatched
+				}
+				return continueMatched
+			},
+			finalize:     finalizeTable,
+			canContain:   func(t NodeType) bool { return NodeTableRow == t },
+			acceptsLines: true,
+			verbatim:     false,
+		},
+
+		// Rows and cells are created closed, and are never the parser's tip, so
+		// nothing here is reached in a normal parse. They exist so that
+		// handlerFor — which falls back to an inert leaf — cannot be the way a
+		// malformed tree surfaces.
+		NodeTableRow: {
+			continueBlock: func(*blockParser, *MdNode) continueResult { return continueNotMatched },
+			finalize:      func(*blockParser, *MdNode) {},
+			canContain:    func(t NodeType) bool { return NodeTableCell == t },
+			acceptsLines:  false,
+			verbatim:      false,
+		},
+
+		NodeTableCell: {
+			continueBlock: func(*blockParser, *MdNode) continueResult { return continueNotMatched },
+			finalize:      func(*blockParser, *MdNode) {},
+			canContain:    noChildren,
+			acceptsLines:  false,
+			verbatim:      false,
+		},
+	}
+}
+
+// addTableRow appends one row of `cells` to `table`, padded with empty cells or
+// truncated so that it is exactly as wide as the delimiter row said.
+//
+// Rows and cells are built closed: they are not part of the open spine, and the
+// line walk in incorporateLine must stop at the table itself.
+func addTableRow(
+	p *blockParser,
+	table *MdNode,
+	cells []string,
+	isHeader bool,
+	lineNumber int,
+	endColumn int,
+) {
+	width := len(table.TableAlign)
+
+	// See maxAutocompletedCells: padding is the only unbounded part of a table.
+	limit := width
+	if len(cells) < width {
+		budget := maxAutocompletedCells - p.autocompletedCells
+		padding := width - len(cells)
+		if padding > budget {
+			limit = len(cells)
+			if 0 < budget {
+				limit += budget
+			}
+		}
+		p.autocompletedCells += limit - len(cells)
+	}
+
+	// A row and its cells occupy one source line. Columns within that line are
+	// not tracked: nothing reads them (the AST drops sourcepos and the renderer
+	// ignores it), and threading offsets through the cell split to invent them
+	// would be cost with no reader. SourcePos is an array value here, so every
+	// assignment copies — the TypeScript has to rebuild the span per node
+	// because its sourcepos is a shared mutable array.
+	span := SourcePos{{lineNumber, 1}, {lineNumber, endColumn}}
+
+	row := NewNode(NodeTableRow)
+	row.SourcePos = span
+	row.IsHeaderRow = isHeader
+	row.Open = false
+	table.AppendChild(row)
+
+	for i := 0; i < limit; i++ {
+		cell := NewNode(NodeTableCell)
+		cell.SourcePos = span
+		cell.Open = false
+		// Consumed by the inline phase, exactly as a paragraph's content is.
+		if i < len(cells) {
+			cell.StringContent = []byte(cells[i])
+		}
+		row.AppendChild(cell)
+	}
+}
+
+// finalizeTable closes a table: it turns the raw lines the table accumulated
+// into body rows.
+//
+// The first accumulated line is the delimiter row that opened the table. It
+// carries no data — its alignments are already on the node — so it is skipped
+// here, which is also what keeps the source line numbering of the rows below it
+// straightforward: the table accepts exactly one line per source line, and a
+// blank line closes it, so there are no gaps.
+func finalizeTable(p *blockParser, table *MdNode) {
+	lines := bytes.Split(table.StringContent, []byte{'\n'})
+	table.StringContent = nil
+
+	// Line 0 is the delimiter row; the last element is the empty string after
+	// the final newline.
+	headerLine := table.SourcePos[0][0]
+	for i := 1; i < len(lines); i++ {
+		if 0 == len(lines[i]) {
+			continue
+		}
+		line := string(lines[i])
+		addTableRow(p, table, splitTableRow(line), false, headerLine+i+1, charCount(line))
 	}
 }
 
@@ -690,6 +1075,7 @@ var missingHandler = &blockHandler{
 	finalize:      func(*blockParser, *MdNode) {},
 	canContain:    noChildren,
 	acceptsLines:  false,
+	verbatim:      false,
 }
 
 func handlerFor(t NodeType) *blockHandler {
@@ -1001,6 +1387,20 @@ var blockStarts = []blockStart{
 		p.addChild(NodeCodeBlock, p.offset)
 		return startLeaf
 	},
+
+	// GFM table (extension) — a delimiter row directly under an open paragraph.
+	//
+	// Last, and the position is load-bearing in both directions. It must come
+	// after the setext underline so that `foo` over `---` stays an <h2> rather
+	// than becoming a one-column table, and after the list marker so that
+	// `- | -` stays a list item; cmark-gfm reaches its extensions from the same
+	// place, once every built-in start has refused the line.
+	func(p *blockParser, container *MdNode) startResult {
+		if p.tryOpenTable(container) {
+			return startLeaf
+		}
+		return startNone
+	},
 }
 
 // --- the parser -------------------------------------------------------------
@@ -1022,6 +1422,16 @@ type blockParser struct {
 	currentLine    string
 	lineNumber     int
 	lastLineLength int
+
+	// prevLineLength is the length of the line before the one lastLineLength
+	// measures.
+	//
+	// finalize dates a block's end from lastLineLength, which is right for
+	// every block that ends on the line before the current one. A GFM table
+	// splits its paragraph *two* lines back — the header row is the previous
+	// line and stays with the table, so the paragraph left behind ends on the
+	// line before that — and needs this one instead.
+	prevLineLength int
 
 	// offset is a byte index into currentLine (the TypeScript's is a UTF-16
 	// index; see the file header).
@@ -1047,6 +1457,40 @@ type blockParser struct {
 	indented bool
 	blank    bool
 
+	// autocompletedCells counts the empty cells inserted so far to pad short
+	// table rows. See maxAutocompletedCells.
+	autocompletedCells int
+
+	// lastAddedLine is the text addLine last appended, lastAddedColumn the
+	// column it started in, and lastAddedTo the block it went to.
+	//
+	// tryOpenTable needs the *last line* of an open paragraph, and reading it
+	// back out of StringContent is not affordable in the canonical runtime:
+	// that content is built by repeated `+=`, so every index into it flattens a
+	// fresh rope — O(n) per line, O(n²) over a paragraph whose every other line
+	// looks like a delimiter row, which untrusted input can write. Go appends
+	// to a []byte and would not pay that, but the field is carried across
+	// anyway: it is what makes the two runtimes the same function, and the
+	// alternative here — scanning back for the previous '\n' — is its own O(n)
+	// per line, with the same quadratic shape.
+	//
+	// The node is recorded alongside it because "the previous line went to this
+	// very paragraph" is the extension's own rule, not a cache-validity trick:
+	// a header row is by definition the line immediately above the delimiter
+	// row. If some other block took that line, there is no header row.
+	//
+	// The column is what a table's sourcepos starts at: a table opens on its
+	// header row, which is a line already consumed by the time the delimiter row
+	// identifies it, so its column has to have been recorded when it went past.
+	lastAddedLine   string
+	lastAddedColumn int
+	lastAddedTo     *MdNode
+
+	// maybeSpecial is step 2's fast reject, widened for a table's delimiter row
+	// when GFM is on. A field rather than a branch at the call site so that a
+	// GFM-off parse runs exactly the function it always did.
+	maybeSpecial func(ln string, pos int) bool
+
 	// MdNode has no field for the HTML block type, and the tree contract is not
 	// ours to change, so open HTML blocks carry it here.
 	htmlBlockTypes map[*MdNode]int
@@ -1055,6 +1499,10 @@ type blockParser struct {
 func newBlockParser(options Options) *blockParser {
 	doc := NewNode(NodeDocument)
 	doc.SourcePos = SourcePos{{1, 1}, {0, 0}}
+	fastReject := maybeSpecial
+	if options.GFM {
+		fastReject = maybeSpecialGFM
+	}
 	return &blockParser{
 		options:              options,
 		refmap:               RefMap{},
@@ -1063,6 +1511,8 @@ func newBlockParser(options Options) *blockParser {
 		oldtip:               doc,
 		lastMatchedContainer: doc,
 		allClosed:            true,
+		lastAddedColumn:      1,
+		maybeSpecial:         fastReject,
 		htmlBlockTypes:       map[*MdNode]int{},
 	}
 }
@@ -1160,15 +1610,22 @@ func (p *blockParser) findNextNonspace() {
 // addLine adds the rest of the current line to the tip's raw content.
 func (p *blockParser) addLine() {
 	tip := p.openTip()
+	// Taken before the tab fixup below moves offset, so a line's recorded
+	// column is the one addChild would report for that same position.
+	column := p.sourceColumn(p.offset) + 1 // offset 0 is column 1
+	var text string
 	if p.partiallyConsumedTab {
 		p.offset += 1 // step over the tab
 		charsToTab := 4 - (p.column % 4)
-		for i := 0; i < charsToTab; i++ {
-			tip.StringContent = append(tip.StringContent, ' ')
-		}
+		text = strings.Repeat(" ", charsToTab) + p.currentLine[p.offset:]
+	} else {
+		text = p.currentLine[p.offset:]
 	}
-	tip.StringContent = append(tip.StringContent, p.currentLine[p.offset:]...)
+	tip.StringContent = append(tip.StringContent, text...)
 	tip.StringContent = append(tip.StringContent, '\n')
+	p.lastAddedLine = text
+	p.lastAddedColumn = column
+	p.lastAddedTo = tip
 }
 
 // addChild opens a block of `tag` as a child of the tip, closing blocks that
@@ -1190,6 +1647,81 @@ func (p *blockParser) addChild(tag NodeType, offset int) *MdNode {
 	return node
 }
 
+// tryOpenTable is the GFM tables block start: read the current line as the
+// delimiter row of a table whose header row is the last line of the open
+// paragraph `container`.
+//
+// The two rows must agree on the number of cells; if they do not, there is no
+// table and the line is nothing special (spec example 6 keeps the whole thing a
+// paragraph). The header row is the paragraph's **last** line only, so a
+// paragraph that had earlier lines is split: those lines stay a paragraph —
+// finalized here, which is what still lets them contribute link reference
+// definitions — and the table is opened after it.
+//
+// On success the table is the tip and the caller returns "leaf started", so
+// step 3 adds the delimiter row itself to the table's raw content. It is
+// skipped again by finalizeTable; keeping it costs nothing and makes the
+// table's accumulated lines line up one-for-one with the source lines.
+func (p *blockParser) tryOpenTable(container *MdNode) bool {
+	if !p.options.GFM || p.indented || NodeParagraph != container.Type {
+		return false
+	}
+
+	align := parseDelimiterRow(p.currentLine[p.nextNonspace:])
+	if nil == align {
+		return false
+	}
+
+	// The header row is the line directly above, which is the line addLine
+	// last wrote — to this paragraph, or there is no header row at all.
+	if p.lastAddedTo != container {
+		return false
+	}
+	headerCells := splitTableRow(p.lastAddedLine)
+	if len(headerCells) != len(align) {
+		return false
+	}
+
+	p.closeUnmatchedBlocks()
+
+	headerLine := p.lineNumber - 1
+	headerColumn := p.lastAddedColumn
+	// StringContent ends with that same line plus the newline addLine put after
+	// it, so the header row starts this far in — no scan needed, and the
+	// content is only ever touched on the split branch, at most once per table.
+	content := container.StringContent
+	headerStart := len(content) - len(p.lastAddedLine) - 1
+	if 0 < headerStart {
+		// Split: everything above the header row stays a paragraph. It ends two
+		// lines back, not one, so finalize's default end column — the previous
+		// line's, which here is the header row's — would be somebody else's.
+		container.StringContent = content[:headerStart]
+		p.finalizeAt(container, headerLine-1, p.prevLineLength)
+	} else {
+		parent := container.Parent
+		container.Unlink()
+		p.tip = parent
+	}
+
+	table := p.addChild(NodeTable, p.nextNonspace)
+	// addChild both dated and placed the table from the delimiter row, and
+	// neither belongs to it: the table begins on the header row, one line above,
+	// in the column where *that* row's content starts. The two rows are indented
+	// independently, so the delimiter row's column is simply somebody else's —
+	// `  a | b` over `| - | -` starts in column 3, and `a | b` over `  | - | -`
+	// starts in column 1.
+	table.SourcePos[0][0] = headerLine
+	table.SourcePos[0][1] = headerColumn
+	table.TableAlign = align
+
+	// The row is measured over its own text, exactly as finalizeTable measures
+	// the body rows: lastLineLength counts the whole source line, container
+	// markers included, so inside a block quote it would end the header row two
+	// columns past where every body row of the same table ends.
+	addTableRow(p, table, headerCells, true, headerLine, charCount(p.lastAddedLine))
+	return true
+}
+
 // closeUnmatchedBlocks closes every block that failed its continuation
 // condition on this line.
 func (p *blockParser) closeUnmatchedBlocks() {
@@ -1208,10 +1740,20 @@ func (p *blockParser) closeUnmatchedBlocks() {
 }
 
 // finalize closes a block, records its end position, and runs its finalizer.
+// The end column is the previous line's length, which is where every block that
+// ends on lineNumber ends.
 func (p *blockParser) finalize(block *MdNode, lineNumber int) {
+	p.finalizeAt(block, lineNumber, p.lastLineLength)
+}
+
+// finalizeAt is finalize with the end column given rather than assumed. Only a
+// table's paragraph split needs it: that one closes a block two lines back,
+// where finalize's default is one line too recent. (The TypeScript spells this
+// as a defaulted third parameter on finalize itself.)
+func (p *blockParser) finalizeAt(block *MdNode, lineNumber int, endColumn int) {
 	above := block.Parent
 	block.Open = false
-	block.SourcePos[1] = [2]int{lineNumber, p.lastLineLength}
+	block.SourcePos[1] = [2]int{lineNumber, endColumn}
 	handlerFor(block.Type).finalize(p, block)
 	delete(p.htmlBlockTypes, block)
 	p.tip = above
@@ -1243,6 +1785,12 @@ func (p *blockParser) consumeReferenceDefs(block *MdNode) bool {
 func (p *blockParser) incorporateLine(ln string) {
 	allMatched := true
 	container := p.doc
+
+	// lastLineLength still measures the previous line here. Captured before
+	// anything can overwrite it — an HTML block closing mid-line does — and
+	// installed as prevLineLength at whichever exit updates lastLineLength, so
+	// the two always describe consecutive lines.
+	lengthBeforeThisLine := p.lastLineLength
 
 	p.oldtip = p.openTip()
 	p.offset = 0
@@ -1282,13 +1830,15 @@ func (p *blockParser) incorporateLine(ln string) {
 	p.allClosed = container == p.oldtip
 	p.lastMatchedContainer = container
 
-	// Step 2: look for new block starts under the last matched container.
-	matchedLeaf := NodeParagraph != container.Type && handlerFor(container.Type).acceptsLines
+	// Step 2: look for new block starts under the last matched container —
+	// unless its lines are literal text, in which case there is nothing to look
+	// for.
+	matchedLeaf := handlerFor(container.Type).verbatim
 
 	for !matchedLeaf {
 		p.findNextNonspace()
 
-		if !p.indented && !maybeSpecial(ln, p.nextNonspace) {
+		if !p.indented && !p.maybeSpecial(ln, p.nextNonspace) {
 			p.advanceNextNonspace()
 			break
 		}
@@ -1320,6 +1870,7 @@ func (p *blockParser) incorporateLine(ln string) {
 		// Lazy continuation (§5.1 rule 2): the markers are missing but an open
 		// paragraph absorbs the line anyway, and its containers stay open.
 		p.addLine()
+		p.prevLineLength = lengthBeforeThisLine
 		p.lastLineLength = charCount(ln)
 		return
 	}
@@ -1366,6 +1917,7 @@ func (p *blockParser) incorporateLine(ln string) {
 		p.addLine()
 	}
 
+	p.prevLineLength = lengthBeforeThisLine
 	p.lastLineLength = charCount(ln)
 }
 
@@ -1391,7 +1943,113 @@ func (p *blockParser) parse(input string) (*MdNode, RefMap) {
 		p.finalize(p.tip, length)
 	}
 
+	p.doc.GFM = p.options.GFM
+	if p.options.GFM {
+		markTaskListItems(p.doc)
+	}
+
 	return p.doc, p.refmap
+}
+
+// --- GFM task list items ----------------------------------------------------
+
+// taskListMarker implements the TypeScript's RE_TASK_LIST_MARKER,
+// /^ *\[([ \tXx])\][ \t]+/: optional spaces, `[`, either a whitespace
+// character or `x`/`X`, `]`, and then at least one whitespace character before
+// any other content. It returns the character between the brackets and the
+// byte length of the whole marker.
+//
+// The trailing whitespace is required by the extension ("…and at least one
+// whitespace character before any other content"), so `- [x]` with nothing
+// after it is an ordinary item whose text is `[x]`. It is matched as a space
+// or a tab rather than as any whitespace: a line ending there would mean the
+// content starts on the *next* line, and consuming it would swallow the
+// paragraph's first soft break.
+//
+// Hand-coded rather than compiled as a regexp, for the reason the fence
+// patterns above are: this runs once per list item, and a match that is only
+// ever attempted at offset 0 is the only shape that keeps a document of many
+// items linear.
+func taskListMarker(s []byte) (state byte, length int, ok bool) {
+	i := 0
+	for i < len(s) && ' ' == s[i] {
+		i++
+	}
+	if i >= len(s) || '[' != s[i] {
+		return 0, 0, false
+	}
+	i++
+	if i >= len(s) {
+		return 0, 0, false
+	}
+	state = s[i]
+	if ' ' != state && '\t' != state && 'x' != state && 'X' != state {
+		return 0, 0, false
+	}
+	i++
+	if i >= len(s) || ']' != s[i] {
+		return 0, 0, false
+	}
+	i++
+
+	spaces := i
+	for i < len(s) && (' ' == s[i] || '\t' == s[i]) {
+		i++
+	}
+	if i == spaces {
+		return 0, 0, false
+	}
+	return state, i, true
+}
+
+// taskListContainers is the set of node types markTaskListItems descends into.
+var taskListContainers = map[NodeType]bool{
+	NodeDocument:   true,
+	NodeBlockQuote: true,
+	NodeList:       true,
+	NodeItem:       true,
+}
+
+// markTaskListItems implements GFM task list items: mark every item whose
+// first block is a paragraph beginning with a task list item marker, and
+// consume the marker so it does not survive into the text.
+//
+// Run at the end of the block phase, over StringContent — before the inline
+// phase has seen it. That is what makes the marker win over anything the
+// inline scanner would otherwise make of the brackets: with a `[x]: /url`
+// definition in the document, `- [x] foo` is still a task item rather than a
+// link. It also means the item's checked state is settled before ast.go or
+// html.go looks at the tree.
+//
+// Iterative rather than recursive: container nesting depth is chosen by the
+// input, and strings.Repeat("> ", 20000) is a document this parser otherwise
+// handles.
+func markTaskListItems(doc *MdNode) {
+	stack := []*MdNode{doc}
+
+	for 0 < len(stack) {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		if NodeItem == node.Type {
+			first := node.FirstChild
+			if nil != first && NodeParagraph == first.Type {
+				if state, length, ok := taskListMarker(first.StringContent); ok {
+					// Whitespace between the brackets is unchecked; `x`/`X` is
+					// checked.
+					node.Checked = ' ' != state && '\t' != state
+					node.HasChecked = true
+					first.StringContent = first.StringContent[length:]
+				}
+			}
+		}
+
+		if taskListContainers[node.Type] {
+			for c := node.LastChild; nil != c; c = c.Prev {
+				stack = append(stack, c)
+			}
+		}
+	}
 }
 
 // parseBlocks runs phase 1: build the block tree and collect link reference

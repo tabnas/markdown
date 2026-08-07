@@ -21,7 +21,7 @@
 // The renderer reads only the finished tree — never `stringContent`, which
 // the inline phase has already consumed.
 
-import type { MdNode } from './node.ts'
+import type { MdNode, TableAlign } from './node.ts'
 import { escapeXml, normalizeURI } from './common.ts'
 import { resolveOptions } from './options.ts'
 import type { ParserOptions } from './options.ts'
@@ -30,14 +30,51 @@ import type { ParserOptions } from './options.ts'
 type Attr = [string, string]
 
 /**
+ * GFM's `tagfilter` extension. These nine tags change how the *rest* of a
+ * document is interpreted (everything after `<xmp>` or `<plaintext>` stops
+ * being markup at all), so GFM neutralises them by rewriting the leading `<`
+ * as `&lt;` — opening and closing, in any case. Every other tag still passes
+ * through verbatim, as CommonMark requires.
+ *
+ * This is purely a rendering concern: nothing rewrites the node, so the
+ * literal in the tree and the `value` in the AST stay exactly as written.
+ *
+ * The tag name must be followed by whitespace, `/`, `>` or the end of the
+ * text, so `<scriptlet>` and `<titles>` are untouched.
+ */
+const RE_DISALLOWED_TAG =
+  /<\/?(?:title|textarea|style|xmp|iframe|noembed|noframes|script|plaintext)(?=[\t\n\f\r />]|$)/gi
+
+function filterDisallowedTags(html: string): string {
+  // Cheap reject: the vast majority of raw HTML holds none of these.
+  if (-1 === html.indexOf('<')) return html
+  return html.replace(RE_DISALLOWED_TAG, (m) => '&lt;' + m.slice(1))
+}
+
+/**
  * Render `doc` (a tree that has been through both parse phases) as HTML.
  *
- * Only `options.breaks` affects the output: it turns soft line breaks into
- * hard ones. `gfm` is a parse-time concern — by the time a `del` node exists
- * the renderer just prints it.
+ * Two options reach the renderer. `breaks` turns soft line breaks into hard
+ * ones. `gfm` selects one thing only — the disallowed-raw-HTML filter, which
+ * the extension defines at render time rather than at parse time. Everything
+ * else GFM adds is settled by then: by the time a `del` node or an item's
+ * `checked` state exists, the renderer just prints it.
+ *
+ * `gfm` defaults to whatever the *document* was parsed with rather than to the
+ * package default, so `renderHTML(tree)` on a `gfm:false` parse renders plain
+ * CommonMark. An explicit `options.gfm` still wins.
  */
 export function renderHTML(doc: MdNode, options?: Partial<ParserOptions>): string {
-  const opts = resolveOptions(options)
+  const opts = resolveOptions({
+    gfm: options?.gfm ?? doc.gfm,
+    breaks: options?.breaks,
+  })
+
+  /** Raw HTML as written, minus the tags GFM's tagfilter neutralises. */
+  const rawHtml = (literal: string | null): string => {
+    const s = null === literal ? '' : literal
+    return opts.gfm ? filterDisallowedTags(s) : s
+  }
 
   // §6.9 soft line breaks: rendered as a newline, or as a hard break when the
   // caller asks for `breaks`.
@@ -73,6 +110,14 @@ export function renderHTML(doc: MdNode, options?: Partial<ParserOptions>): strin
     lit(s + '>')
   }
 
+  // GFM tables carry their alignment once, on the table, but it is rendered
+  // per cell. Tracking the current table's array and the current row's column
+  // as the walk goes is what keeps that an O(1) lookup instead of counting a
+  // cell's previous siblings — and a table can never contain another table
+  // (its cells hold inlines only), so one of each is enough.
+  let tableAlign: TableAlign[] = []
+  let cellIndex = 0
+
   const walker = doc.walker()
   let event = walker.next()
 
@@ -89,18 +134,38 @@ export function renderHTML(doc: MdNode, options?: Partial<ParserOptions>): strin
         // contents". The paragraph's grandparent is the list — a paragraph
         // whose grandparent is a list is necessarily an item's direct child.
         const grandparent = null === node.parent ? null : node.parent.parent
-        if (
+        const tight =
           null !== grandparent &&
           'list' === grandparent.type &&
           null !== grandparent.listData &&
           grandparent.listData.tight
-        ) {
-          break
-        }
+
         if (entering) {
-          cr()
-          tag('p')
-        } else {
+          if (!tight) {
+            cr()
+            tag('p')
+          }
+          // GFM task list item. The block phase consumed the `[x]` marker and
+          // left the state on the item, so the checkbox is written here, at
+          // the head of the item's first paragraph: directly after `<li>` when
+          // the list is tight, and inside the `<p>` when it is loose. The
+          // trailing space is the separator the extension's own output shows
+          // between the checkbox and the item text.
+          const item = node.parent
+          if (
+            null !== item &&
+            'item' === item.type &&
+            item.firstChild === node &&
+            null !== item.checked
+          ) {
+            const attrs: Attr[] = []
+            if (item.checked) attrs.push(['checked', ''])
+            attrs.push(['disabled', ''])
+            attrs.push(['type', 'checkbox'])
+            tag('input', attrs)
+            lit(' ')
+          }
+        } else if (!tight) {
           tag('/p')
           cr()
         }
@@ -190,11 +255,71 @@ export function renderHTML(doc: MdNode, options?: Partial<ParserOptions>): strin
       }
 
       case 'html_block':
-        // §4.6: raw HTML passes through verbatim, unescaped.
+        // §4.6: raw HTML passes through verbatim, unescaped — except for the
+        // nine tags GFM's tagfilter neutralises.
         cr()
-        lit(null === node.literal ? '' : node.literal)
+        lit(rawHtml(node.literal))
         cr()
         break
+
+      // --- GFM tables ---
+      //
+      // `<thead>` and `<tbody>` have no node of their own: the header row is
+      // the one row flagged as such, and the body is every row after it. That
+      // is also why `<tbody>` is written by the *first* body row rather than
+      // unconditionally — a table with no body rows must have no `<tbody>` at
+      // all.
+
+      case 'table':
+        if (entering) {
+          tableAlign = node.tableAlign ?? []
+          cr()
+          tag('table')
+        } else {
+          cr()
+          tag('/table')
+        }
+        cr()
+        break
+
+      case 'table_row': {
+        const header = node.isHeaderRow
+        if (entering) {
+          if (header) {
+            cr()
+            tag('thead')
+          } else if (null === node.prev || node.prev.isHeaderRow) {
+            cr()
+            tag('tbody')
+          }
+          cr()
+          tag('tr')
+          cellIndex = 0
+        } else {
+          cr()
+          tag('/tr')
+          cr()
+          if (header) tag('/thead')
+          else if (null === node.next) tag('/tbody')
+        }
+        cr()
+        break
+      }
+
+      case 'table_cell': {
+        const name = null !== node.parent && node.parent.isHeaderRow ? 'th' : 'td'
+        if (entering) {
+          const attrs: Attr[] = []
+          const align = tableAlign[cellIndex]
+          if (undefined !== align && null !== align) attrs.push(['align', align])
+          cellIndex += 1
+          tag(name, attrs)
+        } else {
+          tag('/' + name)
+          cr()
+        }
+        break
+      }
 
       case 'text':
         lit(escapeXml(null === node.literal ? '' : node.literal))
@@ -216,7 +341,7 @@ export function renderHTML(doc: MdNode, options?: Partial<ParserOptions>): strin
         break
 
       case 'html_inline':
-        lit(null === node.literal ? '' : node.literal)
+        lit(rawHtml(node.literal))
         break
 
       case 'emph':

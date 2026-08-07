@@ -36,15 +36,26 @@ import {
   unescapeString,
 } from './common.ts'
 
+const C_TAB = 9
 const C_NEWLINE = 10
+const C_VTAB = 11
+const C_FORMFEED = 12
+const C_CARRIAGE_RETURN = 13
 const C_SPACE = 32
 const C_BANG = 33
 const C_AMPERSAND = 38
 const C_OPEN_PAREN = 40
 const C_CLOSE_PAREN = 41
 const C_ASTERISK = 42
+const C_PLUS = 43
+const C_COMMA = 44
+const C_HYPHEN = 45
+const C_PERIOD = 46
 const C_COLON = 58
+const C_SEMICOLON = 59
 const C_LESSTHAN = 60
+const C_QUESTION = 63
+const C_AT = 64
 const C_OPEN_BRACKET = 91
 const C_BACKSLASH = 92
 const C_CLOSE_BRACKET = 93
@@ -1000,9 +1011,458 @@ class InlineParser {
   }
 }
 
+// --- GFM extended autolinks (autolink literals) -----------------------------
+//
+// GFM recognises `www.x.com`, `https://x.com` and `a@x.com` without the `<…>`
+// CommonMark requires. This runs as a post-pass over the finished inline tree
+// rather than as another branch of the scan above, which is how cmark-gfm does
+// it and is the only shape that keeps 652/652 safe: the scanner that decides
+// code spans, raw HTML, emphasis and links is not touched at all, and an
+// autolink can therefore never win against a construct CommonMark says comes
+// first.
+//
+// The pass rewrites `text` nodes into text/link/text runs. It does not descend
+// into `link` (links may not contain links) or `image` (its children are the
+// alt text), and `code`/`html_inline` are leaves it never looks inside.
+
+/** RFC 1035's limit on a fully-qualified domain name. See `scanDomainEnd`. */
+const MAX_AUTOLINK_DOMAIN = 253
+
+/** RFC 5321's limit on the local part of an address, before the `@`. */
+const MAX_EMAIL_LOCAL = 64
+
+/** The three schemes the extension recognises without angle brackets. */
+const AUTOLINK_SCHEMES = ['https://', 'http://', 'ftp://']
+
+function isAsciiAlnum(c: number): boolean {
+  return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+}
+
+function isAutolinkSpace(c: number): boolean {
+  return (
+    C_SPACE === c ||
+    C_TAB === c ||
+    C_NEWLINE === c ||
+    C_VTAB === c ||
+    C_FORMFEED === c ||
+    C_CARRIAGE_RETURN === c
+  )
+}
+
+/** A domain segment holds alphanumerics, `_` and `-`; `.` separates them. */
+function isDomainChar(c: number): boolean {
+  return isAsciiAlnum(c) || C_UNDERSCORE === c || C_HYPHEN === c || C_PERIOD === c
+}
+
+/** Before the `@`: alphanumerics and `.`, `-`, `_`, `+`. */
+function isEmailLocalChar(c: number): boolean {
+  return isAsciiAlnum(c) || C_PERIOD === c || C_HYPHEN === c || C_UNDERSCORE === c || C_PLUS === c
+}
+
+/**
+ * "All such recognized autolinks can only come at the beginning of a line,
+ * after whitespace, or any of the delimiting characters `*`, `_`, `~`, `(`."
+ *
+ * Offset 0 has no preceding character in `s` at all, so the caller answers for
+ * it through `atStart` — see `startsAfterDelimiter`.
+ */
+function isAutolinkStart(s: string, i: number, atStart: boolean): boolean {
+  if (0 === i) return atStart
+  const c = s.charCodeAt(i - 1)
+  return (
+    isAutolinkSpace(c) ||
+    C_ASTERISK === c ||
+    C_UNDERSCORE === c ||
+    C_TILDE === c ||
+    C_OPEN_PAREN === c
+  )
+}
+
+/**
+ * Whether offset 0 of a text node may begin an autolink, given the sibling in
+ * front of it.
+ *
+ * The rule above is about the source character immediately before the match,
+ * and by the time this pass runs the tree no longer carries source offsets —
+ * but the previous sibling's *type* names that character exactly:
+ *
+ *   * `emph` and `strong` end on the `*` or `_` that closed them, and `del` on
+ *     its second `~`. All three are delimiters the rule allows, so
+ *     `*a*www.b.com` links.
+ *   * `code` ends on a backtick, `link` and `image` on `)`, `]` or `>`, and
+ *     `html_inline` on `>`. None are delimiters, so `` `x`www.a.com ``,
+ *     `[l](/u)www.a.com` and `<b>www.a.com` do not link.
+ *   * a `softbreak` or `linebreak` puts offset 0 at the beginning of a line,
+ *     and so does having no previous sibling — that is the first inline of the
+ *     block, or of the emphasis span this pass descended into.
+ *
+ * A `text` node never appears here: `linkifyChildren` merges every run of
+ * adjacent text siblings before handing the first of them over.
+ */
+function startsAfterDelimiter(prev: MdNode | null): boolean {
+  if (null === prev) return true
+  const t = prev.type
+  return 'softbreak' === t || 'linebreak' === t || 'emph' === t || 'strong' === t || 'del' === t
+}
+
+/** ASCII case-insensitive comparison against an already-lowercase literal. */
+function matchesIgnoreCase(s: string, at: number, lower: string): boolean {
+  if (at + lower.length > s.length) return false
+  for (let k = 0; k < lower.length; k++) {
+    let c = s.charCodeAt(at + k)
+    if (c >= 65 && c <= 90) c += 32
+    if (c !== lower.charCodeAt(k)) return false
+  }
+  return true
+}
+
+/**
+ * End of the run of domain characters at `from`, capped at
+ * `MAX_AUTOLINK_DOMAIN`.
+ *
+ * The cap is what keeps this pass linear. `_` both continues a domain and
+ * introduces a valid autolink start, so without a bound an input like
+ * `'_www.a_b.c'.repeat(n)` gives every underscore a candidate whose domain run
+ * reaches the end of the text — quadratic. Anything past the cap is still
+ * scanned, just as the path rather than as the domain, and no real domain
+ * comes near it.
+ */
+function scanDomainEnd(s: string, from: number): number {
+  const max = Math.min(s.length, from + MAX_AUTOLINK_DOMAIN)
+  let i = from
+  while (i < max && isDomainChar(s.charCodeAt(i))) i++
+  return i
+}
+
+/**
+ * A valid domain: at least one period, and no underscore in either of the last
+ * two segments. `from`..`to` must already be a run of domain characters.
+ */
+function isValidDomain(s: string, from: number, to: number): boolean {
+  if (to <= from) return false
+  let periods = 0
+  let underscoresInLast = 0
+  let underscoresInPrev = 0
+  for (let i = from; i < to; i++) {
+    const c = s.charCodeAt(i)
+    if (C_UNDERSCORE === c) {
+      underscoresInLast++
+    } else if (C_PERIOD === c) {
+      underscoresInPrev = underscoresInLast
+      underscoresInLast = 0
+      periods++
+    }
+  }
+  return 0 < periods && 0 === underscoresInLast && 0 === underscoresInPrev
+}
+
+/**
+ * "Extended autolink path validation" — pull the end of the match back off
+ * trailing characters that read as sentence punctuation rather than as part of
+ * a URL. One loop rather than three passes, because dropping a `)` can expose
+ * a `.` and vice versa.
+ *
+ *   * `?` `!` `.` `,` `:` `*` `_` `~` are dropped wherever they trail;
+ *   * a trailing `)` is dropped only while the match holds more `)` than `(`,
+ *     so `(www.a.com/x_(y))` keeps its inner pair and loses the outer one;
+ *   * a trailing `;` preceded by something shaped like an entity reference
+ *     takes the whole `&…;` with it.
+ *
+ * The parenthesis counts are taken once and then maintained, not recomputed
+ * per drop: a deeply parenthesised URL is otherwise quadratic in its own
+ * length.
+ */
+function trimAutolinkEnd(s: string, start: number, end: number): number {
+  let opening = -1
+  let closing = -1
+
+  while (start < end) {
+    const c = s.charCodeAt(end - 1)
+
+    if (
+      C_QUESTION === c ||
+      C_BANG === c ||
+      C_PERIOD === c ||
+      C_COMMA === c ||
+      C_COLON === c ||
+      C_ASTERISK === c ||
+      C_UNDERSCORE === c ||
+      C_TILDE === c
+    ) {
+      end--
+      continue
+    }
+
+    if (C_CLOSE_PAREN === c) {
+      if (opening < 0) {
+        opening = 0
+        closing = 0
+        for (let i = start; i < end; i++) {
+          const d = s.charCodeAt(i)
+          if (C_OPEN_PAREN === d) opening++
+          else if (C_CLOSE_PAREN === d) closing++
+        }
+      }
+      if (closing <= opening) return end
+      closing--
+      end--
+      continue
+    }
+
+    if (C_SEMICOLON === c) {
+      // `&` followed by one or more alphanumerics, then this `;`.
+      let j = end - 2
+      while (j > start && isAsciiAlnum(s.charCodeAt(j))) j--
+      if (j < end - 2 && C_AMPERSAND === s.charCodeAt(j)) {
+        end = j
+        continue
+      }
+      return end
+    }
+
+    return end
+  }
+
+  return end
+}
+
+/** One recognised autolink literal: `s.slice(start, end)` linking to `href`. */
+type AutolinkMatch = { start: number; end: number; href: string }
+
+/**
+ * Every autolink literal in one text run, left to right and non-overlapping.
+ * Returns null when there is nothing to do, which is the overwhelmingly common
+ * case and saves the caller an array and a splice.
+ */
+function scanAutolinks(s: string, atStart: boolean): AutolinkMatch[] | null {
+  const len = s.length
+  let out: AutolinkMatch[] | null = null
+
+  // The maximal run of non-space, non-`<` characters containing the current
+  // position — "zero or more non-space non-`<` characters may follow" the
+  // domain. Cached because candidates are tried left to right, so each run is
+  // scanned once however many candidates start inside it.
+  let runStart = -1
+  let runEnd = -1
+
+  let i = 0
+  let lastEnd = 0
+
+  while (i < len) {
+    const c = s.charCodeAt(i)
+
+    // --- email: found by its `@`, then rewound to the start of the local part
+    if (C_AT === c) {
+      // The rewind is bounded to keep this pass linear, and RFC 5321 bounds a
+      // local part in the same place anyway, so the cap costs no real address.
+      const capped = i - MAX_EMAIL_LOCAL
+      const floor = Math.max(lastEnd, capped)
+      let k = i
+      while (k > floor && isEmailLocalChar(s.charCodeAt(k - 1))) k--
+
+      // Stopping *on* the cap is not the same as finding a boundary. If the
+      // character just outside it still belongs to the local part, the local
+      // part is longer than the cap allows and there is no address here at
+      // all: accepting the match would link the 64-character tail of a longer
+      // run and leave the rest as text, inventing an address the source never
+      // wrote. `k` can only reach `capped` when the cap, rather than `lastEnd`,
+      // is what ended the loop; and `k` of 0 is the start of the string, where
+      // there is no character outside the cap to disqualify anything.
+      if (k === capped && 0 < k && isEmailLocalChar(s.charCodeAt(k - 1))) {
+        i++
+        continue
+      }
+
+      if (k < i && isAutolinkStart(s, k, atStart)) {
+        // After the `@`: alphanumerics, `.`, `-`, `_`; at least one period; a
+        // trailing `.` is not part of the address, and a trailing `-` or `_`
+        // invalidates the whole thing.
+        let end = i + 1
+        while (end < len && isDomainChar(s.charCodeAt(end))) end++
+        while (end > i + 1 && C_PERIOD === s.charCodeAt(end - 1)) end--
+
+        const last = end > i + 1 ? s.charCodeAt(end - 1) : 0
+        if (
+          end > i + 1 &&
+          C_HYPHEN !== last &&
+          C_UNDERSCORE !== last &&
+          hasPeriod(s, i + 1, end)
+        ) {
+          if (null === out) out = []
+          out.push({ start: k, end, href: 'mailto:' + s.slice(k, end) })
+          lastEnd = end
+          i = end
+          continue
+        }
+      }
+      i++
+      continue
+    }
+
+    // --- www / scheme: both need a valid start and a valid domain
+    if (!couldStartUrl(c) || !isAutolinkStart(s, i, atStart)) {
+      i++
+      continue
+    }
+
+    let domainStart = -1
+    let prefix = ''
+    if (matchesIgnoreCase(s, i, 'www.')) {
+      // The domain of a `www.` autolink includes the `www.` itself, so the
+      // required period is already there and `www.foo_bar.com` is rejected on
+      // the same footing as `http://foo_bar.com`.
+      domainStart = i
+      prefix = 'http://'
+    } else {
+      for (const scheme of AUTOLINK_SCHEMES) {
+        if (matchesIgnoreCase(s, i, scheme)) {
+          domainStart = i + scheme.length
+          break
+        }
+      }
+    }
+    if (0 > domainStart) {
+      i++
+      continue
+    }
+
+    const domainEnd = scanDomainEnd(s, domainStart)
+    // Checked before the run scan below, so a candidate that cannot possibly
+    // match costs only its own domain run.
+    if (!isValidDomain(s, domainStart, domainEnd)) {
+      i++
+      continue
+    }
+
+    if (i >= runEnd || i < runStart) {
+      runStart = i
+      runEnd = i
+      while (runEnd < len) {
+        const d = s.charCodeAt(runEnd)
+        if (isAutolinkSpace(d) || C_LESSTHAN === d) break
+        runEnd++
+      }
+    }
+
+    const end = trimAutolinkEnd(s, i, runEnd)
+    // Trailing punctuation can eat back into the domain — `www.commonmark.org.`
+    // loses its last period — so the domain is validated again over what
+    // actually survived.
+    if (end <= domainStart || !isValidDomain(s, domainStart, Math.min(domainEnd, end))) {
+      i++
+      continue
+    }
+
+    if (null === out) out = []
+    out.push({ start: i, end, href: prefix + s.slice(i, end) })
+    lastEnd = end
+    i = end
+  }
+
+  return out
+}
+
+/** `www.`, `http://`, `https://` and `ftp://` all start with one of these. */
+function couldStartUrl(c: number): boolean {
+  return 119 === c || 87 === c || 104 === c || 72 === c || 102 === c || 70 === c
+}
+
+function hasPeriod(s: string, from: number, to: number): boolean {
+  for (let i = from; i < to; i++) {
+    if (C_PERIOD === s.charCodeAt(i)) return true
+  }
+  return false
+}
+
+/** Replace one text node with the text/link/text run its literal implies. */
+function linkifyTextNode(node: MdNode): void {
+  const s = node.literal ?? ''
+  const matches = scanAutolinks(s, startsAfterDelimiter(node.prev))
+  if (null === matches) return
+
+  let at = 0
+  for (const m of matches) {
+    if (at < m.start) node.insertBefore(text(s.slice(at, m.start)))
+    const link = new MdNode('link')
+    // Not percent-encoded here, for the same reason as parseLinkDestination:
+    // encoding belongs to the renderer, and the AST promises the decoded form.
+    link.destination = m.href
+    link.title = null
+    link.appendChild(text(s.slice(m.start, m.end)))
+    node.insertBefore(link)
+    at = m.end
+  }
+  if (at < s.length) node.insertBefore(text(s.slice(at)))
+
+  node.unlink()
+}
+
+/**
+ * Autolink the text children of one container, and report the child containers
+ * still to visit.
+ */
+function linkifyChildren(parent: MdNode, pending: MdNode[]): void {
+  let child: MdNode | null = parent.firstChild
+
+  while (null !== child) {
+    if ('text' === child.type) {
+      // Consolidate the run of adjacent text nodes first. The scan above emits
+      // a node per delimiter run and per character it could not claim, so
+      // `a.b-c_d@a.b` arrives as three siblings and the address is only
+      // visible once they are one string. Merging changes nothing downstream:
+      // the renderer writes text literals back to back, and the AST projection
+      // already coalesces adjacent runs.
+      let sibling: MdNode | null = child.next
+      if (null !== sibling && 'text' === sibling.type) {
+        let merged = child.literal ?? ''
+        while (null !== sibling && 'text' === sibling.type) {
+          merged += sibling.literal ?? ''
+          const next: MdNode | null = sibling.next
+          sibling.unlink()
+          sibling = next
+        }
+        child.literal = merged
+      }
+
+      const after: MdNode | null = child.next
+      linkifyTextNode(child)
+      child = after
+      continue
+    }
+
+    // No links inside links (§6.3), and an image's children are its alt text.
+    if ('link' !== child.type && 'image' !== child.type && child.isContainer()) {
+      pending.push(child)
+    }
+    child = child.next
+  }
+}
+
+/**
+ * Recognise GFM autolink literals throughout one finished block's inlines.
+ *
+ * Iterative rather than recursive: emphasis nests as deeply as the input says.
+ */
+export function linkifyAutolinks(block: MdNode): void {
+  const pending: MdNode[] = [block]
+  while (0 < pending.length) {
+    linkifyChildren(pending.pop() as MdNode, pending)
+  }
+}
+
+/** Blocks whose raw content the block phase left for this phase to parse. */
+const INLINE_CONTENT_BLOCKS: Record<string, true> = {
+  paragraph: true,
+  heading: true,
+  // GFM table cells hold inlines and nothing else — "block-level elements
+  // cannot be inserted in a table" — so a cell is parsed exactly as a
+  // paragraph is, autolink post-pass included.
+  table_cell: true,
+}
+
 /**
  * Phase 2 entry point: walk the block tree and parse the string content of
- * every paragraph and heading into inline children.
+ * every paragraph, heading and table cell into inline children.
  */
 export function parseInlines(doc: MdNode, refmap: RefMap, options: ParserOptions): void {
   const parser = new InlineParser(refmap, options)
@@ -1011,8 +1471,9 @@ export function parseInlines(doc: MdNode, refmap: RefMap, options: ParserOptions
   let ev = walker.next()
   while (null !== ev) {
     const node = ev.node
-    if (!ev.entering && ('paragraph' === node.type || 'heading' === node.type)) {
+    if (!ev.entering && true === INLINE_CONTENT_BLOCKS[node.type]) {
       parser.parse(node)
+      if (options.gfm) linkifyAutolinks(node)
     }
     ev = walker.next()
   }

@@ -131,8 +131,8 @@ describe('markdown — prose', () => {
           {
             type: 'list', ordered: false, start: null, spread: false,
             children: [
-              { type: 'listItem', spread: false, children: [{ type: 'paragraph', children: [{ type: 'text', value: 'item 1' }] }] },
-              { type: 'listItem', spread: false, children: [{ type: 'paragraph', children: [{ type: 'text', value: 'item 2' }] }] },
+              { type: 'listItem', spread: false, checked: null, children: [{ type: 'paragraph', children: [{ type: 'text', value: 'item 1' }] }] },
+              { type: 'listItem', spread: false, checked: null, children: [{ type: 'paragraph', children: [{ type: 'text', value: 'item 2' }] }] },
             ]
           }
         ]
@@ -146,7 +146,7 @@ describe('markdown — prose', () => {
     assert.equal(doc.children[0].ordered, false)
     assert.equal(doc.children[0].children.length, 3)
     assert.deepEqual(doc.children[0].children[0], {
-      type: 'listItem', spread: false,
+      type: 'listItem', spread: false, checked: null,
       children: [{ type: 'paragraph', children: [{ type: 'text', value: 'a' }] }]
     })
   })

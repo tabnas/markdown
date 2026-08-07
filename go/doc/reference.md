@@ -5,6 +5,13 @@ tree and the HTML output rules. For a guided introduction start with the
 [tutorial](tutorial.md); for task recipes see the [how-to guide](guide.md); for design
 rationale see [concepts](concepts.md).
 
+**Conformant to CommonMark 0.31.2**: 652/652 examples, all 26 sections, in this runtime
+and in the TypeScript one. Substantiated by the vendored suite at
+`test/commonmark/spec.json`, run by `go test -run TestCommonMarkSpec -v ./...` from `go/`.
+The five GFM extensions are complete: 24/24 on the vendored extension suite at
+`test/gfm/spec.json`, run by `go test -run TestGFMSpec -v ./...`. See
+[Conformance](#conformance).
+
 ## Outputs
 
 The package has two documented outputs. The AST is the primary one; HTML is opt-in.
@@ -32,10 +39,13 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("# Hello\n\nHello *world*", opts))
 ```
 
 **The HTML is not sanitized.** Raw HTML blocks and inline tags pass through verbatim, as
-CommonMark specifies. GFM's disallowed-raw-HTML filter is not implemented.
+CommonMark specifies. The one exception is GFM's disallowed-raw-HTML filter, which is
+applied when `GFM` is on and rewrites the leading `<` of nine tag names.
 
 ```go
 fmt.Printf("%q\n", tabnasmarkdown.ToHTML("<script>alert(1)</script>", opts))
+// "&lt;script>alert(1)&lt;/script>\n"
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("<script>alert(1)</script>", tabnasmarkdown.Options{GFM: false}))
 // "<script>alert(1)</script>\n"
 ```
 
@@ -56,9 +66,9 @@ import tabnasmarkdown "github.com/tabnas/markdown/go"
 |---|---|
 | Module | `github.com/tabnas/markdown/go` |
 | Package | `tabnasmarkdown` |
-| `Version` | `"0.4.2"` |
+| `Version` | `"0.5.0"` |
 | `go` directive | `1.24.7` |
-| Requirements | `github.com/tabnas/parser/go v0.4.1` — the bare engine — and nothing else |
+| Requirements | `github.com/tabnas/parser/go v0.6.0` — the bare engine — and nothing else |
 | Indirect requirements | none |
 | License | MIT |
 
@@ -69,7 +79,7 @@ module github.com/tabnas/markdown/go
 
 go 1.24.7
 
-require github.com/tabnas/parser/go v0.4.1
+require github.com/tabnas/parser/go v0.6.0
 ```
 
 ## Files
@@ -81,9 +91,9 @@ require github.com/tabnas/parser/go v0.4.1
 | `block.go` | Phase 1: block structure. | None. |
 | `inline.go` | Phase 2: inline structure. | None. |
 | `ast.go` | `ToAST` — projection to the map-based AST. | None. |
-| `html.go` | `RenderHTML`. | None. |
+| `html.go` | `RenderHTML`, and GFM's disallowed-raw-HTML filter. | None. |
 | `common.go` | Character classes, unescaping, label normalisation, URL and XML escaping, `IsEscapable`. | None. |
-| `node.go` | `MdNode`, `NodeType`, `ListData`, `SourcePos`, `NodeWalker`. | None. |
+| `node.go` | `MdNode`, `NodeType`, `ListData`, `TableAlign`, `SourcePos`, `NodeWalker`. | None. |
 | `options.go` | `Options`, `DefaultOptions`, `ResolveOptions`, `RefMap`, `RefDef`. | None. |
 
 `markdown.go` is the only file that imports the engine; nothing reachable from
@@ -99,7 +109,7 @@ the `Parse`, `ParseDocument`, `ParseInline`, `ToHTML`, `ParseTree`, `ToAST` or
 | `Markdown` | func | `func(j *parser.Tabnas, options map[string]any) error` — satisfies `parser.Plugin` |
 | `Make` | func | `func(options ...map[string]any) *parser.Tabnas` |
 | `Defaults` | var | `map[string]any{"gfm": true, "breaks": false}` |
-| `Version` | const | `"0.4.2"` — untyped string |
+| `Version` | const | `"0.5.0"` — untyped string |
 | `Options` | type | `struct{ GFM bool; Breaks bool }` |
 | `DefaultOptions` | var | `Options{GFM: true, Breaks: false}` |
 | `ResolveOptions` | func | `func(opts map[string]any) Options` |
@@ -115,6 +125,7 @@ the `Parse`, `ParseDocument`, `ParseInline`, `ToHTML`, `ParseTree`, `ToAST` or
 | `NodeType` | type | `string`. See [`NodeType`](#nodetype). |
 | `ListType` | type | `string`, with constants `ListBullet` (`"bullet"`) and `ListOrdered` (`"ordered"`) |
 | `ListData` | type | struct. See [`ListData`](#listdata). |
+| `TableAlign` | type | `string`, with constants `AlignNone` (`""`), `AlignLeft` (`"left"`), `AlignRight` (`"right"`), `AlignCenter` (`"center"`). See [`TableAlign`](#tablealign). |
 | `SourcePos` | type | `[2][2]int`. See [`SourcePos`](#sourcepos). |
 | `NodeWalker` | type | struct with methods `Next`, `ResumeAt`. |
 | `WalkEvent` | type | `struct{ Entering bool; Node *MdNode }` |
@@ -220,7 +231,7 @@ fmt.Println(result, err)
 ## Options
 
 `Options` is a struct, not a map. The zero value is `{GFM: false, Breaks: false}` — pure
-CommonMark with strikethrough off.
+CommonMark with every GFM extension off.
 
 ```go
 type Options struct {
@@ -233,7 +244,7 @@ var DefaultOptions = Options{GFM: true, Breaks: false}
 
 | Field | Map key | Type | Default | Effect |
 |---|---|---|---|---|
-| `GFM` | `gfm` | `bool` | `true` | Enables GFM strikethrough (`~~text~~` → a `delete` node / `<del>`). Opening and closing runs must be the same length. Parse-time only. It gates nothing else. |
+| `GFM` | `gfm` | `bool` | `true` | Enables five GFM extensions together: tables (`table` / `tableRow` / `tableCell` nodes), strikethrough (`~~text~~` → a `delete` node / `<del>`, opening and closing runs the same length), task list items (`listItem.checked`), autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`), and the disallowed-raw-HTML filter. The first four are parse-time; the filter is applied by the renderer. |
 | `Breaks` | `breaks` | `bool` | `false` | When `true`, a soft line break becomes a `break` node in the AST and `<br />\n` in HTML. When `false`, a soft line break becomes a single space in the AST and `\n` in HTML. Hard line breaks (two or more trailing spaces, or a trailing backslash) are `break` nodes and `<br />` either way. |
 
 `ResolveOptions(opts)` converts the plugin's option map to an `Options`. A `nil` map,
@@ -246,8 +257,12 @@ tabnasmarkdown.ResolveOptions(map[string]any{"gfm": false})     // {GFM:false Br
 tabnasmarkdown.ResolveOptions(map[string]any{"gfm": "no"})      // {GFM:true Breaks:false}
 ```
 
-`RenderHTML` reads only `Breaks`; by the time it runs, `GFM` has already decided whether
-`del` nodes exist.
+`RenderHTML` reads `Breaks`, and reads `GFM` for one thing only — the disallowed-raw-HTML
+filter, which the extension defines at render time. Everything else `GFM` controls is
+already settled in the tree by then. Unlike the TypeScript's optional option object, the
+Go signature always carries an explicit `GFM`, so there is no absent case to default from
+the tree; `MdNode.GFM` on the document records the parse flag, and
+`RenderHTML(tree, Options{GFM: tree.GFM})` is how you render a tree as it was parsed.
 
 ### Reference map types
 
@@ -336,6 +351,7 @@ neither carries meaning.
 |---|---|---|
 | `type` | `string` | `"listItem"` |
 | `spread` | `bool` | `true` when two of the item's own children are separated by a blank line. Derived from the block phase's `SourcePos` line ranges. |
+| `checked` | `bool` or `nil` | GFM task list item state: `true` for `- [x]`, `false` for `- [ ]`, `nil` for an ordinary item — and so `nil` on every item when `GFM` is off. mdast's field. On the native tree it is the `Checked` + `HasChecked` pair. |
 | `children` | `[]any` | Block nodes. Non-nil. |
 
 **`code`** — fenced and indented code blocks.
@@ -359,6 +375,39 @@ neither carries meaning.
 | Key | Go type | Notes |
 |---|---|---|
 | `type` | `string` | `"thematicBreak"`. No other keys. |
+
+**`table`** — a GFM table. Produced only when `GFM: true`.
+
+| Key | Go type | Notes |
+|---|---|---|
+| `type` | `string` | `"table"` |
+| `align` | `[]any` | One entry per column, in source order. Each entry is `"left"`, `"right"`, `"center"` or an untyped `nil` for a delimiter cell with no colon, so it marshals as e.g. `[null,"center"]`. The slice itself is always non-nil, and so marshals as an array and never as `null`. |
+| `children` | `[]any` | `tableRow` nodes only. Non-nil. |
+
+There is no header flag. mdast has none, and relies on the convention that the **first**
+row is the header row; the native tree carries `MdNode.IsHeaderRow` instead, for the
+renderer's benefit.
+
+**`tableRow`**
+
+| Key | Go type | Notes |
+|---|---|---|
+| `type` | `string` | `"tableRow"` |
+| `children` | `[]any` | `tableCell` nodes only. Non-nil, and always exactly as many as `align` has entries: the block phase pads short rows with empty cells and truncates long ones. |
+
+**`tableCell`**
+
+| Key | Go type | Notes |
+|---|---|---|
+| `type` | `string` | `"tableCell"` |
+| `children` | `[]any` | Inline nodes, as in a paragraph. Non-nil, so an empty cell marshals as `[]`. |
+
+```go
+doc := tabnasmarkdown.ParseDocument("| a | b |\n| --- | :-: |\n| 1 | 2 |\n", opts)
+b, _ := json.Marshal(doc)
+fmt.Println(string(b))
+// {"children":[{"align":[null,"center"],"children":[{"children":[{"children":[{"type":"text","value":"a"}],"type":"tableCell"},{"children":[{"type":"text","value":"b"}],"type":"tableCell"}],"type":"tableRow"},{"children":[{"children":[{"type":"text","value":"1"}],"type":"tableCell"},{"children":[{"type":"text","value":"2"}],"type":"tableCell"}],"type":"tableRow"}],"type":"table"}],"type":"document"}
+```
 
 ### Inline nodes
 
@@ -442,6 +491,7 @@ fmt.Println(tabnasmarkdown.ParseDocument("Hello <b>bold</b>", opts))
 | Source positions | `MdNode.SourcePos` on the native tree's block nodes. |
 | Soft line breaks as nodes (with `Breaks: false`) | `NodeSoftbreak` nodes on the native tree. In the AST a soft break becomes a single space inside the surrounding text run. |
 | The block/inline distinction for `html` | `NodeHTMLBlock` vs `NodeHTMLInline` on the native tree. |
+| The header-row flag on a table row | `MdNode.IsHeaderRow` on the native tree. In the AST the first `tableRow` is the header row, by mdast convention. |
 | Container open/closed state, `StringContent` | Block-phase bookkeeping on the native tree; not meaningful after the parse finishes. |
 
 ## Native tree
@@ -455,10 +505,16 @@ tree: children are reached with `FirstChild`/`Next`, not a slice.
 |---|---|---|
 | Containers (block) | `NodeDocument`, `NodeBlockQuote`, `NodeList`, `NodeItem` | `document`, `block_quote`, `list`, `item` |
 | Leaf blocks | `NodeParagraph`, `NodeHeading`, `NodeThematicBreak`, `NodeCodeBlock`, `NodeHTMLBlock` | `paragraph`, `heading`, `thematic_break`, `code_block`, `html_block` |
+| GFM tables | `NodeTable`, `NodeTableRow`, `NodeTableCell` | `table`, `table_row`, `table_cell` |
 | Inlines | `NodeText`, `NodeSoftbreak`, `NodeLinebreak`, `NodeCode`, `NodeHTMLInline`, `NodeEmph`, `NodeStrong`, `NodeLink`, `NodeImage`, `NodeDel` | `text`, `softbreak`, `linebreak`, `code`, `html_inline`, `emph`, `strong`, `link`, `image`, `del` |
 
+A table is a leaf block to the block algorithm — no block-level element can be inserted in
+one — and a container to the tree, since its rows and cells are real nodes and its cells
+hold inlines. A `table`'s children are `table_row`s, a row's are `table_cell`s, and the
+nesting is exactly three levels deep.
+
 `IsContainer()` returns `true` for `document`, `block_quote`, `list`, `item`, `paragraph`,
-`heading`, `emph`, `strong`, `link`, `image`, `del`.
+`heading`, `table`, `table_row`, `table_cell`, `emph`, `strong`, `link`, `image`, `del`.
 
 ### `MdNode` fields
 
@@ -483,13 +539,21 @@ tree: children are reached with `FirstChild`/`Next`, not a slice.
 | `FenceLength` | `int` | `0` | fenced `code_block` |
 | `FenceOffset` | `int` | `0` | fenced `code_block` |
 | `ListData` | `*ListData` | `nil` | `list`, `item` |
+| `TableAlign` | `[]TableAlign` | `nil` | `table` only — one entry per column, in order. `nil` on every other node type. See [`TableAlign`](#tablealign). |
+| `IsHeaderRow` | `bool` | `false` | `table_row` — `true` on the one header row, which is always the table's first child |
+| `Checked` | `bool` | `false` | `item` — GFM task list state; meaningless unless `HasChecked` |
+| `HasChecked` | `bool` | `false` | `item` — `true` only for a task list item, with `GFM` on |
+| `GFM` | `bool` | `false` | the `document` node only — the `GFM` option the tree was parsed with |
 | `Open` | `bool` | `true` from `NewNode` | block-phase bookkeeping |
 | `StringContent` | `[]byte` | `nil` | block-phase bookkeeping; consumed and cleared by phase 2 |
 | `LastLineBlank` | `bool` | `false` | block-phase bookkeeping |
 | `LastLineChecked` | `bool` | `false` | block-phase bookkeeping |
 
-`HasTitle` and `HasInfo` are the Go stand-ins for the TypeScript's nullable `title` and
-`info`; there is no other difference in field set.
+`HasTitle`, `HasInfo` and `HasChecked` are the Go stand-ins for the TypeScript's nullable
+`title`, `info` and `checked`. `GFM` is the only other difference in field set, and only
+in its default: the TypeScript field defaults to `true` and Go's to `false`, which is
+invisible because the block phase sets it on the document from the parse options and
+nothing else reads it.
 
 ### `MdNode` methods
 
@@ -537,6 +601,28 @@ const (
 
 A `list` and each of its `item` children point at the same `*ListData`.
 
+### `TableAlign`
+
+```go
+type TableAlign string
+
+const (
+	AlignNone   TableAlign = ""
+	AlignLeft   TableAlign = "left"
+	AlignRight  TableAlign = "right"
+	AlignCenter TableAlign = "center"
+)
+```
+
+Set on the `table` node by the block phase, from the colons in the delimiter row: `:--` is
+`AlignLeft`, `--:` is `AlignRight`, `:-:` is `AlignCenter`, `---` is `AlignNone`. Every row
+of the table, header and body alike, has exactly `len(TableAlign)` cells.
+
+`AlignNone` is the empty string, the same stand-in `node.go` uses for an absent `Info` or
+`Destination`, where the TypeScript's union is `'left' | 'right' | 'center' | null`.
+`ast.go` turns it back into an untyped `nil` in the map AST's `align`, so the two runtimes'
+`align` arrays marshal identically.
+
 ### `NodeWalker`
 
 | Member | Signature | Behaviour |
@@ -571,6 +657,9 @@ tree.
 | `item` | `<li>` … `</li>` |
 | `code_block` | `<pre><code>` … `</code></pre>`; `class="language-X"` is added when the info string has a first word, `X` |
 | `html_block` | `Literal`, verbatim and unescaped |
+| `table` | `<table>` … `</table>` |
+| `table_row` | `<tr>` … `</tr>`, inside `<thead>` when `IsHeaderRow`, inside `<tbody>` otherwise |
+| `table_cell` | `<th>` … `</th>` in the header row, `<td>` … `</td>` in a body row; `align="left"`, `align="right"` or `align="center"` is added when the column's `TableAlign` is not `AlignNone` |
 | `text` | `Literal`, XML-escaped |
 | `softbreak` | `\n`, or `<br />\n` when `Breaks: true` |
 | `linebreak` | `<br />\n` |
@@ -600,6 +689,21 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("- a\n- b", opts))
 // "<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n"
 fmt.Printf("%q\n", tabnasmarkdown.ToHTML("- a\n\n- b", opts))
 // "<ul>\n<li>\n<p>a</p>\n</li>\n<li>\n<p>b</p>\n</li>\n</ul>\n"
+```
+
+### Tables
+
+`<thead>` and `<tbody>` have no node of their own. The header row is the row flagged
+`IsHeaderRow`, and the body is every row after it; `<tbody>` is written by the *first* body
+row rather than unconditionally, so a table with no body rows emits no `<tbody>` at all.
+The alignment is held once, on the `table`, and written per cell.
+
+```go
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("| Item | Qty |\n| :--- | ---: |\n| pen | 3 |\n", opts))
+// "<table>\n<thead>\n<tr>\n<th align=\"left\">Item</th>\n<th align=\"right\">Qty</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td align=\"left\">pen</td>\n<td align=\"right\">3</td>\n</tr>\n</tbody>\n</table>\n"
+
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("| a | b |\n| - | - |\n", opts))
+// "<table>\n<thead>\n<tr>\n<th>a</th>\n<th>b</th>\n</tr>\n</thead>\n</table>\n"
 ```
 
 ### Escaping
@@ -632,16 +736,20 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("[l](/ä)", opts))
 
 ### Sanitization
 
-None is performed. `html_block` and `html_inline` literals are written verbatim. GFM's
-disallowed-raw-HTML filter is not implemented. Untrusted Markdown requires a sanitizer
-downstream of this renderer.
+None is performed. `html_block` and `html_inline` literals are written verbatim, apart
+from GFM's disallowed-raw-HTML filter: with `GFM` on, the leading `<` of `title`,
+`textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext` —
+opening or closing, any ASCII case, followed by whitespace, `/`, `>` or the end of the
+text — is written as `&lt;`. That is nine tag names; every other tag, every attribute and
+every link destination is untouched. Untrusted Markdown requires a sanitizer downstream of
+this renderer.
 
 ## Conformance
 
 | | |
 |---|---|
-| Spec | CommonMark 0.31.2 |
-| Result | **652/652** |
+| Spec | CommonMark 0.31.2 — the parser is conformant to it |
+| Result | **652/652**, all 26 sections |
 | Suite | `test/commonmark/spec.json`, vendored |
 | Command | `go test -run TestCommonMarkSpec -v ./...` from `go/` |
 | Options used | `Options{GFM: false, Breaks: false}` — the suite is pure CommonMark |
@@ -665,29 +773,96 @@ All 26 sections pass.
 | Paragraphs | 8 | Soft line breaks | 2 |
 | Blank lines | 1 | Textual content | 3 |
 
-Runtime parity is checked separately: 652 examples across 4 option combinations
-(`gfm` × `breaks`) is 2608 records, with 0 differing ASTs and 0 differing HTML outputs
-between TypeScript and Go. The 36 shared AST fixtures in `test/spec/*.tsv` pass in both;
-`go test -run TestSpec ./...` runs the Go half.
+Runtime parity is checked separately: 676 examples (652 CommonMark + 24 GFM) across 4
+option combinations (`gfm` × `breaks`) is 2704 records, with 0 differing ASTs and 0
+differing HTML outputs between TypeScript and Go. The 39 shared AST fixtures in
+`test/spec/*.tsv` pass in both; `go test -run TestSpec ./...` runs the Go half.
 
 ### GFM
 
-| Extension | Status |
-|---|---|
-| Strikethrough (`~~x~~`) | Implemented, gated on `GFM` |
-| Tables | Not implemented |
-| Task list items | Not implemented |
-| Autolink literals (bare `www.` / `https://` without angle brackets) | Not implemented |
-| Footnotes | Not implemented |
-| Disallowed raw HTML filtering | Not implemented |
+The extension set is complete: **24/24**, all five sections.
 
-`GFM: false` disables strikethrough and nothing else.
+| | |
+|---|---|
+| Suite | `test/gfm/spec.json`, vendored |
+| Command | `go test -run TestGFMSpec -v ./...` from `go/` |
+| Options used | `DefaultOptions` — `{GFM: true, Breaks: false}` |
+| TypeScript package | `npm run conformance-gfm` from `ts/`, also 24/24 |
+
+| Extension | Status | Examples |
+|---|---|---|
+| Tables (extension) | Implemented, gated on `GFM` | 8 |
+| Autolinks (extension) — bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co` | Implemented, gated on `GFM` | 11 |
+| Task list items (extension) — `- [x] done` | Implemented, gated on `GFM` | 2 |
+| Strikethrough (extension) — `~~x~~` | Implemented, gated on `GFM` | 2 |
+| Disallowed Raw HTML (extension) | Implemented, gated on `GFM`; applied by the renderer | 1 |
+
+`GFM: false` disables all five together, and the output is then plain CommonMark, byte for
+byte — verified byte-identical over 1430 records.
 
 ```go
 fmt.Printf("%q\n", tabnasmarkdown.ToHTML("~~x~~", tabnasmarkdown.Options{GFM: true}))
 // "<p><del>x</del></p>\n"
 fmt.Printf("%q\n", tabnasmarkdown.ToHTML("~~x~~", tabnasmarkdown.Options{GFM: false}))
 // "<p>~~x~~</p>\n"
+```
+
+**Tables.** A table opens when a delimiter row directly follows an open paragraph whose
+last line splits into the same number of cells. That last line becomes the header row; any
+earlier lines of the paragraph stay a paragraph, which is then closed. A delimiter cell is
+one or more hyphens with an optional leading and/or trailing colon and nothing else
+(`^(:?)-+(:?)$` over the trimmed cell). Cells are separated by unescaped `|`; a leading and
+a trailing pipe are both optional and may differ from row to row. The table accepts one row
+per line and ends at a blank line or at any other block start. Rows are padded with empty
+cells or truncated to the delimiter row's column count. `\|` does not split a cell and is
+resolved to a literal `|` at split time, before the inline phase, so a code span in that
+cell holds a real pipe; every other backslash escape is left for the inline phase.
+
+```go
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("| a |\n| - |\n| b `\\|` az |\n", opts))
+// "<table>\n<thead>\n<tr>\n<th>a</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>b <code>|</code> az</td>\n</tr>\n</tbody>\n</table>\n"
+```
+
+**Task list items.** A list item whose first block is a paragraph starting with a task
+list item marker — optional spaces, `[`, a space/tab or `x`/`X`, `]`, then at least one
+space or tab — is a task list item. The marker is consumed, `checked` becomes
+`true`/`false`, and the renderer writes `<input disabled="" type="checkbox"> ` (plus
+`checked=""` when checked) at the head of that paragraph.
+
+**Autolink literals.** Recognised at the start of a text run, after whitespace, or after
+`*`, `_`, `~` or `(`. `www.` gets `http://` prepended and an address gets `mailto:`. A
+domain is segments of alphanumerics, `_` and `-` separated by `.`, with at least one `.`
+and no `_` in either of the last two segments; trailing `?`, `!`, `.`, `,`, `:`, `*`,
+`_`, `~`, unbalanced `)` and a trailing entity-like `&…;` are excluded from the link.
+Never produced inside a link, a code span, raw HTML or an image description.
+
+**Disallowed raw HTML.** In `html` block and inline output the leading `<` of `title`,
+`textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext` —
+opening or closing, any ASCII case — is written as `&lt;`. The node's `value` keeps the
+original text; only the rendered HTML changes.
+
+### Not implemented
+
+| Feature | Note |
+|---|---|
+| Footnotes (`[^1]`) | A GitHub product feature, not part of the GFM specification suite. Nothing errors: `[^1]` is a valid CommonMark link label, so a footnote reference becomes literal text, or a link if its definition line parses as a link reference definition. |
+| Math, front matter, definition lists, heading attributes, admonitions, wiki links, emoji shortcodes, highlight, sub/superscript | Outside CommonMark and outside the GFM extension set. Each would need its own opt-in flag. |
+
+```go
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("Text[^1]\n\n[^1]: Note text here.\n", opts))
+// "<p>Text[^1]</p>\n<p>[^1]: Note text here.</p>\n"
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("Text[^1]\n\n[^1]: /note\n", opts))
+// "<p>Text<a href=\"/note\">^1</a></p>\n"
+```
+
+GFM strikethrough accepts a single `~` as well as `~~`, which collides with the `H~2~O`
+subscript syntax other dialects use:
+
+```go
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("H~2~O\n", opts))
+// "<p>H<del>2</del>O</p>\n"
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("H~2~O\n", tabnasmarkdown.Options{GFM: false}))
+// "<p>H~2~O</p>\n"
 ```
 
 ## Grammar file

@@ -18,6 +18,7 @@
 //     field carried no information; nothing can have depended on it.
 
 import { MdNode } from './node.ts'
+import type { TableAlign } from './node.ts'
 import type { ParserOptions } from './options.ts'
 
 export type DocumentNode = { type: 'document'; children: Block[] }
@@ -31,6 +32,7 @@ export type Block =
   | CodeNode
   | HtmlNode
   | ThematicBreakNode
+  | TableNode
 
 export type HeadingNode = {
   type: 'heading'
@@ -46,7 +48,17 @@ export type ListNode = {
   spread: boolean
   children: ListItemNode[]
 }
-export type ListItemNode = { type: 'listItem'; spread: boolean; children: Block[] }
+export type ListItemNode = {
+  type: 'listItem'
+  spread: boolean
+  /**
+   * mdast's task list field: `true`/`false` for a GFM task list item
+   * (`- [x] foo`), `null` for an ordinary item — and therefore `null`
+   * everywhere when `gfm` is off.
+   */
+  checked: boolean | null
+  children: Block[]
+}
 export type CodeNode = {
   type: 'code'
   lang: string | null
@@ -55,6 +67,24 @@ export type CodeNode = {
 }
 export type HtmlNode = { type: 'html'; value: string }
 export type ThematicBreakNode = { type: 'thematicBreak' }
+
+/**
+ * A GFM table, in mdast's shape.
+ *
+ * `align` has one entry per column — `null` where the delimiter row gave no
+ * colon — and every row has exactly that many cells, since the block phase
+ * pads short rows and truncates long ones.
+ *
+ * mdast has no header flag: the **first** row is the header row, by
+ * convention, and this projection preserves that ordering from the tree.
+ */
+export type TableNode = {
+  type: 'table'
+  align: TableAlign[]
+  children: TableRowNode[]
+}
+export type TableRowNode = { type: 'tableRow'; children: TableCellNode[] }
+export type TableCellNode = { type: 'tableCell'; children: Inline[] }
 
 export type Inline =
   | TextNode
@@ -312,6 +342,24 @@ function buildBlock(
     case 'html_block':
       return { type: 'html', value: node.literal ?? '' }
 
+    case 'table': {
+      // Built here rather than through `built`, because a table's children are
+      // rows and cells rather than blocks — `blockChildren` never descends
+      // into one. The nesting is a fixed three levels deep, so unlike the
+      // block containers this cannot be driven past the stack by input.
+      const rows: TableRowNode[] = []
+      for (let row = node.firstChild; row; row = row.next) {
+        if ('table_row' !== row.type) continue
+        const cells: TableCellNode[] = []
+        for (let cell = row.firstChild; cell; cell = cell.next) {
+          if ('table_cell' !== cell.type) continue
+          cells.push({ type: 'tableCell', children: inlineChildren(cell, opts) })
+        }
+        rows.push({ type: 'tableRow', children: cells })
+      }
+      return { type: 'table', align: node.tableAlign ?? [], children: rows }
+    }
+
     case 'list': {
       const data = node.listData
       const ordered = 'ordered' === data?.type
@@ -322,6 +370,7 @@ function buildBlock(
           items.push({
             type: 'listItem',
             spread: itemIsSpread(child),
+            checked: child.checked,
             children: builtChildren(child, built),
           })
         }
@@ -339,7 +388,12 @@ function buildBlock(
     case 'item':
       // Only reachable if an item is somehow detached from its list; a list
       // builds its own items above.
-      return { type: 'listItem', spread: itemIsSpread(node), children: builtChildren(node, built) }
+      return {
+        type: 'listItem',
+        spread: itemIsSpread(node),
+        checked: node.checked,
+        children: builtChildren(node, built),
+      }
 
     default:
       return null
