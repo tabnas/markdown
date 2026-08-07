@@ -106,6 +106,27 @@ export class MdNode {
 
   listData: ListData | null = null
 
+  /**
+   * GFM task list items (`- [x] foo`): `true`/`false` for a checked/unchecked
+   * item, `null` for an ordinary one. Set on `item` nodes by the block phase
+   * when `gfm` is on, once the marker has been consumed from the item's first
+   * paragraph. mdast's field and mdast's semantics — `ast.ts` projects it
+   * straight through to `listItem.checked`.
+   */
+  checked: boolean | null = null
+
+  /**
+   * The `gfm` parse option, recorded on the **document** node by the block
+   * phase and meaningless anywhere else.
+   *
+   * The renderer needs it because GFM's disallowed-raw-HTML filter is a
+   * render-time concern, and `renderHTML(tree)` may be called with no options
+   * at all. Without this the default (`gfm: true`) would apply the filter to a
+   * tree that was parsed as plain CommonMark, which is exactly the case the
+   * conformance runner exercises.
+   */
+  gfm = true
+
   // --- block-phase bookkeeping (not part of the rendered tree) ---
 
   /** Open blocks accept further lines; closed ones are finalized. */

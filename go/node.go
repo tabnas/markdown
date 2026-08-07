@@ -123,6 +123,32 @@ type MdNode struct {
 
 	ListData *ListData
 
+	// Checked is the GFM task list item state (`- [x] foo`): true or false for
+	// a task item, and meaningless unless HasChecked is set. HasChecked is
+	// Go's stand-in for the TypeScript's `checked: boolean | null` — an
+	// ordinary item is `null` there and HasChecked:false here, the same shape
+	// node.go already uses for Title/HasTitle and Info/HasInfo.
+	//
+	// Set on item nodes by the block phase when GFM is on, once the marker has
+	// been consumed from the item's first paragraph. mdast's field and mdast's
+	// semantics — ast.go projects the pair straight through to
+	// `listItem.checked`.
+	Checked    bool
+	HasChecked bool
+
+	// GFM is the parse option, recorded on the DOCUMENT node by the block
+	// phase and meaningless anywhere else.
+	//
+	// TypeScript needs it: renderHTML(tree) may be called with no options at
+	// all, and GFM's disallowed-raw-HTML filter is a render-time concern, so
+	// the renderer defaults `gfm` to what the tree was parsed with rather than
+	// to the package default. Go's RenderHTML takes an already-resolved
+	// Options and so has no "absent" case to default — the field is here so
+	// the tree carries the same information, and so a caller that wants
+	// TypeScript's defaulting can spell it: RenderHTML(tree, Options{GFM:
+	// tree.GFM, Breaks: false}).
+	GFM bool
+
 	// --- block-phase bookkeeping, not part of the rendered tree ---
 
 	// Open blocks accept further lines; closed ones are finalized.

@@ -85,6 +85,7 @@ needs a special printer:
         {
           "type": "listItem",
           "spread": false,
+          "checked": null,
           "children": [
             { "type": "paragraph", "children": [{ "type": "text", "value": "one" }] }
           ]
@@ -92,6 +93,7 @@ needs a special printer:
         {
           "type": "listItem",
           "spread": false,
+          "checked": null,
           "children": [
             { "type": "paragraph", "children": [{ "type": "text", "value": "two" }] }
           ]

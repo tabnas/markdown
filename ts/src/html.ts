@@ -30,14 +30,51 @@ import type { ParserOptions } from './options.ts'
 type Attr = [string, string]
 
 /**
+ * GFM's `tagfilter` extension. These nine tags change how the *rest* of a
+ * document is interpreted (everything after `<xmp>` or `<plaintext>` stops
+ * being markup at all), so GFM neutralises them by rewriting the leading `<`
+ * as `&lt;` — opening and closing, in any case. Every other tag still passes
+ * through verbatim, as CommonMark requires.
+ *
+ * This is purely a rendering concern: nothing rewrites the node, so the
+ * literal in the tree and the `value` in the AST stay exactly as written.
+ *
+ * The tag name must be followed by whitespace, `/`, `>` or the end of the
+ * text, so `<scriptlet>` and `<titles>` are untouched.
+ */
+const RE_DISALLOWED_TAG =
+  /<\/?(?:title|textarea|style|xmp|iframe|noembed|noframes|script|plaintext)(?=[\t\n\f\r />]|$)/gi
+
+function filterDisallowedTags(html: string): string {
+  // Cheap reject: the vast majority of raw HTML holds none of these.
+  if (-1 === html.indexOf('<')) return html
+  return html.replace(RE_DISALLOWED_TAG, (m) => '&lt;' + m.slice(1))
+}
+
+/**
  * Render `doc` (a tree that has been through both parse phases) as HTML.
  *
- * Only `options.breaks` affects the output: it turns soft line breaks into
- * hard ones. `gfm` is a parse-time concern — by the time a `del` node exists
- * the renderer just prints it.
+ * Two options reach the renderer. `breaks` turns soft line breaks into hard
+ * ones. `gfm` selects one thing only — the disallowed-raw-HTML filter, which
+ * the extension defines at render time rather than at parse time. Everything
+ * else GFM adds is settled by then: by the time a `del` node or an item's
+ * `checked` state exists, the renderer just prints it.
+ *
+ * `gfm` defaults to whatever the *document* was parsed with rather than to the
+ * package default, so `renderHTML(tree)` on a `gfm:false` parse renders plain
+ * CommonMark. An explicit `options.gfm` still wins.
  */
 export function renderHTML(doc: MdNode, options?: Partial<ParserOptions>): string {
-  const opts = resolveOptions(options)
+  const opts = resolveOptions({
+    gfm: options?.gfm ?? doc.gfm,
+    breaks: options?.breaks,
+  })
+
+  /** Raw HTML as written, minus the tags GFM's tagfilter neutralises. */
+  const rawHtml = (literal: string | null): string => {
+    const s = null === literal ? '' : literal
+    return opts.gfm ? filterDisallowedTags(s) : s
+  }
 
   // §6.9 soft line breaks: rendered as a newline, or as a hard break when the
   // caller asks for `breaks`.
@@ -89,18 +126,38 @@ export function renderHTML(doc: MdNode, options?: Partial<ParserOptions>): strin
         // contents". The paragraph's grandparent is the list — a paragraph
         // whose grandparent is a list is necessarily an item's direct child.
         const grandparent = null === node.parent ? null : node.parent.parent
-        if (
+        const tight =
           null !== grandparent &&
           'list' === grandparent.type &&
           null !== grandparent.listData &&
           grandparent.listData.tight
-        ) {
-          break
-        }
+
         if (entering) {
-          cr()
-          tag('p')
-        } else {
+          if (!tight) {
+            cr()
+            tag('p')
+          }
+          // GFM task list item. The block phase consumed the `[x]` marker and
+          // left the state on the item, so the checkbox is written here, at
+          // the head of the item's first paragraph: directly after `<li>` when
+          // the list is tight, and inside the `<p>` when it is loose. The
+          // trailing space is the separator the extension's own output shows
+          // between the checkbox and the item text.
+          const item = node.parent
+          if (
+            null !== item &&
+            'item' === item.type &&
+            item.firstChild === node &&
+            null !== item.checked
+          ) {
+            const attrs: Attr[] = []
+            if (item.checked) attrs.push(['checked', ''])
+            attrs.push(['disabled', ''])
+            attrs.push(['type', 'checkbox'])
+            tag('input', attrs)
+            lit(' ')
+          }
+        } else if (!tight) {
           tag('/p')
           cr()
         }
@@ -190,9 +247,10 @@ export function renderHTML(doc: MdNode, options?: Partial<ParserOptions>): strin
       }
 
       case 'html_block':
-        // §4.6: raw HTML passes through verbatim, unescaped.
+        // §4.6: raw HTML passes through verbatim, unescaped — except for the
+        // nine tags GFM's tagfilter neutralises.
         cr()
-        lit(null === node.literal ? '' : node.literal)
+        lit(rawHtml(node.literal))
         cr()
         break
 
@@ -216,7 +274,7 @@ export function renderHTML(doc: MdNode, options?: Partial<ParserOptions>): strin
         break
 
       case 'html_inline':
-        lit(null === node.literal ? '' : node.literal)
+        lit(rawHtml(node.literal))
         break
 
       case 'emph':

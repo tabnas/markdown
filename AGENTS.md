@@ -7,14 +7,67 @@
 subset. Both runtimes score **652/652 on the CommonMark 0.31.2 spec
 suite**, across all 26 sections.
 
-On top of CommonMark it implements exactly **one** GFM extension:
-strikethrough (`~~x~~`), gated on the `gfm` option (default `true`).
-Tables, task list items, autolink literals, footnotes and
-disallowed-raw-HTML filtering are **not** implemented. `gfm:false` turns
-strikethrough off and gates nothing else, because there is nothing else
-to gate. When you describe this package — in code comments, in docs, in
-commit messages — say "CommonMark, with one GFM extension". Do not write
-"CommonMark/GFM".
+On top of CommonMark it implements a set of GFM extensions, all gated on
+the single `gfm` option (default `true`). The two runtimes are level:
+
+| Extension | TypeScript | Go |
+|---|---|---|
+| Strikethrough (`~~x~~`) | yes | yes |
+| Task list items (`- [x] foo`) | yes | yes |
+| Autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`) | yes | yes |
+| Disallowed raw HTML (tagfilter) | yes | yes |
+| Tables | no | no |
+| Footnotes | no | no |
+
+Both score **17/24** on the vendored GFM extension corpus
+(`test/gfm/spec.json`); the seven failures are all Tables.
+`node ts/tools/gfm-conformance.mjs` and `go test -run TestGFMSpec -v ./...`
+print the same per-section table.
+
+`gfm:false` turns all of them off and the output is plain CommonMark,
+byte for byte — the 652-example suite runs that way, so it is a hard
+contract, not a convenience. When you describe this package — in code
+comments, in docs, in commit messages — say "CommonMark, with GFM
+extensions", and name them. Do not write "CommonMark/GFM", which implies
+tables.
+
+`test/spec/*.tsv` pins `listItem.checked`, which both runtimes now
+project. If you ever see those five parity rows fail again, the fixtures
+are right and the runtime is wrong — do not "fix" it by editing them.
+
+Where the three newer extensions live is deliberate, and the two runtimes
+keep the same placement:
+
+* **Task list items** — `block.ts` / `block.go` (`markTaskListItems`, at
+  the end of the block phase, over `stringContent` / `StringContent`),
+  plus `MdNode.checked` (Go: `Checked` + `HasChecked`), plus a branch in
+  the `paragraph` case of `html.*` and one field in `ast.*`.
+  Deciding it on raw text, before the inline phase, is what makes the
+  marker win over the *reference link* a `[x]: /url` definition would
+  otherwise produce: with that definition in the document, `- [x] foo`
+  is a task item, while `- [x]foo` (no space, so no marker) is the link.
+  It does not outrank the definition itself — `- [x]: /url` is a
+  reference definition, and the item is empty.
+* **Autolink literals** — `inline.ts` / `inline.go` (`linkifyAutolinks`),
+  a post-pass over the *finished* inline tree, exactly as cmark-gfm does
+  it. The inline scanner is not touched, which is what keeps 652/652
+  structural. It consolidates adjacent text siblings first (an autolink
+  can span the nodes a delimiter run splits), and skips `link` and
+  `image` subtrees. Go scans it by byte, like the rest of `inline.go`:
+  every character it branches on is ASCII, so a multi-byte rune is
+  exactly as unmatchable there as its UTF-16 code unit is here, and no
+  boundary the pass computes can land inside a rune.
+* **Disallowed raw HTML** — `html.ts` / `html.go`
+  (`filterDisallowedTags`) only. The tree and the AST keep the original
+  text. Because it is a render-time concern and `renderHTML(tree)` may be
+  called with no options, `MdNode.gfm` / `MdNode.GFM` records the
+  parse-time flag on the **document** node and the TS renderer defaults to
+  it. Go's `RenderHTML(doc, opts Options)` takes an already-resolved
+  `Options` and so has no absent case to default from; the field is still
+  set, and `RenderHTML(tree, Options{GFM: tree.GFM})` is the Go spelling.
+  The TypeScript's regex uses a lookahead, which RE2 has not, so the Go
+  side is a hand-coded scan — with ASCII-only case folding, because Go's
+  `(?i)` folds U+017F and U+212A onto ASCII and JavaScript's `i` does not.
 
 There are three public outputs, in both runtimes:
 
@@ -246,8 +299,10 @@ org-standard `polyglot-ci` caller in `.github/workflows/ci.yml`.
   mis-lexed first. `lex.emptyResult` returns an empty document for `""`.
   `rule.clear()` is required before defining `markdown`, or inherited
   `val` alts try to match a leading `#`.
-* **Options**: `gfm` (default `true`, strikethrough only) and `breaks`
-  (default `false`). `Markdown.defaults` / `Defaults` carry the same pair.
+* **Options**: `gfm` (default `true`; gates every GFM extension at once)
+  and `breaks` (default `false`). `Markdown.defaults` / `Defaults` carry
+  the same pair. `gfm` is the only option besides `breaks` that the
+  renderer reads, and only for the raw-HTML tag filter.
 
 ## Documentation rules
 

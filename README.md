@@ -9,7 +9,7 @@
 
 A CommonMark parser for the [Tabnas](https://github.com/tabnas/parser) engine. It scores
 **652/652 on the CommonMark 0.31.2 spec suite**, in both of its implementations —
-TypeScript (canonical) and Go (a port of it) — with one GFM extension, strikethrough.
+TypeScript (canonical) and Go (a port of it) — plus a handful of GFM extensions.
 The parser itself is engine-free; the Tabnas plugin is wiring around it.
 
 ## Two outputs: the AST, and HTML if you ask
@@ -90,15 +90,20 @@ reference definitions, paragraphs, blank lines, block quotes, list items, lists,
 code spans, emphasis and strong emphasis, links, images, autolinks, raw HTML, hard line
 breaks, soft line breaks, textual content.
 
-**One GFM extension is implemented: strikethrough** (`~~text~~`), gated on the `gfm`
-option.
+**GFM extensions**, all gated on the `gfm` option (default `true`):
 
-These GFM extensions are **not** implemented: tables, task list items, autolink literals
-(bare `www.` / `https://` without angle brackets), footnotes, and disallowed-raw-HTML
-filtering. Setting `gfm:false` turns strikethrough off; it gates nothing else, because
-there is nothing else to gate.
+| Extension | TypeScript | Go |
+|---|---|---|
+| Strikethrough (`~~text~~`) | yes | yes |
+| Task list items (`- [x] done`) | yes | yes |
+| Autolink literals (bare `www.` / `https://` / `a@b.co`) | yes | yes |
+| Disallowed raw HTML (`<script>` → `&lt;script>`) | yes | yes |
+| Tables | no | no |
+| Footnotes | no | no |
 
-So, exactly: this package parses CommonMark, with one GFM extension.
+TypeScript is canonical and the Go port follows it; the two are level, and verified
+example for example on both outputs. `gfm:false` turns every one of them off, and the
+output is then plain CommonMark, byte for byte.
 
 The only options, in both runtimes, are `gfm` (default `true`) and `breaks` (default
 `false`, which promotes soft line breaks to hard breaks when set). See the reference for
@@ -112,11 +117,12 @@ so does this renderer:
 ```js
 import { toHtml } from '@tabnas/markdown'
 
-toHtml('<script>alert(1)</script>') // => '<script>alert(1)</script>\n'
+toHtml('<img onerror="alert(1)">') // => '<img onerror="alert(1)">\n'
 ```
 
 Anything that renders untrusted Markdown needs a sanitizer downstream. GFM's
-disallowed-raw-HTML filter is not implemented, so it will not do this for you.
+disallowed-raw-HTML filter neutralises nine tag names and nothing else; it is not a
+sanitizer, and it does nothing about attributes or `javascript:` destinations.
 
 ## Conformance
 

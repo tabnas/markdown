@@ -32,10 +32,13 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("# Hello\n\nHello *world*", opts))
 ```
 
 **The HTML is not sanitized.** Raw HTML blocks and inline tags pass through verbatim, as
-CommonMark specifies. GFM's disallowed-raw-HTML filter is not implemented.
+CommonMark specifies. The one exception is GFM's disallowed-raw-HTML filter, which is
+applied when `GFM` is on and rewrites the leading `<` of nine tag names.
 
 ```go
 fmt.Printf("%q\n", tabnasmarkdown.ToHTML("<script>alert(1)</script>", opts))
+// "&lt;script>alert(1)&lt;/script>\n"
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("<script>alert(1)</script>", tabnasmarkdown.Options{GFM: false}))
 // "<script>alert(1)</script>\n"
 ```
 
@@ -81,7 +84,7 @@ require github.com/tabnas/parser/go v0.4.1
 | `block.go` | Phase 1: block structure. | None. |
 | `inline.go` | Phase 2: inline structure. | None. |
 | `ast.go` | `ToAST` — projection to the map-based AST. | None. |
-| `html.go` | `RenderHTML`. | None. |
+| `html.go` | `RenderHTML`, and GFM's disallowed-raw-HTML filter. | None. |
 | `common.go` | Character classes, unescaping, label normalisation, URL and XML escaping, `IsEscapable`. | None. |
 | `node.go` | `MdNode`, `NodeType`, `ListData`, `SourcePos`, `NodeWalker`. | None. |
 | `options.go` | `Options`, `DefaultOptions`, `ResolveOptions`, `RefMap`, `RefDef`. | None. |
@@ -220,7 +223,7 @@ fmt.Println(result, err)
 ## Options
 
 `Options` is a struct, not a map. The zero value is `{GFM: false, Breaks: false}` — pure
-CommonMark with strikethrough off.
+CommonMark with every GFM extension off.
 
 ```go
 type Options struct {
@@ -233,7 +236,7 @@ var DefaultOptions = Options{GFM: true, Breaks: false}
 
 | Field | Map key | Type | Default | Effect |
 |---|---|---|---|---|
-| `GFM` | `gfm` | `bool` | `true` | Enables GFM strikethrough (`~~text~~` → a `delete` node / `<del>`). Opening and closing runs must be the same length. Parse-time only. It gates nothing else. |
+| `GFM` | `gfm` | `bool` | `true` | Enables four GFM extensions together: strikethrough (`~~text~~` → a `delete` node / `<del>`, opening and closing runs the same length), task list items (`listItem.checked`), autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`), and the disallowed-raw-HTML filter. The first three are parse-time; the filter is applied by the renderer. |
 | `Breaks` | `breaks` | `bool` | `false` | When `true`, a soft line break becomes a `break` node in the AST and `<br />\n` in HTML. When `false`, a soft line break becomes a single space in the AST and `\n` in HTML. Hard line breaks (two or more trailing spaces, or a trailing backslash) are `break` nodes and `<br />` either way. |
 
 `ResolveOptions(opts)` converts the plugin's option map to an `Options`. A `nil` map,
@@ -246,8 +249,12 @@ tabnasmarkdown.ResolveOptions(map[string]any{"gfm": false})     // {GFM:false Br
 tabnasmarkdown.ResolveOptions(map[string]any{"gfm": "no"})      // {GFM:true Breaks:false}
 ```
 
-`RenderHTML` reads only `Breaks`; by the time it runs, `GFM` has already decided whether
-`del` nodes exist.
+`RenderHTML` reads `Breaks`, and reads `GFM` for one thing only — the disallowed-raw-HTML
+filter, which the extension defines at render time. Everything else `GFM` controls is
+already settled in the tree by then. Unlike the TypeScript's optional option object, the
+Go signature always carries an explicit `GFM`, so there is no absent case to default from
+the tree; `MdNode.GFM` on the document records the parse flag, and
+`RenderHTML(tree, Options{GFM: tree.GFM})` is how you render a tree as it was parsed.
 
 ### Reference map types
 
@@ -336,6 +343,7 @@ neither carries meaning.
 |---|---|---|
 | `type` | `string` | `"listItem"` |
 | `spread` | `bool` | `true` when two of the item's own children are separated by a blank line. Derived from the block phase's `SourcePos` line ranges. |
+| `checked` | `bool` or `nil` | GFM task list item state: `true` for `- [x]`, `false` for `- [ ]`, `nil` for an ordinary item — and so `nil` on every item when `GFM` is off. mdast's field. On the native tree it is the `Checked` + `HasChecked` pair. |
 | `children` | `[]any` | Block nodes. Non-nil. |
 
 **`code`** — fenced and indented code blocks.
@@ -483,13 +491,19 @@ tree: children are reached with `FirstChild`/`Next`, not a slice.
 | `FenceLength` | `int` | `0` | fenced `code_block` |
 | `FenceOffset` | `int` | `0` | fenced `code_block` |
 | `ListData` | `*ListData` | `nil` | `list`, `item` |
+| `Checked` | `bool` | `false` | `item` — GFM task list state; meaningless unless `HasChecked` |
+| `HasChecked` | `bool` | `false` | `item` — `true` only for a task list item, with `GFM` on |
+| `GFM` | `bool` | `false` | the `document` node only — the `GFM` option the tree was parsed with |
 | `Open` | `bool` | `true` from `NewNode` | block-phase bookkeeping |
 | `StringContent` | `[]byte` | `nil` | block-phase bookkeeping; consumed and cleared by phase 2 |
 | `LastLineBlank` | `bool` | `false` | block-phase bookkeeping |
 | `LastLineChecked` | `bool` | `false` | block-phase bookkeeping |
 
-`HasTitle` and `HasInfo` are the Go stand-ins for the TypeScript's nullable `title` and
-`info`; there is no other difference in field set.
+`HasTitle`, `HasInfo` and `HasChecked` are the Go stand-ins for the TypeScript's nullable
+`title`, `info` and `checked`. `GFM` is the only other difference in field set, and only
+in its default: the TypeScript field defaults to `true` and Go's to `false`, which is
+invisible because the block phase sets it on the document from the parse options and
+nothing else reads it.
 
 ### `MdNode` methods
 
@@ -632,9 +646,13 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("[l](/ä)", opts))
 
 ### Sanitization
 
-None is performed. `html_block` and `html_inline` literals are written verbatim. GFM's
-disallowed-raw-HTML filter is not implemented. Untrusted Markdown requires a sanitizer
-downstream of this renderer.
+None is performed. `html_block` and `html_inline` literals are written verbatim, apart
+from GFM's disallowed-raw-HTML filter: with `GFM` on, the leading `<` of `title`,
+`textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext` —
+opening or closing, any ASCII case, followed by whitespace, `/`, `>` or the end of the
+text — is written as `&lt;`. That is nine tag names; every other tag, every attribute and
+every link destination is untouched. Untrusted Markdown requires a sanitizer downstream of
+this renderer.
 
 ## Conformance
 
@@ -675,13 +693,15 @@ between TypeScript and Go. The 36 shared AST fixtures in `test/spec/*.tsv` pass 
 | Extension | Status |
 |---|---|
 | Strikethrough (`~~x~~`) | Implemented, gated on `GFM` |
+| Task list items (`- [x] done`) | Implemented, gated on `GFM` |
+| Autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`) | Implemented, gated on `GFM` |
+| Disallowed raw HTML filtering | Implemented, gated on `GFM`; applied by the renderer |
 | Tables | Not implemented |
-| Task list items | Not implemented |
-| Autolink literals (bare `www.` / `https://` without angle brackets) | Not implemented |
 | Footnotes | Not implemented |
-| Disallowed raw HTML filtering | Not implemented |
 
-`GFM: false` disables strikethrough and nothing else.
+`GFM: false` disables all four together, and the output is then plain CommonMark, byte for
+byte. The extension corpus is `test/gfm/spec.json`; `go test -run TestGFMSpec -v ./...`
+prints the per-section table (17/24 — the seven failures are all Tables).
 
 ```go
 fmt.Printf("%q\n", tabnasmarkdown.ToHTML("~~x~~", tabnasmarkdown.Options{GFM: true}))
@@ -689,6 +709,24 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("~~x~~", tabnasmarkdown.Options{GFM: tr
 fmt.Printf("%q\n", tabnasmarkdown.ToHTML("~~x~~", tabnasmarkdown.Options{GFM: false}))
 // "<p>~~x~~</p>\n"
 ```
+
+**Task list items.** A list item whose first block is a paragraph starting with a task
+list item marker — optional spaces, `[`, a space/tab or `x`/`X`, `]`, then at least one
+space or tab — is a task list item. The marker is consumed, `checked` becomes
+`true`/`false`, and the renderer writes `<input disabled="" type="checkbox"> ` (plus
+`checked=""` when checked) at the head of that paragraph.
+
+**Autolink literals.** Recognised at the start of a text run, after whitespace, or after
+`*`, `_`, `~` or `(`. `www.` gets `http://` prepended and an address gets `mailto:`. A
+domain is segments of alphanumerics, `_` and `-` separated by `.`, with at least one `.`
+and no `_` in either of the last two segments; trailing `?`, `!`, `.`, `,`, `:`, `*`,
+`_`, `~`, unbalanced `)` and a trailing entity-like `&…;` are excluded from the link.
+Never produced inside a link, a code span, raw HTML or an image description.
+
+**Disallowed raw HTML.** In `html` block and inline output the leading `<` of `title`,
+`textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext` —
+opening or closing, any ASCII case — is written as `&lt;`. The node's `value` keeps the
+original text; only the rendered HTML changes.
 
 ## Grammar file
 

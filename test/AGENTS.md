@@ -1,15 +1,16 @@
 # Agents Guide — shared test corpora
 
-Two corpora live here, and they test different things. Know which one a
+Three corpora live here, and they test different things. Know which one a
 change belongs in before you add to either.
 
 | Directory | Contents | Compares | Canonical for |
 |---|---|---|---|
 | [`spec/`](spec/) | 36 hand-written cases in `*.tsv` | the **JSON AST**, through the engine | TS ↔ Go parity, and the shape of the public AST |
 | [`commonmark/`](commonmark/) | the vendored CommonMark 0.31.2 suite, 652 examples in `spec.json` | the **HTML** output, byte for byte | spec conformance |
+| [`gfm/`](gfm/) | the extension sections of the GFM spec, 24 examples in `spec.json` | the **HTML** output, byte for byte | the GFM extensions |
 
-Both are run by both runtimes. Both are executable contracts: do not
-weaken either to make a change pass.
+All three are executable contracts: do not weaken any of them to make a
+change pass. All three are run by both runtimes.
 
 ---
 
@@ -117,6 +118,38 @@ version, and expect real failures to fix. Never edit an individual example,
 never delete one, and never add a tolerance to the comparison to make
 something pass.
 
-Cases of our own — including GFM strikethrough, which this corpus cannot
-cover because it runs with `gfm:false` — go in `spec/*.tsv` or in the
-runtimes' unit tests, not here.
+Cases of our own go in `spec/*.tsv` or in the runtimes' unit tests, not
+here. The GFM extensions in particular cannot be covered by this corpus at
+all, because it runs with `gfm:false`; they have their own corpus below.
+
+---
+
+# `gfm/spec.json` — the GFM extension corpus
+
+The extension sections of the GFM spec, vendored in the same shape as the
+CommonMark suite: 24 examples across Tables (8), Autolinks (11), Task list
+items (2), Strikethrough (2) and Disallowed Raw HTML (1). Run with GFM
+**on** (`{gfm:true, breaks:false}`).
+
+The core CommonMark examples of that document are deliberately excluded:
+cmark-gfm tracks CommonMark 0.29, and nine of its emphasis cases expect
+pre-0.31.2 output this parser correctly no longer produces. Core
+conformance is `commonmark/spec.json`, against 0.31.2.
+
+**17/24 today, in both runtimes.** The seven failures are all Tables,
+which is not implemented in either. Everything else passes in both.
+
+## Who runs what
+
+- TypeScript: `ts/test/commonmark.test.ts` runs the four implemented
+  sections as part of `npm test`; it does not run Tables.
+- TypeScript, no build and no engine: `node ts/tools/gfm-conformance.mjs`,
+  which reports a per-section table and takes `--failures` and `--section=`.
+- Go: `go/gfm_test.go` (`go test -run TestGFMSpec -v ./...`) prints the
+  same per-section table. It runs all 24 but only *asserts* the four
+  implemented sections, so Tables is reported without failing the build.
+
+## Editing it
+
+Don't — same rule as the CommonMark suite. It is upstream data, and the
+score is only meaningful because the corpus is unmodified.

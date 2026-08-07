@@ -13,7 +13,8 @@ Two answers first, because most of these recipes depend on them:
   first-class output, not a side utility. It is also **not sanitized** — see
   [Render untrusted Markdown safely](#render-untrusted-markdown-safely).
 
-The parser is CommonMark 0.31.2 plus one GFM extension (strikethrough).
+The parser is CommonMark 0.31.2 plus four GFM extensions: strikethrough, task
+list items, autolink literals and the disallowed-raw-HTML filter.
 
 Every recipe assumes this import:
 
@@ -242,8 +243,10 @@ fmt.Printf("%q\n", tabnasmarkdown.RenderHTML(tree, tabnasmarkdown.DefaultOptions
 
 `MdNode` also has `AppendChild`, `PrependChild`, `InsertBefore`, `InsertAfter`
 and `Unlink` if you need to restructure rather than retag. `RenderHTML` takes
-the same `Options` value as everything else; only `Breaks` affects it, since
-`GFM` is decided at parse time.
+the same `Options` value as everything else. `Breaks` affects it, and `GFM`
+selects one thing only — the disallowed-raw-HTML filter, which the extension
+defines at render time. The tree records the flavour it was parsed with, so
+`RenderHTML(tree, tabnasmarkdown.Options{GFM: tree.GFM})` renders it as parsed.
 
 ## Render untrusted Markdown safely
 
@@ -254,8 +257,8 @@ of scoring 652/652.
 ```go
 opts := tabnasmarkdown.DefaultOptions
 
-fmt.Printf("%q\n", tabnasmarkdown.ToHTML("<script>alert(1)</script>\n", opts))
-// "<script>alert(1)</script>\n"
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML(`<img onerror="alert(1)">`+"\n", opts))
+// "<img onerror=\"alert(1)\">\n"
 
 fmt.Printf("%q\n", tabnasmarkdown.ToHTML("[click](javascript:alert(1))\n", opts))
 // "<p><a href=\"javascript:alert(1)\">click</a></p>\n"
@@ -263,14 +266,26 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("[click](javascript:alert(1))\n", opts)
 
 What reaches the output untouched:
 
-- HTML blocks (§4.6) — whole `<script>`, `<style>`, `<iframe>` blocks and
-  anything else that starts a block-level tag.
+- HTML blocks (§4.6) — whole `<div>`, `<form>`, `<table>` blocks and anything
+  else that starts a block-level tag.
 - Inline raw HTML (§6.6) — `<b onclick="...">` and friends, attributes intact.
 - Link and image destinations, including `javascript:` URLs. They are
   percent-encoded and entity-decoded, not filtered by scheme.
 
-GFM's disallowed-raw-HTML filter is not implemented, so `GFM: false` changes none
-of this — it only turns strikethrough off.
+The one thing `GFM` changes here is the disallowed-raw-HTML filter, which
+rewrites the leading `<` of nine tag names — `title`, `textarea`, `style`,
+`xmp`, `iframe`, `noembed`, `noframes`, `script`, `plaintext` — and leaves every
+other tag, and every attribute, alone:
+
+```go
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("<script>alert(1)</script>", tabnasmarkdown.DefaultOptions))
+// "&lt;script>alert(1)&lt;/script>\n"
+
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("<script>alert(1)</script>", tabnasmarkdown.Options{GFM: false}))
+// "<script>alert(1)</script>\n"
+```
+
+That is nine tag names out of the whole of HTML. It is not a sanitizer.
 
 Run the output through an HTML sanitizer (bluemonday, or whatever your stack
 already uses) before it reaches a browser. If you would rather detect raw HTML
@@ -289,7 +304,7 @@ On the native tree the same nodes are `NodeHTMLInline` and `NodeHTMLBlock`. Eith
 way that tells you the input contains HTML; it does not make the HTML safe, and
 it says nothing about link destinations. The sanitizer is still the fix.
 
-## Turn strikethrough off, or hard breaks on
+## Turn the GFM extensions off, or hard breaks on
 
 There are two options, and they behave the same on `ParseDocument`,
 `ParseInline`, `ToHTML`, `ParseTree` and `RenderHTML`:
@@ -313,9 +328,10 @@ opts.Breaks = true
 Write `Options{GFM: false}` only when you mean pure CommonMark with no
 extensions, which is what the conformance suite runs.
 
-`GFM` gates GFM strikethrough, and nothing else — strikethrough is the only GFM
-extension implemented here. Tables, task lists, bare `www.`/`https://` autolink
-literals and footnotes are not, with `GFM: true` or without it.
+`GFM` gates four extensions as one switch — strikethrough, task list items,
+autolink literals and the disallowed-raw-HTML filter. Tables and footnotes are
+not implemented, with `GFM: true` or without it. With `GFM: false` the output is
+plain CommonMark, byte for byte.
 
 ```go
 doc := tabnasmarkdown.ParseDocument("~~gone~~", tabnasmarkdown.DefaultOptions)
@@ -328,6 +344,42 @@ fmt.Println(off["children"].([]any)[0].(map[string]any)["children"])
 
 fmt.Printf("%q\n", tabnasmarkdown.ToHTML("~~gone~~", tabnasmarkdown.Options{GFM: false}))
 // "<p>~~gone~~</p>\n"
+```
+
+## Work with task lists and bare URLs
+
+A list item whose first paragraph starts with `[ ]` or `[x]` and at least one
+space is a task list item: the marker is consumed and the item's `checked` field
+records its state (`nil` on an ordinary item).
+
+```go
+doc := tabnasmarkdown.ParseDocument("- [x] done\n- [ ] todo\n- plain\n", tabnasmarkdown.DefaultOptions)
+list := doc["children"].([]any)[0].(map[string]any)
+for _, item := range list["children"].([]any) {
+	fmt.Print(item.(map[string]any)["checked"], " ")
+}
+// true false <nil>
+
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("- [x] done\n", tabnasmarkdown.DefaultOptions))
+// "<ul>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> done</li>\n</ul>\n"
+```
+
+On the native tree the same state is `MdNode.Checked` plus `MdNode.HasChecked`,
+which is Go's spelling of the AST's `boolean | null`.
+
+Bare URLs and addresses become links without angle brackets, at the start of a
+line, after whitespace, or after `*`, `_`, `~` or `(`. Trailing sentence
+punctuation is left out of the link.
+
+```go
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("Visit www.commonmark.org.", tabnasmarkdown.DefaultOptions))
+// "<p>Visit <a href=\"http://www.commonmark.org\">www.commonmark.org</a>.</p>\n"
+
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("mail me at a@b.co", tabnasmarkdown.DefaultOptions))
+// "<p>mail me at <a href=\"mailto:a@b.co\">a@b.co</a></p>\n"
+
+fmt.Printf("%q\n", tabnasmarkdown.ToHTML("www.commonmark.org", tabnasmarkdown.Options{GFM: false}))
+// "<p>www.commonmark.org</p>\n"
 ```
 
 `Breaks` promotes soft line breaks to hard ones:
@@ -389,6 +441,18 @@ The last line is `TOTAL 652/652  100.00%`. The suite is pure CommonMark, so it
 runs with `Options{GFM: false, Breaks: false}`; `TestCommonMarkOptionMatrix`
 re-runs all 652 examples across all four `GFM` × `Breaks` combinations to check
 that no combination panics.
+
+The GFM extension corpus, with the same shape of table:
+
+```bash
+cd go
+go test -run TestGFMSpec -v ./...
+```
+
+The last line is `TOTAL 17/24`. The seven failures are all Tables, which is not
+implemented in either runtime; the four sections that are implemented pass
+completely, and only those are asserted. The TypeScript twin is
+`node ts/tools/gfm-conformance.mjs`.
 
 Everything, including the shared `test/spec/*.tsv` fixtures that both runtimes
 assert:

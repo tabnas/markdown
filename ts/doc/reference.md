@@ -32,12 +32,14 @@ toHtml('# Hello\n\nHello *world*') // => '<h1>Hello</h1>\n<p>Hello <em>world</em
 ```
 
 **The HTML is not sanitized.** Raw HTML blocks and inline tags pass through verbatim, as
-CommonMark specifies. GFM's disallowed-raw-HTML filter is not implemented.
+CommonMark specifies. The one exception is GFM's disallowed-raw-HTML filter, which is
+applied when `gfm` is on and rewrites the leading `<` of nine tag names.
 
 ```js
 import { toHtml } from '@tabnas/markdown'
 
-toHtml('<script>alert(1)</script>') // => '<script>alert(1)</script>\n'
+toHtml('<script>alert(1)</script>') // => '&lt;script>alert(1)&lt;/script>\n'
+toHtml('<script>alert(1)</script>', { gfm: false }) // => '<script>alert(1)</script>\n'
 ```
 
 A third output, `parseTree(src, opts?)`, returns the native CommonMark node tree that both
@@ -198,11 +200,14 @@ type ParserOptions = { gfm: boolean; breaks: boolean }
 
 | Option | Type | Default | Effect |
 |---|---|---|---|
-| `gfm` | `boolean` | `true` | Enables GFM strikethrough (`~~text~~` → a `delete` node / `<del>`). Opening and closing runs must be the same length. Parse-time only. It gates nothing else. |
+| `gfm` | `boolean` | `true` | Enables four GFM extensions together: strikethrough (`~~text~~` → a `delete` node / `<del>`, opening and closing runs the same length), task list items (`listItem.checked`), autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`), and the disallowed-raw-HTML filter. The first three are parse-time; the filter is applied by the renderer. |
 | `breaks` | `boolean` | `false` | When `true`, a soft line break becomes a `break` node in the AST and `<br />\n` in HTML. When `false`, a soft line break becomes a single space in the AST and `\n` in HTML. Hard line breaks (two or more trailing spaces, or a trailing backslash) are `break` nodes and `<br />` either way. |
 
-`renderHTML` reads only `breaks`; by the time it runs, `gfm` has already decided whether
-`del` nodes exist.
+`renderHTML` reads `breaks`, and reads `gfm` for one thing only — the disallowed-raw-HTML
+filter, which the extension defines at render time. Everything else `gfm` controls is
+already settled in the tree by then. Called as `renderHTML(tree)` with no options at all,
+it takes `gfm` from the parse that produced the tree, so a `gfm: false` parse renders as
+plain CommonMark.
 
 ### Reference map types
 
@@ -267,6 +272,7 @@ type Inline =
 |---|---|---|
 | `type` | `'listItem'` | |
 | `spread` | `boolean` | `true` when two of the item's own children are separated by a blank line. Derived from the block phase's `sourcepos` line ranges. |
+| `checked` | `boolean \| null` | GFM task list item state: `true` for `- [x]`, `false` for `- [ ]`, `null` for an ordinary item — and so `null` on every item when `gfm` is off. mdast's field. |
 | `children` | `Block[]` | |
 
 **`code`** — fenced and indented code blocks.
@@ -538,9 +544,13 @@ toHtml('[l](/ä)') // => '<p><a href="/%C3%A4">l</a></p>\n'
 
 ### Sanitization
 
-None is performed. `html_block` and `html_inline` literals are written verbatim. GFM's
-disallowed-raw-HTML filter is not implemented. Untrusted Markdown requires a sanitizer
-downstream of this renderer.
+None is performed. `html_block` and `html_inline` literals are written verbatim, apart
+from GFM's disallowed-raw-HTML filter: with `gfm` on, the leading `<` of `title`,
+`textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext` —
+opening or closing, any case, followed by whitespace, `/`, `>` or the end of the text — is
+written as `&lt;`. That is nine tag names; every other tag, every attribute and every link
+destination is untouched. Untrusted Markdown requires a sanitizer downstream of this
+renderer.
 
 ## Conformance
 
@@ -580,13 +590,32 @@ between TypeScript and Go. The 36 shared AST fixtures in `test/spec/*.tsv` pass 
 | Extension | Status |
 |---|---|
 | Strikethrough (`~~x~~`) | Implemented, gated on `gfm` |
+| Task list items (`- [x] done`) | Implemented, gated on `gfm` |
+| Autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`) | Implemented, gated on `gfm` |
+| Disallowed raw HTML filtering | Implemented, gated on `gfm`; applied by the renderer |
 | Tables | Not implemented |
-| Task list items | Not implemented |
-| Autolink literals (bare `www.` / `https://` without angle brackets) | Not implemented |
 | Footnotes | Not implemented |
-| Disallowed raw HTML filtering | Not implemented |
 
-`gfm: false` disables strikethrough and nothing else.
+`gfm: false` disables all four together, and the output is then plain CommonMark. The Go
+port is behind on the last three; see the top-level README for the current split.
+
+**Task list items.** A list item whose first block is a paragraph starting with a task
+list item marker — optional spaces, `[`, a space/tab or `x`/`X`, `]`, then at least one
+space or tab — is a task list item. The marker is consumed, `listItem.checked` becomes
+`true`/`false`, and the renderer writes `<input disabled="" type="checkbox"> ` (plus
+`checked=""` when checked) at the head of that paragraph.
+
+**Autolink literals.** Recognised at the start of a text run, after whitespace, or after
+`*`, `_`, `~` or `(`. `www.` gets `http://` prepended and an address gets `mailto:`. A
+domain is segments of alphanumerics, `_` and `-` separated by `.`, with at least one `.`
+and no `_` in either of the last two segments; trailing `?`, `!`, `.`, `,`, `:`, `*`,
+`_`, `~`, unbalanced `)` and a trailing entity-like `&…;` are excluded from the link.
+Never produced inside a link, a code span, raw HTML or an image description.
+
+**Disallowed raw HTML.** In `html` block and inline output the leading `<` of `title`,
+`textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext` —
+opening or closing, any case — is written as `&lt;`. The node's `value` keeps the
+original text; only the rendered HTML changes.
 
 ## Grammar file
 

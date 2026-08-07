@@ -92,16 +92,137 @@ func (r *htmlRenderer) tag(name string, attrs []attr, selfClosing bool) {
 	r.atLineStart = false
 }
 
+// --- GFM disallowed raw HTML (tagfilter) ------------------------------------
+
+// disallowedTags is GFM's tagfilter set. These nine tags change how the *rest*
+// of a document is interpreted (everything after <xmp> or <plaintext> stops
+// being markup at all), so GFM neutralises them by rewriting the leading `<`
+// as `&lt;` — opening and closing, in any case. Every other tag still passes
+// through verbatim, as CommonMark requires.
+//
+// This is purely a rendering concern: nothing rewrites the node, so the
+// literal in the tree and the `value` in the AST stay exactly as written.
+//
+// No name is a prefix of another, so the order here is immaterial — unlike the
+// TypeScript's regex alternation, where it would be first-match-wins.
+var disallowedTags = []string{
+	"title", "textarea", "style", "xmp", "iframe",
+	"noembed", "noframes", "script", "plaintext",
+}
+
+// isTagNameEnd is the TypeScript's lookahead, `(?=[\t\n\f\r />]|$)`: the tag
+// name must be followed by whitespace, `/`, `>` or the end of the text, so
+// `<scriptlet>` and `<titles>` are untouched. RE2 has no lookahead, so the
+// whole pattern below is a hand-coded scan rather than a regexp.
+func isTagNameEnd(c byte) bool {
+	switch c {
+	case '\t', '\n', '\f', '\r', ' ', '/', '>':
+		return true
+	}
+	return false
+}
+
+// disallowedTagLen returns the byte length of the disallowed-tag match
+// starting at s[i] (which must be `<`) — the `<`, an optional `/` and the tag
+// name, exactly what the TypeScript's regex captures — or -1 for no match.
+//
+// Case folding is ASCII-only, deliberately. The TypeScript applies the `i`
+// flag without `u`, which never folds a non-ASCII code point onto an ASCII one;
+// Go's `(?i)` would, and would make `<ſcript>` a match here but not there.
+func disallowedTagLen(s string, i int) int {
+	j := i + 1
+	if j < len(s) && '/' == s[j] {
+		j++
+	}
+
+	for _, name := range disallowedTags {
+		if len(s)-j < len(name) {
+			continue
+		}
+		k := 0
+		for ; k < len(name); k++ {
+			c := s[j+k]
+			if 'A' <= c && c <= 'Z' {
+				c += 32
+			}
+			if c != name[k] {
+				break
+			}
+		}
+		if k < len(name) {
+			continue
+		}
+		if end := j + len(name); end == len(s) || isTagNameEnd(s[end]) {
+			return end - i
+		}
+	}
+
+	return -1
+}
+
+func filterDisallowedTags(s string) string {
+	// Cheap reject: the vast majority of raw HTML holds none of these.
+	if strings.IndexByte(s, '<') < 0 {
+		return s
+	}
+
+	var b strings.Builder
+	matched := false
+	last := 0
+
+	for i := 0; i < len(s); {
+		if '<' != s[i] {
+			i++
+			continue
+		}
+		n := disallowedTagLen(s, i)
+		if n < 0 {
+			i++
+			continue
+		}
+		if !matched {
+			matched = true
+			b.Grow(len(s) + 8)
+		}
+		b.WriteString(s[last:i])
+		// Only the leading `<` changes; the tag name is copied as written.
+		b.WriteString("&lt;")
+		b.WriteString(s[i+1 : i+n])
+		last = i + n
+		i = last
+	}
+
+	if !matched {
+		return s
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// rawHTML is raw HTML as written, minus the tags GFM's tagfilter neutralises.
+func rawHTML(literal string, gfm bool) string {
+	if gfm {
+		return filterDisallowedTags(literal)
+	}
+	return literal
+}
+
 // RenderHTML renders doc (a tree that has been through both parse phases) as
 // HTML.
 //
-// Only opts.Breaks affects the output: it turns soft line breaks into hard
-// ones. GFM is a parse-time concern — by the time a del node exists the
-// renderer just prints it.
+// Two options reach the renderer. Breaks turns soft line breaks into hard
+// ones. GFM selects one thing only — the disallowed-raw-HTML filter, which the
+// extension defines at render time rather than at parse time. Everything else
+// GFM adds is settled by then: by the time a del node or an item's checked
+// state exists, the renderer just prints it.
 //
-// The TS takes a partial option object and resolves it here; Go takes the
-// already-resolved Options, because that is what the public ToHTML in
-// markdown.go holds by the time it calls in.
+// The TS takes a partial option object and resolves it here, defaulting `gfm`
+// to what the *document* was parsed with so that renderHTML(tree) with no
+// options renders the flavour it was parsed as. Go takes the already-resolved
+// Options — what the public ToHTML in markdown.go holds by the time it calls
+// in — so there is no absent case to default; a caller who wants that
+// behaviour spells it as RenderHTML(tree, Options{GFM: tree.GFM}). MdNode.GFM
+// carries the parse flag either way.
 func RenderHTML(doc *MdNode, opts Options) string {
 	// §6.9 soft line breaks: rendered as a newline, or as a hard break when
 	// the caller asks for breaks.
@@ -132,16 +253,36 @@ func RenderHTML(doc *MdNode, opts Options) string {
 			if nil != node.Parent {
 				grandparent = node.Parent.Parent
 			}
-			if nil != grandparent &&
+			tight := nil != grandparent &&
 				NodeList == grandparent.Type &&
 				nil != grandparent.ListData &&
-				grandparent.ListData.Tight {
-				break
-			}
+				grandparent.ListData.Tight
+
 			if entering {
-				r.cr()
-				r.tag("p", nil, false)
-			} else {
+				if !tight {
+					r.cr()
+					r.tag("p", nil, false)
+				}
+				// GFM task list item. The block phase consumed the `[x]`
+				// marker and left the state on the item, so the checkbox is
+				// written here, at the head of the item's first paragraph:
+				// directly after <li> when the list is tight, and inside the
+				// <p> when it is loose. The trailing space is the separator the
+				// extension's own output shows between the checkbox and the
+				// item text.
+				item := node.Parent
+				if nil != item && NodeItem == item.Type &&
+					item.FirstChild == node && item.HasChecked {
+					var attrs []attr
+					if item.Checked {
+						attrs = append(attrs, attr{"checked", ""})
+					}
+					attrs = append(attrs, attr{"disabled", ""})
+					attrs = append(attrs, attr{"type", "checkbox"})
+					r.tag("input", attrs, false)
+					r.lit(" ")
+				}
+			} else if !tight {
 				r.tag("/p", nil, false)
 				r.cr()
 			}
@@ -237,9 +378,10 @@ func RenderHTML(doc *MdNode, opts Options) string {
 			r.cr()
 
 		case NodeHTMLBlock:
-			// §4.6: raw HTML passes through verbatim, unescaped.
+			// §4.6: raw HTML passes through verbatim, unescaped — except for
+			// the nine tags GFM's tagfilter neutralises.
 			r.cr()
-			r.lit(node.Literal)
+			r.lit(rawHTML(node.Literal, opts.GFM))
 			r.cr()
 
 		case NodeText:
@@ -258,7 +400,7 @@ func RenderHTML(doc *MdNode, opts Options) string {
 			r.tag("/code", nil, false)
 
 		case NodeHTMLInline:
-			r.lit(node.Literal)
+			r.lit(rawHTML(node.Literal, opts.GFM))
 
 		case NodeEmph:
 			if entering {

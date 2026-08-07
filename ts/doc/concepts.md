@@ -254,20 +254,28 @@ One consequence of taking the specification seriously deserves stating on its ow
 HTML is not sanitized.** CommonMark requires raw HTML blocks and inline tags to pass
 through verbatim, and this renderer does exactly that. A conformant renderer cannot filter
 them, because filtering them would fail the suite. Anything rendering untrusted Markdown
-needs a sanitizer downstream. GFM defines a disallowed-raw-HTML extension for this; it is
-not implemented here.
+needs a sanitizer downstream. GFM's disallowed-raw-HTML extension is implemented, but it
+neutralises nine tag names and nothing else — it is not a sanitizer, and it says nothing
+about attributes or `javascript:` destinations.
 
 ## What is and is not GFM
 
-The package parses CommonMark, with one GFM extension: strikethrough. That is the whole
-of it. Tables, task list items, autolink literals, footnotes and disallowed-raw-HTML
-filtering are not implemented, and the `gfm` option gates strikethrough and nothing else,
-because there is nothing else to gate.
+The package parses CommonMark, with four GFM extensions: strikethrough, task list items,
+autolink literals and disallowed raw HTML. Tables and footnotes are not implemented, and
+`gfm` gates the four as a single switch rather than as four flags — a document is either
+GitHub-flavoured or it is not, and a per-extension matrix is configuration surface nobody
+asked for.
 
-This is worth saying flatly because the previous documentation implied more. The honest
-statement of scope is narrower than "CommonMark/GFM" and considerably more useful, since
-a caller who needs tables now knows to look elsewhere rather than discovering it at
-runtime.
+Three of the four are deliberately *not* in the inline scanner. Task list markers are
+consumed in the block phase, over a paragraph's raw text, before the inline scanner sees
+brackets at all; autolink literals are a post-pass over the finished inline tree; the
+raw-HTML filter is a rendering step. That keeps the scanner that decides code spans, raw
+HTML, emphasis and links exactly as CommonMark specifies it — which is what makes
+"652/652 with `gfm: true` as well as `gfm: false`" a structural property rather than a
+result that has to be re-earned by every extension.
+
+The honest statement of scope is still narrower than "CommonMark/GFM": a caller who needs
+tables knows to look elsewhere rather than discovering it at runtime.
 
 ## The grammar file is inert
 

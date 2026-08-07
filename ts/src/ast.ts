@@ -46,7 +46,17 @@ export type ListNode = {
   spread: boolean
   children: ListItemNode[]
 }
-export type ListItemNode = { type: 'listItem'; spread: boolean; children: Block[] }
+export type ListItemNode = {
+  type: 'listItem'
+  spread: boolean
+  /**
+   * mdast's task list field: `true`/`false` for a GFM task list item
+   * (`- [x] foo`), `null` for an ordinary item — and therefore `null`
+   * everywhere when `gfm` is off.
+   */
+  checked: boolean | null
+  children: Block[]
+}
 export type CodeNode = {
   type: 'code'
   lang: string | null
@@ -322,6 +332,7 @@ function buildBlock(
           items.push({
             type: 'listItem',
             spread: itemIsSpread(child),
+            checked: child.checked,
             children: builtChildren(child, built),
           })
         }
@@ -339,7 +350,12 @@ function buildBlock(
     case 'item':
       // Only reachable if an item is somehow detached from its list; a list
       // builds its own items above.
-      return { type: 'listItem', spread: itemIsSpread(node), children: builtChildren(node, built) }
+      return {
+        type: 'listItem',
+        spread: itemIsSpread(node),
+        checked: node.checked,
+        children: builtChildren(node, built),
+      }
 
     default:
       return null

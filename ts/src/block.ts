@@ -1078,7 +1078,72 @@ class BlockParser {
       this.finalize(this.tip, len)
     }
 
+    this.doc.gfm = this.options.gfm
+    if (this.options.gfm) markTaskListItems(this.doc)
+
     return { doc: this.doc, refmap: this.refmap }
+  }
+}
+
+// --- GFM task list items ----------------------------------------------------
+
+/**
+ * The task list item marker: optional spaces, `[`, either a whitespace
+ * character or `x`/`X`, `]`, and then at least one whitespace character before
+ * any other content.
+ *
+ * The trailing whitespace is required by the extension ("…and at least one
+ * whitespace character before any other content"), so `- [x]` with nothing
+ * after it is an ordinary item whose text is `[x]`. It is matched as a space
+ * or a tab rather than as any whitespace: a line ending there would mean the
+ * content starts on the *next* line, and consuming it would swallow the
+ * paragraph's first soft break.
+ */
+const RE_TASK_LIST_MARKER = /^ *\[([ \tXx])\][ \t]+/
+
+const TASK_LIST_CONTAINERS: Record<string, true> = {
+  document: true,
+  block_quote: true,
+  list: true,
+  item: true,
+}
+
+/**
+ * GFM task list items: mark every item whose first block is a paragraph
+ * beginning with a task list item marker, and consume the marker so it does
+ * not survive into the text.
+ *
+ * Run at the end of the block phase, over `stringContent` — before the inline
+ * phase has seen it. That is what makes the marker win over anything the
+ * inline scanner would otherwise make of the brackets: with a `[x]: /url`
+ * definition in the document, `- [x] foo` is still a task item rather than a
+ * link. It also means the item's `checked` state is settled before `ast.ts` or
+ * `html.ts` looks at the tree.
+ *
+ * Iterative rather than recursive: container nesting depth is chosen by the
+ * input, and `'> '.repeat(20000)` is a document this parser otherwise handles.
+ */
+function markTaskListItems(doc: MdNode): void {
+  const stack: MdNode[] = [doc]
+
+  while (0 < stack.length) {
+    const node = stack.pop() as MdNode
+
+    if ('item' === node.type) {
+      const first = node.firstChild
+      if (null !== first && 'paragraph' === first.type) {
+        const m = RE_TASK_LIST_MARKER.exec(first.stringContent)
+        if (null !== m) {
+          // Whitespace between the brackets is unchecked; `x`/`X` is checked.
+          node.checked = ' ' !== m[1] && '\t' !== m[1]
+          first.stringContent = first.stringContent.slice(m[0].length)
+        }
+      }
+    }
+
+    if (true === TASK_LIST_CONTAINERS[node.type]) {
+      for (let c = node.lastChild; c; c = c.prev) stack.push(c)
+    }
   }
 }
 

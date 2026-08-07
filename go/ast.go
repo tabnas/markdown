@@ -124,6 +124,16 @@ func nullableString(s string, present bool) any {
 	return s
 }
 
+// nullableBool is nullableString for `listItem.checked`, which mdast defines
+// as `boolean | null` — null for an item that is not a GFM task list item, and
+// therefore null everywhere when GFM is off.
+func nullableBool(b bool, present bool) any {
+	if !present {
+		return nil
+	}
+	return b
+}
+
 func blockChildren(node *MdNode, opts Options) []any {
 	out := make([]any, 0, 4)
 	for child := node.FirstChild; child != nil; child = child.Next {
@@ -194,6 +204,7 @@ func toBlock(node *MdNode, opts Options) map[string]any {
 			items = append(items, map[string]any{
 				"type":     "listItem",
 				"spread":   itemIsSpread(child),
+				"checked":  nullableBool(child.Checked, child.HasChecked),
 				"children": blockChildren(child, opts),
 			})
 		}
@@ -221,6 +232,7 @@ func toBlock(node *MdNode, opts Options) map[string]any {
 		return map[string]any{
 			"type":     "listItem",
 			"spread":   itemIsSpread(node),
+			"checked":  nullableBool(node.Checked, node.HasChecked),
 			"children": blockChildren(node, opts),
 		}
 	}

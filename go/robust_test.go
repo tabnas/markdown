@@ -140,6 +140,48 @@ func TestNestedContainersAreNotQuadratic(t *testing.T) {
 	}
 }
 
+// TestCaseFoldingIsASCIIOnly pins the one thing Go's regexp does that
+// JavaScript's `i` flag does not: fold case over all of Unicode.
+//
+// `(?i)script` also matches `ſcript`, and `(?i)[A-Za-z]` also matches U+017F
+// LATIN SMALL LETTER LONG S and U+212A KELVIN SIGN — where JavaScript's
+// non-unicode `i` deliberately never folds a non-ASCII code point onto an
+// ASCII one. inline.go's raw-HTML grammar was written around that; block.go's
+// HTML-block start conditions were not, so `<ſcript>` and `<linK>` opened an
+// HTML block here and a paragraph in the canonical runtime. Both spec suites
+// are pure ASCII, so neither caught it; a cross-runtime comparison over
+// non-ASCII input did.
+func TestCaseFoldingIsASCIIOnly(t *testing.T) {
+	// Written as escapes, not as literals: U+017F and U+212A are homoglyphs of
+	// `s` and `K` in most editors, and this test is exactly about telling them
+	// apart.
+	const longS, kelvin = "\u017f", "\u212a"
+
+	for _, c := range []struct{ in, want, why string }{
+		// Type 1: <script|pre|textarea|style>.
+		{"<" + longS + "cript>\n", "<p>&lt;" + longS + "cript&gt;</p>\n", "long s is not `s`"},
+		{"<" + longS + "tyle>\n", "<p>&lt;" + longS + "tyle&gt;</p>\n", "long s is not `s`"},
+		// Type 6: the §4.6 tag list.
+		{"<lin" + kelvin + ">\n", "<p>&lt;lin" + kelvin + "&gt;</p>\n", "kelvin sign is not `k`"},
+		{"<bloc" + kelvin + "quote>\n", "<p>&lt;bloc" + kelvin + "quote&gt;</p>\n", "kelvin sign is not `k`"},
+		// Type 7: any tag name at all, on a line of its own.
+		{"<" + longS + "script>\n", "<p>&lt;" + longS + "script&gt;</p>\n", "tag names are ASCII"},
+		{"<script" + longS + ">\n", "<p>&lt;script" + longS + "&gt;</p>\n", "tag names are ASCII"},
+		{"<" + kelvin + "script>\n", "<p>&lt;" + kelvin + "script&gt;</p>\n", "tag names are ASCII"},
+		// The ASCII case-insensitivity the folding is actually there for.
+		{"<SCRIPT>\nx\n</SCRIPT>\n", "<SCRIPT>\nx\n</SCRIPT>\n", "uppercase type 1"},
+		{"<ScRiPt>\nx\n</ScRiPt>\n", "<ScRiPt>\nx\n</ScRiPt>\n", "mixed case type 1"},
+		{"<LINK>\n", "<LINK>\n", "uppercase type 6"},
+		{"<H1>\n", "<H1>\n", "uppercase type 6, with a digit class in the pattern"},
+		{"<TEXTAREA>\n", "<TEXTAREA>\n", "uppercase type 1"},
+		{"<Anything>\n", "<Anything>\n", "type 7"},
+	} {
+		if got := ToHTML(c.in, Options{GFM: false}); got != c.want {
+			t.Errorf("%s: %q\n got  %q\n want %q", c.why, c.in, got, c.want)
+		}
+	}
+}
+
 func TestNonASCII(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
 		{"café naïve *ém*\n", "<p>café naïve <em>ém</em></p>\n"},

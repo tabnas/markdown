@@ -318,3 +318,277 @@ append-only rule.
   runtime, since neither can see the other.
 * `debug/go:Model()`, `Tabnas.Safe/Strict` presets and the `tabnas-verify`
   gate (§5) remain untouched by this strand.
+
+# 2026-08-07 — three GFM extensions in TypeScript (17/24, still 652/652)
+
+## 11. What landed
+
+Task list items, disallowed raw HTML and autolink literals, in the
+TypeScript runtime only. With strikethrough that is four of the six GFM
+extensions; tables and footnotes remain unimplemented. The GFM extension
+corpus (`test/gfm/spec.json`, 24 examples) goes from 3/24 to **17/24** —
+every non-table example — and CommonMark stays at **652/652**.
+
+## 12. Corrections to earlier sections
+
+* **§10's "each would need its own option, not a widening of `gfm`" is
+  reversed.** All four extensions are gated on the single `gfm` flag. The
+  argument for per-extension flags was that `gfm` had only ever meant
+  strikethrough, so widening it would change behaviour for existing
+  callers with `gfm` at its default. That is true, and it is the right
+  trade anyway: a caller asking for `gfm` is asking for the GitHub
+  dialect, not for one operator from it, and four booleans is
+  configuration surface nobody asked for. The behaviour change is real
+  and is documented in every README. The escape hatch is `gfm:false`,
+  which now means "plain CommonMark, byte for byte" — a stronger and more
+  useful guarantee than it had before.
+* **§8's "the flag gates strikethrough only … there is nothing else to
+  gate" no longer holds**, and neither does "the package parses
+  CommonMark, with one GFM extension" as the phrasing to use. §8 was
+  accurate when written.
+
+## 13. Where each extension lives, and why not in the inline scanner
+
+The governing constraint was that 652/652 must survive `gfm:true` as well
+as `gfm:false`. Two of the three could have been written as new branches
+of the inline scan; none of them was.
+
+* **Task list items — the block phase.** `markTaskListItems` runs at the
+  end of `block.ts`'s `parse`, over each item's first paragraph's
+  `stringContent`, before the inline phase exists. Deciding it on raw
+  text is what makes the marker beat the inline scanner: with `[x]: /url`
+  defined in the document, `- [x] foo` is still a task item and not a
+  link. It also settles `checked` before either `ast.ts` or `html.ts`
+  looks at the tree. The marker's required trailing whitespace is matched
+  as a space or tab, not "any whitespace" — a line ending there would
+  mean the content starts on the next line, and consuming it would
+  swallow the paragraph's first soft break.
+* **Autolink literals — a post-pass over the finished inline tree.**
+  `linkifyAutolinks` in `inline.ts`, which is how cmark-gfm does it. The
+  scanner that decides code spans, raw HTML, emphasis and links is not
+  touched at all, so an autolink literal cannot win against a construct
+  CommonMark says comes first — that precedence is structural rather than
+  something a new scanner branch has to remember. It consolidates
+  adjacent `text` siblings before scanning, because the scanner emits a
+  node per delimiter run: `a.b-c_d@a.b` arrives as three siblings and the
+  address is only visible once they are one string. `link` and `image`
+  subtrees are skipped (no links in links; an image's children are its
+  alt text).
+* **Disallowed raw HTML — the renderer.** `filterDisallowedTags` in
+  `html.ts`, applied to `html_block` and `html_inline` output only. The
+  node's literal and the AST's `value` keep the original text, which is
+  what the extension specifies: it is a filter on the output, not a
+  rewrite of the document.
+
+## 14. `renderHTML` had to learn `gfm`, and how it defaults
+
+The tag filter is the first render-time GFM behaviour, and `renderHTML`
+can be called as `renderHTML(tree)` with no options — which is exactly
+what `ts/tools/conformance.mjs` does, on trees parsed with `gfm:false`.
+Defaulting `gfm` to `true` there would have applied the filter to a plain
+CommonMark parse and cost conformance examples that contain `<script>`,
+`<style>` and `<textarea>`.
+
+So the block phase records the flag on the **document** node
+(`MdNode.gfm`) and the renderer defaults to it; an explicit
+`options.gfm` still wins. The tree now says which dialect produced it,
+which is the honest answer to "what should a renderer do with a tree it
+did not parse".
+
+## 15. Keeping the autolink pass linear
+
+Autolink literals are the one piece here with an adversarial cost
+profile, and two shapes of input go quadratic if written naively.
+
+* **Repeated failing candidates with a long greedy scan.** Every valid
+  start position (`^`, whitespace, `*`, `_`, `~`, `(`) begins a candidate
+  whose "non-space non-`<`" run can reach the end of the paragraph, so
+  `'(http://'.repeat(n)` is n scans of length n. Two fixes: the domain is
+  validated *before* the run is scanned, so a candidate that cannot match
+  costs only its own domain run; and the run end is cached, since
+  candidates are tried left to right and every candidate inside one run
+  shares its end.
+* **A long domain run shared by many candidates.** `_` both continues a
+  domain and opens a candidate, so `'_www.a_b.c'.repeat(n)` gives every
+  underscore a candidate whose domain reaches the end of the text. The
+  domain scan is therefore capped at 253 characters (RFC 1035's limit on
+  a fully-qualified name); anything past the cap is still scanned, just
+  as the path rather than as the domain. The email local part is capped
+  at 64 (RFC 5321) for the same reason, and that bounds the rewind from
+  each `@`.
+
+The parenthesis rule counts `(` and `)` once and then maintains the
+counts as trailing `)` are dropped, rather than recounting per drop — a
+deeply parenthesised URL is otherwise quadratic in its own length. All of
+this is asserted: `ts/test/commonmark.test.ts` has a 4x-input ratio test
+on the `_www.a_b.c` shape and exact-output tests on 20 000-deep
+parentheses.
+
+## 16. Deliberate divergences from cmark-gfm
+
+* **A domain must contain a period, for URLs as well as for `www.`.**
+  cmark-gfm passes `allow_short` for the scheme forms, so it links
+  `http://localhost/x`. The GFM spec text says "followed by a valid
+  domain", and a valid domain has at least one period; this follows the
+  spec.
+* **The domain is re-validated after trailing punctuation is trimmed.**
+  cmark-gfm validates only before, so `www..` becomes a link whose text
+  is `www`. Re-validating rejects that. No corpus example distinguishes
+  the two.
+* **Raw `<a>` tags do not suppress autolinking.** `<a href="x">www.b.com</a>`
+  produces a nested anchor, because the outer `<a>` is an `html_inline`
+  literal and not a `link` node. cmark-gfm behaves the same way; a
+  renderer that cares needs a sanitizer, which it needs anyway.
+
+## 17. Follow-ups this leaves
+
+* **The Go port.** Same file-for-file placement as above. It is not
+  optional housekeeping: `test/spec/*.tsv` now pins `listItem.checked`,
+  which only TypeScript projects, so five parity rows fail in
+  `go test ./...` until the port lands. That is the parity corpus doing
+  its job — it is supposed to go red when the canonical runtime moves
+  ahead — and it must not be "fixed" by editing the fixtures.
+* **GFM tables**, the remaining 7/24. Deliberately out of this change:
+  tables need block-level look-ahead of two lines and pipe handling, and
+  they are the one extension that changes how ordinary prose containing
+  `|` is parsed.
+* **Footnotes**, still unimplemented in both runtimes.
+* The §10 items not touched here — a TypeScript counterpart to
+  `go/robust_test.go` (partly addressed: the autolink robustness block in
+  `commonmark.test.ts` is adversarial-input testing, but only for this
+  feature), and the standing cross-runtime native-tree comparison.
+
+---
+
+# 2026-08-07 — the Go port of the three GFM extensions (17/24 in both, still 652/652)
+
+## 18. What landed
+
+The three extensions §11–17 describe in TypeScript, ported to Go
+file-for-file: `markTaskListItems` in `block.go`, `linkifyAutolinks` in
+`inline.go`, `filterDisallowedTags` in `html.go`, `Checked`/`HasChecked`
+and `GFM` on `MdNode`, and `listItem.checked` in `ast.go`. Placement,
+control flow and names match the canonical runtime; a side-by-side diff
+of the two files reads as one implementation.
+
+Scores after the port:
+
+* GFM extension corpus: **17/24 in Go**, the same 17 as TypeScript. The
+  seven failures are all Tables. `go test -run TestGFMSpec -v ./...`
+  prints the same per-section table `ts/tools/gfm-conformance.mjs` does.
+* CommonMark: **652/652 in Go**, unchanged.
+* `go test ./...` is green, including the five `test/spec/*.tsv` parity
+  rows §17 flagged as expected failures. They were the port's first job
+  and they are closed; the fixtures were not touched.
+
+## 19. Corrections to earlier sections
+
+* §17's first follow-up — "The Go port" — is **done**. The parity corpus
+  did exactly what it was supposed to: it went red the moment the
+  canonical runtime moved ahead, and green again when the port caught up.
+* AGENTS.md, `README.md`, `go/README.md` and all four `go/doc/*.md`
+  quadrants said "one GFM extension (strikethrough)" and "GFM's
+  disallowed-raw-HTML filter is not implemented". All of that is now
+  false and has been corrected. The root README's extension matrix no
+  longer says "not yet" for Go.
+
+## 20. Where Go could not copy TypeScript literally, and what it does instead
+
+Four places, all forced by the language rather than chosen:
+
+* **`RenderHTML` has no absent option.** TypeScript's
+  `renderHTML(tree, options?)` defaults `gfm` from `doc.gfm` (§14); Go's
+  `RenderHTML(doc *MdNode, opts Options)` always receives a resolved
+  `Options`, so there is no absent case to default from. `MdNode.GFM` is
+  still set on the document, and `RenderHTML(tree, Options{GFM: tree.GFM})`
+  is the Go spelling of §14's behaviour. Not observable through any
+  public path: `ToHTML` passes the same `Options` to both halves.
+* **`checked: boolean | null` becomes `Checked` + `HasChecked`**, the
+  same pair `node.go` already uses for `Title`/`HasTitle` and
+  `Info`/`HasInfo`. `ast.go` gains `nullableBool` next to
+  `nullableString`, so the projected field is a real JSON `null`.
+* **The tagfilter regex uses a lookahead**, `(?=[\t\n\f\r />]|$)`, which
+  RE2 has not. It is a hand-coded scan: find `<`, optional `/`, match one
+  of the nine names with ASCII-only folding, then check the next byte.
+  Same shape as the fence handling in `block.go`, and for the same reason.
+* **`RE_TASK_LIST_MARKER` is a loop, not a regexp.** RE2 would match it
+  correctly, but a per-item match that is only ever attempted at offset 0
+  is the only shape guaranteed not to make a document of many items
+  super-linear.
+
+## 21. Byte-vs-rune: why the autolink pass can scan bytes
+
+The port scans by byte offset like the rest of `inline.go`. That is exact
+rather than merely convenient, and the argument is worth writing down
+because the file's header hazard list exists for a reason:
+
+Every character the pass branches on is ASCII. No byte of a multi-byte
+UTF-8 sequence is below 0x80, so a non-ASCII character is exactly as
+unmatchable in Go as its UTF-16 code unit is in TypeScript — it ends a
+domain run, it is not a valid autolink start, and it is not trailing
+punctuation. Every boundary the pass computes therefore sits at an ASCII
+character, and no slice can cut a rune in half. The two length caps
+(§15's 253 and 64) are in bytes here and UTF-16 units there, which is the
+same number: both can only bind inside a run of ASCII domain characters.
+
+Verified rather than argued: see §22.
+
+## 22. Cross-runtime verification
+
+Three comparisons, all one-off runs (the committed nets are the two
+conformance suites and the `.tsv` fixtures):
+
+* **The corpora.** 652 CommonMark + 24 GFM examples × `gfm` × `breaks` =
+  **2704 records**, comparing both the AST and the HTML. Zero differences.
+  This is §7's 2608-record comparison extended with the GFM corpus and
+  re-run against the ported code.
+* **An adversarial corpus of 26 383 inputs** (105 532 records) built to
+  hit exactly the boundaries the new code computes: a multi-byte
+  character at every one of them, the full trailing-punctuation pair
+  matrix, entity-like semicolons, paren balance, domain-validity edges,
+  email edges, every task-marker shape, the tagfilter's lookahead, and
+  random assemblies from a token alphabet. Zero differences after §23.
+* **A second corpus of 44 637 multi-line documents** (178 548 records)
+  assembled from markdown line fragments, to reach the interactions
+  between the extensions and block structure. Zero differences.
+
+## 23. A pre-existing divergence the fuzzing found: Go's `(?i)` is not JavaScript's `i`
+
+The adversarial run turned up **16 mismatching records that had nothing
+to do with this port**: `<ſcript>`, `<ſscript>`, `<scriptſ>`, `<linK>`
+and friends were HTML blocks in Go and paragraphs in TypeScript, with
+`gfm` off as well as on. Confirmed against a pristine worktree at `HEAD`.
+
+Go's `(?i)` folds case over all of Unicode, so `(?i)script` also matches
+`ſcript` (U+017F LATIN SMALL LETTER LONG S) and `(?i)[A-Za-z]` also
+matches U+017F and U+212A KELVIN SIGN. JavaScript's `i` without `u`
+deliberately never folds a non-ASCII code point onto an ASCII one.
+`inline.go` was written around this — its comment on `inlineCDATA` says
+so explicitly — but `block.go`'s four HTML-block regexes were not.
+
+Fixed by spelling the case out: `asciiFoldPattern` turns a lowercase
+literal into two-element classes (`h[1-6]` → `[hH][1-6]`), and type 7
+drops `(?i)` entirely because every letter in `blockOpenTag` /
+`blockCloseTag` is already a both-cases class. `TestCaseFoldingIsASCIIOnly`
+in `go/robust_test.go` pins it, with the two code points written as
+escapes rather than literals — they are homoglyphs, and that test is
+precisely about telling them apart.
+
+Worth noting how invisible this was: both spec corpora are pure ASCII, so
+neither conformance suite could reach it, and no `.tsv` fixture holds a
+non-ASCII tag name. It took a cross-runtime comparison over deliberately
+non-ASCII input. That is the same lesson as §7's `sourcepos` column bug —
+the automated nets check the cases someone thought of.
+
+## 24. Follow-ups this leaves
+
+* **GFM tables**, the remaining 7/24, still deliberately out of scope in
+  both runtimes.
+* **Footnotes**, still unimplemented in both.
+* **The standing cross-runtime comparison** queued in §10 and §17 is now
+  overdue twice. The three runs in §22 were throwaway scripts; §23 is a
+  direct argument for making the adversarial half of them a committed
+  job, since it is the only thing that has ever caught this class of bug.
+* **A TypeScript twin of `TestCaseFoldingIsASCIIOnly`** was not added:
+  TypeScript is already correct here and the defect was Go-only. It would
+  still be worth having as a guard on the canonical side.

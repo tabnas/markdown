@@ -293,21 +293,62 @@ const blockTags = `address|article|aside|base|basefont|blockquote|body|caption|`
 	`li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|` +
 	`section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul`
 
+// blockRawTextTags is the type 1 tag list — the four whose content is raw text.
+const blockRawTextTags = `script|pre|textarea|style`
+
+// asciiFoldPattern spells a lowercase regex literal in both cases, mapping
+// each ASCII letter to a two-element class and passing everything else through
+// (so `h[1-6]` becomes `[hH][1-6]` and `|` stays an alternation).
+//
+// This is what the TypeScript's `i` flag means and what Go's `(?i)` does not:
+// Go folds case over all of Unicode, so `(?i)script` also matches `ſcript` and
+// `(?i)[A-Za-z]` also matches U+017F LATIN SMALL LETTER LONG S and U+212A
+// KELVIN SIGN, where JavaScript's non-unicode `i` deliberately never folds a
+// non-ASCII code point onto an ASCII one. Left as `(?i)`, `<ſcript>` and
+// `<linK>` opened an HTML block here and a paragraph there — the same trap
+// inline.go's raw-HTML grammar already spells its way around.
+func asciiFoldPattern(s string) string {
+	var b strings.Builder
+	b.Grow(4 * len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case 'a' <= c && c <= 'z':
+			b.WriteByte('[')
+			b.WriteByte(c)
+			b.WriteByte(c - 32)
+			b.WriteByte(']')
+		case 'A' <= c && c <= 'Z':
+			b.WriteByte('[')
+			b.WriteByte(c + 32)
+			b.WriteByte(c)
+			b.WriteByte(']')
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
 // reHTMLBlockOpen is indexed by HTML block type 1–7; slot 0 is unused. Go's
 // `^`/`$` match at the ends of the text (never at a line break) unless (?m) is
 // set, which is what the JavaScript regexes mean too.
+//
+// Type 7 needs no case folding at all: every letter in blockOpenTag and
+// blockCloseTag is already written as a both-cases class, so the TypeScript's
+// `i` flag has nothing to do there.
 var reHTMLBlockOpen = []*regexp.Regexp{
 	nil,
-	regexp.MustCompile(`(?i)^<(?:script|pre|textarea|style)(?:[ \t]|>|$)`),
+	regexp.MustCompile(`^<(?:` + asciiFoldPattern(blockRawTextTags) + `)(?:[ \t]|>|$)`),
 	regexp.MustCompile(`^<!--`),
 	regexp.MustCompile(`^<[?]`),
 	regexp.MustCompile(`^<![A-Za-z]`),
 	regexp.MustCompile(`^<!\[CDATA\[`),
-	regexp.MustCompile(`(?i)^</?(?:` + blockTags + `)(?:[ \t]|/?>|$)`),
-	regexp.MustCompile(`(?i)^(?:` + blockOpenTag + `|` + blockCloseTag + `)[ \t]*$`),
+	regexp.MustCompile(`^</?(?:` + asciiFoldPattern(blockTags) + `)(?:[ \t]|/?>|$)`),
+	regexp.MustCompile(`^(?:` + blockOpenTag + `|` + blockCloseTag + `)[ \t]*$`),
 }
 
-var reHTMLBlockCloseRawText = regexp.MustCompile(`(?i)</(?:script|pre|textarea|style)>`)
+var reHTMLBlockCloseRawText = regexp.MustCompile(`</(?:` + asciiFoldPattern(blockRawTextTags) + `)>`)
 
 // htmlBlockClose holds the end conditions for types 1–5; types 6 and 7 end at
 // a blank line instead. The TypeScript keeps five regexes; only type 1 is
@@ -1391,7 +1432,113 @@ func (p *blockParser) parse(input string) (*MdNode, RefMap) {
 		p.finalize(p.tip, length)
 	}
 
+	p.doc.GFM = p.options.GFM
+	if p.options.GFM {
+		markTaskListItems(p.doc)
+	}
+
 	return p.doc, p.refmap
+}
+
+// --- GFM task list items ----------------------------------------------------
+
+// taskListMarker implements the TypeScript's RE_TASK_LIST_MARKER,
+// /^ *\[([ \tXx])\][ \t]+/: optional spaces, `[`, either a whitespace
+// character or `x`/`X`, `]`, and then at least one whitespace character before
+// any other content. It returns the character between the brackets and the
+// byte length of the whole marker.
+//
+// The trailing whitespace is required by the extension ("…and at least one
+// whitespace character before any other content"), so `- [x]` with nothing
+// after it is an ordinary item whose text is `[x]`. It is matched as a space
+// or a tab rather than as any whitespace: a line ending there would mean the
+// content starts on the *next* line, and consuming it would swallow the
+// paragraph's first soft break.
+//
+// Hand-coded rather than compiled as a regexp, for the reason the fence
+// patterns above are: this runs once per list item, and a match that is only
+// ever attempted at offset 0 is the only shape that keeps a document of many
+// items linear.
+func taskListMarker(s []byte) (state byte, length int, ok bool) {
+	i := 0
+	for i < len(s) && ' ' == s[i] {
+		i++
+	}
+	if i >= len(s) || '[' != s[i] {
+		return 0, 0, false
+	}
+	i++
+	if i >= len(s) {
+		return 0, 0, false
+	}
+	state = s[i]
+	if ' ' != state && '\t' != state && 'x' != state && 'X' != state {
+		return 0, 0, false
+	}
+	i++
+	if i >= len(s) || ']' != s[i] {
+		return 0, 0, false
+	}
+	i++
+
+	spaces := i
+	for i < len(s) && (' ' == s[i] || '\t' == s[i]) {
+		i++
+	}
+	if i == spaces {
+		return 0, 0, false
+	}
+	return state, i, true
+}
+
+// taskListContainers is the set of node types markTaskListItems descends into.
+var taskListContainers = map[NodeType]bool{
+	NodeDocument:   true,
+	NodeBlockQuote: true,
+	NodeList:       true,
+	NodeItem:       true,
+}
+
+// markTaskListItems implements GFM task list items: mark every item whose
+// first block is a paragraph beginning with a task list item marker, and
+// consume the marker so it does not survive into the text.
+//
+// Run at the end of the block phase, over StringContent — before the inline
+// phase has seen it. That is what makes the marker win over anything the
+// inline scanner would otherwise make of the brackets: with a `[x]: /url`
+// definition in the document, `- [x] foo` is still a task item rather than a
+// link. It also means the item's checked state is settled before ast.go or
+// html.go looks at the tree.
+//
+// Iterative rather than recursive: container nesting depth is chosen by the
+// input, and strings.Repeat("> ", 20000) is a document this parser otherwise
+// handles.
+func markTaskListItems(doc *MdNode) {
+	stack := []*MdNode{doc}
+
+	for 0 < len(stack) {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		if NodeItem == node.Type {
+			first := node.FirstChild
+			if nil != first && NodeParagraph == first.Type {
+				if state, length, ok := taskListMarker(first.StringContent); ok {
+					// Whitespace between the brackets is unchecked; `x`/`X` is
+					// checked.
+					node.Checked = ' ' != state && '\t' != state
+					node.HasChecked = true
+					first.StringContent = first.StringContent[length:]
+				}
+			}
+		}
+
+		if taskListContainers[node.Type] {
+			for c := node.LastChild; nil != c; c = c.Prev {
+				stack = append(stack, c)
+			}
+		}
+	}
 }
 
 // parseBlocks runs phase 1: build the block tree and collect link reference

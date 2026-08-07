@@ -6,11 +6,16 @@
 
 export type ParserOptions = {
   /**
-   * Enable GFM strikethrough (`~~x~~`). Default true.
+   * Enable the GFM extensions. Default true.
    *
-   * Strikethrough is the only GFM extension implemented; tables, task list
-   * items, autolink literals, footnotes and raw-HTML filtering are not, and
-   * this flag does not gate them.
+   * Four are implemented, and this one flag gates all of them together:
+   * strikethrough (`~~x~~`), task list items (`- [x] foo`), autolink literals
+   * (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`) and the
+   * disallowed-raw-HTML filter. Tables and footnotes are not implemented.
+   *
+   * The first three are parse-time; the raw-HTML filter is applied by the
+   * renderer, which is why `html.ts` reads this option too. With `gfm:false`
+   * the output is plain CommonMark, byte for byte.
    */
   gfm: boolean
   /** Render soft line breaks as hard breaks. */

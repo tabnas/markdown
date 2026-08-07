@@ -13,7 +13,8 @@ Two answers first, because most of these recipes depend on them:
   is a first-class output, not a side utility. It is also **not sanitized** —
   see [Render untrusted Markdown safely](#render-untrusted-markdown-safely).
 
-The parser is CommonMark 0.31.2 plus one GFM extension (strikethrough).
+The parser is CommonMark 0.31.2 plus four GFM extensions: strikethrough, task
+list items, autolink literals and the disallowed-raw-HTML filter.
 
 ## Get just the AST, without the engine
 
@@ -145,8 +146,10 @@ which for the tree above produces:
 <p>See <a href="https://example.com/docs">docs</a>.</p>
 ```
 
-`renderHTML` takes the same options object as everything else; only `breaks`
-affects it, since `gfm` is decided at parse time.
+`renderHTML` takes the same options object as everything else. `breaks` affects
+it, and `gfm` selects one thing only — the disallowed-raw-HTML filter, which the
+extension defines at render time. Called with no options, it uses the `gfm` the
+tree was parsed with.
 
 ## Render untrusted Markdown safely
 
@@ -157,20 +160,31 @@ of scoring 652/652.
 ```js
 import { toHtml } from '@tabnas/markdown'
 
-toHtml('<script>alert(1)</script>\n') // => '<script>alert(1)</script>\n'
+toHtml('<img onerror="alert(1)">\n') // => '<img onerror="alert(1)">\n'
 toHtml('[click](javascript:alert(1))\n') // => '<p><a href="javascript:alert(1)">click</a></p>\n'
 ```
 
 What reaches the output untouched:
 
-- HTML blocks (§4.6) — whole `<script>`, `<style>`, `<iframe>` blocks and
-  anything else that starts a block-level tag.
+- HTML blocks (§4.6) — whole `<div>`, `<form>`, `<table>` blocks and anything
+  else that starts a block-level tag.
 - Inline raw HTML (§6.6) — `<b onclick="...">` and friends, attributes intact.
 - Link and image destinations, including `javascript:` URLs. They are
   percent-encoded and entity-decoded, not filtered by scheme.
 
-GFM's disallowed-raw-HTML filter is not implemented, so `gfm: false` changes
-none of this — it only turns strikethrough off.
+The one thing `gfm` changes here is the disallowed-raw-HTML filter, which
+rewrites the leading `<` of nine tag names — `title`, `textarea`, `style`,
+`xmp`, `iframe`, `noembed`, `noframes`, `script`, `plaintext` — and leaves
+every other tag, and every attribute, alone:
+
+```js
+import { toHtml } from '@tabnas/markdown'
+
+toHtml('<script>alert(1)</script>\n') // => '&lt;script>alert(1)&lt;/script>\n'
+toHtml('<script>alert(1)</script>\n', { gfm: false }) // => '<script>alert(1)</script>\n'
+```
+
+That is nine tag names out of the whole of HTML. It is not a sanitizer.
 
 Run the output through a sanitizer (DOMPurify, sanitize-html, or whatever your
 stack already uses) before it reaches a browser. If you would rather detect raw
@@ -186,15 +200,16 @@ parseDocument('Hi <b>there</b>').children[0].children // => [{ type: 'text', val
 That tells you the input contains HTML; it does not make the HTML safe, and it
 says nothing about link destinations. The sanitizer is still the fix.
 
-## Turn strikethrough off, or hard breaks on
+## Turn the GFM extensions off, or hard breaks on
 
 There are two options, `gfm` (default `true`) and `breaks` (default `false`),
 and they behave the same on `parseDocument`, `parseInline`, `toHtml`,
 `parseTree` and `.use(Markdown, opts)`.
 
-`gfm` gates GFM strikethrough, and nothing else — strikethrough is the only GFM
-extension implemented here. Tables, task lists, bare `www.`/`https://` autolink
-literals and footnotes are not, with `gfm: true` or without it.
+`gfm` gates four extensions as one switch — strikethrough, task list items,
+autolink literals and the disallowed-raw-HTML filter. Tables and footnotes are
+not implemented, with `gfm: true` or without it. With `gfm: false` the output is
+plain CommonMark.
 
 ```js
 import { parseDocument, toHtml } from '@tabnas/markdown'
@@ -202,6 +217,31 @@ import { parseDocument, toHtml } from '@tabnas/markdown'
 parseDocument('~~gone~~').children[0].children // => [{ type: 'delete', children: [{ type: 'text', value: 'gone' }] }]
 parseDocument('~~gone~~', { gfm: false }).children[0].children // => [{ type: 'text', value: '~~gone~~' }]
 toHtml('~~gone~~', { gfm: false }) // => '<p>~~gone~~</p>\n'
+```
+
+## Work with task lists and bare URLs
+
+A list item whose first paragraph starts with `[ ]` or `[x]` and at least one
+space is a task list item: the marker is consumed and `listItem.checked` records
+its state (`null` on an ordinary item).
+
+```js
+import { parseDocument, toHtml } from '@tabnas/markdown'
+
+parseDocument('- [x] done\n- [ ] todo\n- plain\n').children[0].children.map((i) => i.checked) // => [true, false, null]
+toHtml('- [x] done\n') // => '<ul>\n<li><input checked="" disabled="" type="checkbox"> done</li>\n</ul>\n'
+```
+
+Bare URLs and addresses become links without angle brackets, at the start of a
+line, after whitespace, or after `*`, `_`, `~` or `(`. Trailing sentence
+punctuation is left out of the link.
+
+```js
+import { toHtml } from '@tabnas/markdown'
+
+toHtml('Visit www.commonmark.org.\n') // => '<p>Visit <a href="http://www.commonmark.org">www.commonmark.org</a>.</p>\n'
+toHtml('mail me at a@b.co\n') // => '<p>mail me at <a href="mailto:a@b.co">a@b.co</a></p>\n'
+toHtml('www.commonmark.org\n', { gfm: false }) // => '<p>www.commonmark.org</p>\n'
 ```
 
 `breaks` promotes soft line breaks to hard ones:

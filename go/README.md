@@ -1,7 +1,7 @@
 # markdown plugin (Go)
 
 A CommonMark parser for the [Tabnas](https://github.com/tabnas/parser) engine, scoring
-**652/652 on the CommonMark 0.31.2 spec suite**, with one GFM extension (strikethrough).
+**652/652 on the CommonMark 0.31.2 spec suite**, with four GFM extensions.
 This is the Go port of the canonical TypeScript package
 [`@tabnas/markdown`](../ts/README.md); the two are verified to agree on every example.
 
@@ -30,12 +30,20 @@ fmt.Print(tabnasmarkdown.ToHTML("# Hello\n\nHello *world*", opts))
 ```
 
 **The HTML is not sanitized.** Raw HTML blocks and inline tags pass through verbatim, as
-CommonMark specifies, and GFM's disallowed-raw-HTML filter is not implemented. Put a
-sanitizer downstream of any untrusted Markdown.
+CommonMark specifies. Put a sanitizer downstream of any untrusted Markdown.
+
+```go
+fmt.Print(tabnasmarkdown.ToHTML(`<img onerror="alert(1)">`, opts))
+// <img onerror="alert(1)">
+```
+
+GFM's disallowed-raw-HTML filter (on with `GFM`, the default) rewrites the leading `<` of
+nine tag names — `title`, `textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`,
+`script`, `plaintext` — and touches nothing else:
 
 ```go
 fmt.Print(tabnasmarkdown.ToHTML("<script>alert(1)</script>", opts))
-// <script>alert(1)</script>
+// &lt;script>alert(1)&lt;/script>
 ```
 
 `ParseTree` returns the native CommonMark node tree instead — it keeps `SourcePos` on
@@ -79,9 +87,10 @@ To install the plugin on an engine you already have, use `j.Use(tabnasmarkdown.M
 
 Options are a struct, not a map: `tabnasmarkdown.Options{GFM: bool, Breaks: bool}`, with
 `DefaultOptions` being `{GFM: true, Breaks: false}`. `ResolveOptions` converts the plugin
-option map form. `GFM` gates strikethrough and nothing else: tables, task list items,
-autolink literals (bare `www.` / `https://` without angle brackets), footnotes and
-disallowed-raw-HTML filtering are not implemented.
+option map form. `GFM` gates four extensions together — strikethrough, task list items,
+autolink literals (bare `www.` / `https://` / `a@b.co`) and the disallowed-raw-HTML
+filter. Tables and footnotes are not implemented. With `GFM: false` the output is plain
+CommonMark, byte for byte.
 
 The parser is engine-free — nothing under `commonmark.go` imports the engine — so the
 conformance suite runs on its own:

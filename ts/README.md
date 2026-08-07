@@ -1,7 +1,7 @@
 # @tabnas/markdown (TypeScript)
 
 A CommonMark parser for the [Tabnas](https://github.com/tabnas/parser) engine, scoring
-**652/652 on the CommonMark 0.31.2 spec suite**, with one GFM extension (strikethrough).
+**652/652 on the CommonMark 0.31.2 spec suite**, with four GFM extensions.
 This is the canonical implementation; [`go/`](../go/README.md) is a port of it.
 
 [![npm version](https://img.shields.io/npm/v/@tabnas/markdown.svg)](https://npmjs.com/package/@tabnas/markdown)
@@ -35,13 +35,22 @@ toHtml('# Hello\n\nHello *world*') // => '<h1>Hello</h1>\n<p>Hello <em>world</em
 ```
 
 **The HTML is not sanitized.** Raw HTML blocks and inline tags pass through verbatim, as
-CommonMark specifies, and GFM's disallowed-raw-HTML filter is not implemented. Put a
-sanitizer downstream of any untrusted Markdown.
+CommonMark specifies. Put a sanitizer downstream of any untrusted Markdown.
 
 ```js
 import { toHtml } from '@tabnas/markdown'
 
-toHtml('<script>alert(1)</script>') // => '<script>alert(1)</script>\n'
+toHtml('<img onerror="alert(1)">') // => '<img onerror="alert(1)">\n'
+```
+
+GFM's disallowed-raw-HTML filter (on with `gfm`, the default) rewrites the leading `<` of
+nine tag names — `title`, `textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`,
+`script`, `plaintext` — and touches nothing else:
+
+```js
+import { toHtml } from '@tabnas/markdown'
+
+toHtml('<script>alert(1)</script>') // => '&lt;script>alert(1)&lt;/script>\n'
 ```
 
 As a Tabnas plugin, `parse()` returns the same AST as `parseDocument()`:
@@ -83,10 +92,10 @@ The `// =>` assertions in this repo's Markdown are executed as tests
 (`test/doc-examples.test.ts`, and `tools/check-doc-examples.mjs` for the engine-free
 check), so a wrong expected value is a failing test.
 
-Options are `gfm` (default `true`) and `breaks` (default `false`). `gfm` gates
-strikethrough and nothing else: tables, task list items, autolink literals (bare `www.` /
-`https://` without angle brackets), footnotes and disallowed-raw-HTML filtering are not
-implemented.
+Options are `gfm` (default `true`) and `breaks` (default `false`). `gfm` gates four
+extensions together — strikethrough, task list items, autolink literals (bare `www.` /
+`https://` / `a@b.co`) and the disallowed-raw-HTML filter. Tables and footnotes are not
+implemented. With `gfm:false` the output is plain CommonMark.
 
 ## Documentation
 

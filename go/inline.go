@@ -1216,6 +1216,446 @@ func (p *inlineParser) parseReference(s string) int {
 	return p.pos - startpos
 }
 
+// --- GFM extended autolinks (autolink literals) -----------------------------
+//
+// GFM recognises `www.x.com`, `https://x.com` and `a@x.com` without the `<…>`
+// CommonMark requires. This runs as a post-pass over the finished inline tree
+// rather than as another branch of the scan above, which is how cmark-gfm does
+// it and is the only shape that keeps 652/652 safe: the scanner that decides
+// code spans, raw HTML, emphasis and links is not touched at all, and an
+// autolink can therefore never win against a construct CommonMark says comes
+// first.
+//
+// The pass rewrites text nodes into text/link/text runs. It does not descend
+// into link (links may not contain links) or image (its children are the alt
+// text), and code/html_inline are leaves it never looks inside.
+//
+// Everything here scans by BYTE, like the rest of this file. Every character
+// the pass branches on is ASCII, and no byte of a multi-byte UTF-8 sequence
+// can collide with one, so a non-ASCII character is exactly as unmatchable
+// here as its UTF-16 code unit is in the TypeScript — it ends a domain run, it
+// is not a valid autolink start, and it is not trailing punctuation. Slices
+// therefore never cut a rune in half: every boundary this pass produces sits
+// at an ASCII character. The two length caps below are in bytes rather than
+// UTF-16 units, which is the same number: they can only bind inside a run of
+// ASCII domain characters.
+
+// maxAutolinkDomain is RFC 1035's limit on a fully-qualified domain name. See
+// scanDomainEnd.
+const maxAutolinkDomain = 253
+
+// maxEmailLocal is RFC 5321's limit on the local part of an address, before
+// the `@`.
+const maxEmailLocal = 64
+
+// autolinkSchemes are the three schemes the extension recognises without angle
+// brackets.
+var autolinkSchemes = []string{"https://", "http://", "ftp://"}
+
+func isASCIIAlnum(c byte) bool {
+	return ('0' <= c && c <= '9') || ('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z')
+}
+
+func isAutolinkSpace(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	}
+	return false
+}
+
+// isDomainChar reports the characters a domain is built from: a segment holds
+// alphanumerics, `_` and `-`, and `.` separates them.
+func isDomainChar(c byte) bool {
+	return isASCIIAlnum(c) || '_' == c || '-' == c || '.' == c
+}
+
+// isEmailLocalChar reports what may appear before the `@`: alphanumerics and
+// `.`, `-`, `_`, `+`.
+func isEmailLocalChar(c byte) bool {
+	return isASCIIAlnum(c) || '.' == c || '-' == c || '_' == c || '+' == c
+}
+
+// isAutolinkStart implements "All such recognized autolinks can only come at
+// the beginning of a line, after whitespace, or any of the delimiting
+// characters `*`, `_`, `~`, `(`."
+//
+// The start of a text node counts as the beginning of a line: by the time this
+// runs, everything the inline scanner consumed — an emphasis delimiter, a code
+// span, a soft break — has already ended the previous text node, so offset 0
+// is never in the middle of a word.
+func isAutolinkStart(s string, i int) bool {
+	if 0 == i {
+		return true
+	}
+	c := s[i-1]
+	return isAutolinkSpace(c) || '*' == c || '_' == c || '~' == c || '(' == c
+}
+
+// matchesIgnoreCase is an ASCII case-insensitive comparison against an
+// already-lowercase literal.
+func matchesIgnoreCase(s string, at int, lower string) bool {
+	if at+len(lower) > len(s) {
+		return false
+	}
+	for k := 0; k < len(lower); k++ {
+		c := s[at+k]
+		if 'A' <= c && c <= 'Z' {
+			c += 32
+		}
+		if c != lower[k] {
+			return false
+		}
+	}
+	return true
+}
+
+// scanDomainEnd returns the end of the run of domain characters at from,
+// capped at maxAutolinkDomain.
+//
+// The cap is what keeps this pass linear. `_` both continues a domain and
+// introduces a valid autolink start, so without a bound an input like
+// strings.Repeat("_www.a_b.c", n) gives every underscore a candidate whose
+// domain run reaches the end of the text — quadratic. Anything past the cap is
+// still scanned, just as the path rather than as the domain, and no real
+// domain comes near it.
+func scanDomainEnd(s string, from int) int {
+	max := len(s)
+	if from+maxAutolinkDomain < max {
+		max = from + maxAutolinkDomain
+	}
+	i := from
+	for i < max && isDomainChar(s[i]) {
+		i++
+	}
+	return i
+}
+
+// isValidDomain reports a valid domain: at least one period, and no underscore
+// in either of the last two segments. from..to must already be a run of domain
+// characters.
+func isValidDomain(s string, from int, to int) bool {
+	if to <= from {
+		return false
+	}
+	periods := 0
+	underscoresInLast := 0
+	underscoresInPrev := 0
+	for i := from; i < to; i++ {
+		switch s[i] {
+		case '_':
+			underscoresInLast++
+		case '.':
+			underscoresInPrev = underscoresInLast
+			underscoresInLast = 0
+			periods++
+		}
+	}
+	return 0 < periods && 0 == underscoresInLast && 0 == underscoresInPrev
+}
+
+// trimAutolinkEnd implements "extended autolink path validation" — pull the
+// end of the match back off trailing characters that read as sentence
+// punctuation rather than as part of a URL. One loop rather than three passes,
+// because dropping a `)` can expose a `.` and vice versa.
+//
+//   - `?` `!` `.` `,` `:` `*` `_` `~` are dropped wherever they trail;
+//   - a trailing `)` is dropped only while the match holds more `)` than `(`,
+//     so `(www.a.com/x_(y))` keeps its inner pair and loses the outer one;
+//   - a trailing `;` preceded by something shaped like an entity reference
+//     takes the whole `&…;` with it.
+//
+// The parenthesis counts are taken once and then maintained, not recomputed
+// per drop: a deeply parenthesised URL is otherwise quadratic in its own
+// length.
+func trimAutolinkEnd(s string, start int, end int) int {
+	opening := -1
+	closing := -1
+
+	for start < end {
+		c := s[end-1]
+
+		switch c {
+		case '?', '!', '.', ',', ':', '*', '_', '~':
+			end--
+			continue
+
+		case ')':
+			if opening < 0 {
+				opening = 0
+				closing = 0
+				for i := start; i < end; i++ {
+					switch s[i] {
+					case '(':
+						opening++
+					case ')':
+						closing++
+					}
+				}
+			}
+			if closing <= opening {
+				return end
+			}
+			closing--
+			end--
+			continue
+
+		case ';':
+			// `&` followed by one or more alphanumerics, then this `;`.
+			j := end - 2
+			for j > start && isASCIIAlnum(s[j]) {
+				j--
+			}
+			if j < end-2 && '&' == s[j] {
+				end = j
+				continue
+			}
+			return end
+		}
+
+		return end
+	}
+
+	return end
+}
+
+// autolinkMatch is one recognised autolink literal: s[start:end] linking to
+// href.
+type autolinkMatch struct {
+	start int
+	end   int
+	href  string
+}
+
+// scanAutolinks returns every autolink literal in one text run, left to right
+// and non-overlapping. It returns nil when there is nothing to do, which is
+// the overwhelmingly common case and saves the caller a slice and a splice.
+func scanAutolinks(s string) []autolinkMatch {
+	length := len(s)
+	var out []autolinkMatch
+
+	// The maximal run of non-space, non-`<` characters containing the current
+	// position — "zero or more non-space non-`<` characters may follow" the
+	// domain. Cached because candidates are tried left to right, so each run is
+	// scanned once however many candidates start inside it.
+	runStart := -1
+	runEnd := -1
+
+	i := 0
+	lastEnd := 0
+
+	for i < length {
+		c := s[i]
+
+		// --- email: found by its `@`, then rewound to the start of the local
+		// part
+		if '@' == c {
+			k := i
+			floor := lastEnd
+			if i-maxEmailLocal > floor {
+				floor = i - maxEmailLocal
+			}
+			for k > floor && isEmailLocalChar(s[k-1]) {
+				k--
+			}
+
+			if k < i && isAutolinkStart(s, k) {
+				// After the `@`: alphanumerics, `.`, `-`, `_`; at least one
+				// period; a trailing `.` is not part of the address, and a
+				// trailing `-` or `_` invalidates the whole thing.
+				end := i + 1
+				for end < length && isDomainChar(s[end]) {
+					end++
+				}
+				for end > i+1 && '.' == s[end-1] {
+					end--
+				}
+
+				var last byte
+				if end > i+1 {
+					last = s[end-1]
+				}
+				if end > i+1 && '-' != last && '_' != last && hasPeriod(s, i+1, end) {
+					out = append(out, autolinkMatch{start: k, end: end, href: "mailto:" + s[k:end]})
+					lastEnd = end
+					i = end
+					continue
+				}
+			}
+			i++
+			continue
+		}
+
+		// --- www / scheme: both need a valid start and a valid domain
+		if !couldStartURL(c) || !isAutolinkStart(s, i) {
+			i++
+			continue
+		}
+
+		domainStart := -1
+		prefix := ""
+		if matchesIgnoreCase(s, i, "www.") {
+			// The domain of a `www.` autolink includes the `www.` itself, so
+			// the required period is already there and `www.foo_bar.com` is
+			// rejected on the same footing as `http://foo_bar.com`.
+			domainStart = i
+			prefix = "http://"
+		} else {
+			for _, scheme := range autolinkSchemes {
+				if matchesIgnoreCase(s, i, scheme) {
+					domainStart = i + len(scheme)
+					break
+				}
+			}
+		}
+		if 0 > domainStart {
+			i++
+			continue
+		}
+
+		domainEnd := scanDomainEnd(s, domainStart)
+		// Checked before the run scan below, so a candidate that cannot
+		// possibly match costs only its own domain run.
+		if !isValidDomain(s, domainStart, domainEnd) {
+			i++
+			continue
+		}
+
+		if i >= runEnd || i < runStart {
+			runStart = i
+			runEnd = i
+			for runEnd < length {
+				d := s[runEnd]
+				if isAutolinkSpace(d) || '<' == d {
+					break
+				}
+				runEnd++
+			}
+		}
+
+		end := trimAutolinkEnd(s, i, runEnd)
+		// Trailing punctuation can eat back into the domain —
+		// `www.commonmark.org.` loses its last period — so the domain is
+		// validated again over what actually survived.
+		survived := domainEnd
+		if end < survived {
+			survived = end
+		}
+		if end <= domainStart || !isValidDomain(s, domainStart, survived) {
+			i++
+			continue
+		}
+
+		out = append(out, autolinkMatch{start: i, end: end, href: prefix + s[i:end]})
+		lastEnd = end
+		i = end
+	}
+
+	return out
+}
+
+// couldStartURL reports the first character of `www.`, `http://`, `https://`
+// and `ftp://`, in either case.
+func couldStartURL(c byte) bool {
+	return 'w' == c || 'W' == c || 'h' == c || 'H' == c || 'f' == c || 'F' == c
+}
+
+func hasPeriod(s string, from int, to int) bool {
+	for i := from; i < to; i++ {
+		if '.' == s[i] {
+			return true
+		}
+	}
+	return false
+}
+
+// linkifyTextNode replaces one text node with the text/link/text run its
+// literal implies.
+func linkifyTextNode(node *MdNode) {
+	s := node.Literal
+	matches := scanAutolinks(s)
+	if nil == matches {
+		return
+	}
+
+	at := 0
+	for _, m := range matches {
+		if at < m.start {
+			node.InsertBefore(textNode(s[at:m.start]))
+		}
+		link := NewNode(NodeLink)
+		// Not percent-encoded here, for the same reason as
+		// parseLinkDestination: encoding belongs to the renderer, and the AST
+		// promises the decoded form.
+		link.Destination = m.href
+		link.AppendChild(textNode(s[m.start:m.end]))
+		node.InsertBefore(link)
+		at = m.end
+	}
+	if at < len(s) {
+		node.InsertBefore(textNode(s[at:]))
+	}
+
+	node.Unlink()
+}
+
+// linkifyChildren autolinks the text children of one container and returns
+// pending extended with the child containers still to visit. (The TypeScript
+// pushes onto the caller's array in place; Go's append may reallocate, so the
+// slice comes back instead.)
+func linkifyChildren(parent *MdNode, pending []*MdNode) []*MdNode {
+	child := parent.FirstChild
+
+	for nil != child {
+		if NodeText == child.Type {
+			// Consolidate the run of adjacent text nodes first. The scan above
+			// emits a node per delimiter run and per character it could not
+			// claim, so `a.b-c_d@a.b` arrives as three siblings and the address
+			// is only visible once they are one string. Merging changes nothing
+			// downstream: the renderer writes text literals back to back, and
+			// the AST projection already coalesces adjacent runs.
+			sibling := child.Next
+			if nil != sibling && NodeText == sibling.Type {
+				var merged strings.Builder
+				merged.WriteString(child.Literal)
+				for nil != sibling && NodeText == sibling.Type {
+					merged.WriteString(sibling.Literal)
+					next := sibling.Next
+					sibling.Unlink()
+					sibling = next
+				}
+				child.Literal = merged.String()
+			}
+
+			after := child.Next
+			linkifyTextNode(child)
+			child = after
+			continue
+		}
+
+		// No links inside links (§6.3), and an image's children are its alt
+		// text.
+		if NodeLink != child.Type && NodeImage != child.Type && child.IsContainer() {
+			pending = append(pending, child)
+		}
+		child = child.Next
+	}
+
+	return pending
+}
+
+// linkifyAutolinks recognises GFM autolink literals throughout one finished
+// block's inlines.
+//
+// Iterative rather than recursive: emphasis nests as deeply as the input says.
+func linkifyAutolinks(block *MdNode) {
+	pending := []*MdNode{block}
+	for 0 < len(pending) {
+		node := pending[len(pending)-1]
+		pending = linkifyChildren(node, pending[:len(pending)-1])
+	}
+}
+
 // parseInlines is the phase 2 entry point: walk the block tree and parse the
 // string content of every paragraph and heading into inline children.
 func parseInlines(doc *MdNode, refmap RefMap, opts Options) {
@@ -1226,6 +1666,9 @@ func parseInlines(doc *MdNode, refmap RefMap, opts Options) {
 		node := ev.Node
 		if !ev.Entering && (node.Type == NodeParagraph || node.Type == NodeHeading) {
 			parser.parse(node)
+			if opts.GFM {
+				linkifyAutolinks(node)
+			}
 		}
 	}
 }
