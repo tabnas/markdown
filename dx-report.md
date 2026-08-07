@@ -992,3 +992,34 @@ strikethrough for it.
   invisible to every committed check.
 * **Footnotes** remain unimplemented in both runtimes. If they are ever
   added they need their own flag, not a widening of `gfm`.
+
+## 40. The table padding cap is behaviour, not only a budget
+
+`MAX_AUTOCOMPLETED_CELLS` (0x80000, cmark-gfm's figure and cmark-gfm's reason)
+bounds one thing tables do that nothing else in the parser does: a table's node
+count is not bounded by its input length. A 2000-column header over 8000
+one-cell body rows is 69 KB of Markdown asking for 16 million cells, because
+every short row is padded out to the header width.
+
+The cap makes that a true ceiling rather than a slow path. Measured, holding the
+header at 2000 columns and quadrupling the body:
+
+| rows | input | output | time |
+|---|---|---|---|
+| 500 | 25 KB | 5.0 MB | 1102 ms |
+| 2000 | 34 KB | 5.1 MB | 930 ms |
+| 8000 | 69 KB | 5.2 MB | 959 ms |
+
+Sixteen times the rows, flat output and flat time.
+
+Recorded here for the same reason as the two autolink caps in §16: it is a
+budget *and* an observable behaviour. Past the cap, padded cells stop being
+emitted, so a sufficiently pathological table renders with rows shorter than its
+header. Both runtimes share the figure and agree. No real document approaches
+it — reaching the cap needs the column count multiplied by the row count to
+exceed half a million — but a caller who hits it should find it written down
+rather than have to infer it.
+
+The wider point, which §16 made about autolinks and applies again: every cap
+that exists to keep a pass linear is also a semantic edge, and the two are worth
+stating together rather than filing one under performance.
