@@ -112,6 +112,598 @@ func TestGFMSpec(t *testing.T) {
 	t.Logf("  TOTAL %d/%d", passed, total)
 }
 
+// --- tables -----------------------------------------------------------------
+//
+// The Go twin of ts/test/commonmark.test.ts `describe('gfm tables')` and
+// `describe('gfm table robustness')`.
+
+// A table's HTML is verbose enough that a literal expectation buries the thing
+// being tested, so rows are assembled from their cells here. Newline placement
+// is still byte-exact — that is what the corpus judges.
+func trow(cells []string) string {
+	return "<tr>\n" + strings.Join(cells, "\n") + "\n</tr>\n"
+}
+
+func thead(cells []string) string { return "<thead>\n" + trow(cells) + "</thead>\n" }
+
+func tbody(rows [][]string) string {
+	var b strings.Builder
+	b.WriteString("<tbody>\n")
+	for _, r := range rows {
+		b.WriteString(trow(r))
+	}
+	b.WriteString("</tbody>\n")
+	return b.String()
+}
+
+// tableHTML takes the <thead> block and zero or one <tbody> block: a table
+// with no body rows has no <tbody> at all.
+func tableHTML(head string, body ...string) string {
+	return "<table>\n" + head + strings.Join(body, "") + "</table>\n"
+}
+
+func thCell(s string, align ...string) string {
+	if 0 < len(align) {
+		return `<th align="` + align[0] + `">` + s + "</th>"
+	}
+	return "<th>" + s + "</th>"
+}
+
+func tdCell(s string, align ...string) string {
+	if 0 < len(align) {
+		return `<td align="` + align[0] + `">` + s + "</td>"
+	}
+	return "<td>" + s + "</td>"
+}
+
+// --- the eight spec behaviours, each asserted on its own ---
+
+func TestGFMTablesSpecBehaviours(t *testing.T) {
+	check := func(src, want, why string) {
+		t.Helper()
+		if got := ToHTML(src, gfmOpts); got != want {
+			t.Errorf("%s: %q\n got  %q\n want %q", why, src, got, want)
+		}
+	}
+
+	// 1. header row, delimiter row, data row.
+	check("| foo | bar |\n| --- | --- |\n| baz | bim |\n",
+		tableHTML(
+			thead([]string{thCell("foo"), thCell("bar")}),
+			tbody([][]string{{tdCell("baz"), tdCell("bim")}}),
+		),
+		"1. header, delimiter, data")
+
+	// 2. colons set alignment, and pipes may be inconsistent. Cell widths need
+	// not match, and a leading/trailing pipe is optional on every row
+	// independently.
+	check("| abc | defghi |\n:-: | -----------:\nbar | baz\n",
+		tableHTML(
+			thead([]string{thCell("abc", "center"), thCell("defghi", "right")}),
+			tbody([][]string{{tdCell("bar", "center"), tdCell("baz", "right")}}),
+		),
+		"2. alignment and inconsistent pipes")
+	// All four delimiter shapes, and "none" means no attribute at all.
+	check("| a | b | c | d |\n| :- | -: | :-: | --- |\n| 1 | 2 | 3 | 4 |\n",
+		tableHTML(
+			thead([]string{
+				thCell("a", "left"), thCell("b", "right"),
+				thCell("c", "center"), thCell("d"),
+			}),
+			tbody([][]string{{
+				tdCell("1", "left"), tdCell("2", "right"),
+				tdCell("3", "center"), tdCell("4"),
+			}}),
+		),
+		"2. all four delimiter shapes")
+
+	// 3. an escaped pipe is content, inside other inline spans too.
+	check("| f\\|oo  |\n| ------ |\n| b `\\|` az |\n| b **\\|** im |\n",
+		tableHTML(
+			thead([]string{thCell("f|oo")}),
+			tbody([][]string{
+				{tdCell("b <code>|</code> az")},
+				{tdCell("b <strong>|</strong> im")},
+			}),
+		),
+		"3. escaped pipes")
+
+	// 4. another block-level structure breaks the table.
+	check("| abc | def |\n| --- | --- |\n| bar | baz |\n> bar\n",
+		tableHTML(
+			thead([]string{thCell("abc"), thCell("def")}),
+			tbody([][]string{{tdCell("bar"), tdCell("baz")}}),
+		)+"<blockquote>\n<p>bar</p>\n</blockquote>\n",
+		"4. a block quote breaks the table")
+
+	// 5. a blank line breaks the table.
+	check("| abc | def |\n| --- | --- |\n| bar | baz |\nbar\n\nbar\n",
+		tableHTML(
+			thead([]string{thCell("abc"), thCell("def")}),
+			tbody([][]string{
+				{tdCell("bar"), tdCell("baz")},
+				{tdCell("bar"), tdCell("")},
+			}),
+		)+"<p>bar</p>\n",
+		"5. a blank line breaks the table")
+
+	// 6. header and delimiter must agree on the cell count — otherwise there is
+	// no table at all and the whole thing stays one paragraph.
+	check("| abc | def |\n| --- |\n| bar |\n",
+		"<p>| abc | def |\n| --- |\n| bar |</p>\n",
+		"6. cell counts disagree")
+	// The mismatch is on the count, not the widths: 1-vs-1 matches.
+	check("| abc |\n| --- |\n", tableHTML(thead([]string{thCell("abc")})), "6. 1-vs-1")
+	if got := ToHTML("| abc | def |\n| --- | --- | --- |\n", gfmOpts); !strings.HasPrefix(got, "<p>") {
+		t.Errorf("6. 2-vs-3 should stay a paragraph, got %q", got)
+	}
+
+	// 7. short rows are padded, long rows are truncated.
+	check("| abc | def |\n| --- | --- |\n| bar |\n| bar | baz | boo |\n",
+		tableHTML(
+			thead([]string{thCell("abc"), thCell("def")}),
+			tbody([][]string{
+				{tdCell("bar"), tdCell("")},
+				{tdCell("bar"), tdCell("baz")},
+			}),
+		),
+		"7. padded and truncated rows")
+
+	// 8. no body rows means no <tbody> at all.
+	out := ToHTML("| abc | def |\n| --- | --- |\n", gfmOpts)
+	if want := tableHTML(thead([]string{thCell("abc"), thCell("def")})); out != want {
+		t.Errorf("8. no body rows:\n got  %q\n want %q", out, want)
+	}
+	if strings.Contains(out, "tbody") {
+		t.Errorf("8. no body rows must emit no <tbody>: %q", out)
+	}
+}
+
+// --- the rules those examples rest on ---
+
+func TestGFMTablesRules(t *testing.T) {
+	html := func(src string) string { return ToHTML(src, gfmOpts) }
+	check := func(src, want, why string) {
+		t.Helper()
+		if got := html(src); got != want {
+			t.Errorf("%s: %q\n got  %q\n want %q", why, src, got, want)
+		}
+	}
+
+	// A delimiter cell is hyphens and at most two colons. Leading and trailing
+	// pipes are optional here as everywhere. A row of nothing but hyphens (`-`,
+	// `---`) is left out: it is a setext underline first, which the test below
+	// covers.
+	for _, delim := range []string{
+		"| --- |", "| :-- |", "| --: |", "| :-: |", "| - |", "|-|", "|--", "--|",
+		":-", "-:", ":-:", ":---:",
+	} {
+		if got := html("| a |\n" + delim + "\n"); !strings.HasPrefix(got, "<table>") {
+			t.Errorf("%q should be a delimiter row, got %q", delim, got)
+		}
+	}
+	for _, delim := range []string{
+		"| === |", "| -+- |", "| - - |", "| :: |", "| :  |", "| a |", "|  |", "| ::- |",
+		"| -:- |", "| *** |", "| — |",
+	} {
+		if got := html("| a |\n" + delim + "\n"); !strings.HasPrefix(got, "<p>") {
+			t.Errorf("%q should not be a delimiter row, got %q", delim, got)
+		}
+	}
+
+	// Spaces and tabs between pipes and content are trimmed.
+	check("|   a   |\t b\t|\n| - | - |\n|\tx\t|   y   |\n",
+		tableHTML(
+			thead([]string{thCell("a"), thCell("b")}),
+			tbody([][]string{{tdCell("x"), tdCell("y")}}),
+		),
+		"spaces and tabs are trimmed")
+
+	// The header row is the paragraph's last line, so the paragraph splits.
+	check("aaa\nbbb\n| a | b |\n| - | - |\n| c | d |\n",
+		"<p>aaa\nbbb</p>\n"+tableHTML(
+			thead([]string{thCell("a"), thCell("b")}),
+			tbody([][]string{{tdCell("c"), tdCell("d")}}),
+		),
+		"the paragraph above the header row is kept")
+	// The lines left behind are a real paragraph: their reference definitions
+	// still register, because splitting finalizes them.
+	check("[r]: /url\n| a |\n| - |\n\n[r]\n",
+		tableHTML(thead([]string{thCell("a")}))+"<p><a href=\"/url\">r</a></p>\n",
+		"a split paragraph still contributes reference definitions")
+
+	// A setext underline still wins over a one-column delimiter row: `---` is
+	// both, and the block starts are ordered so the heading wins, exactly as
+	// cmark-gfm orders them. `| foo |` as heading text is the giveaway.
+	check("foo\n---\n", "<h2>foo</h2>\n", "setext beats a delimiter row")
+	check("| foo |\n---\n", "<h2>| foo |</h2>\n", "setext beats a delimiter row")
+	// A list marker wins too: `- | -` is a bullet, not a two-column delimiter.
+	check("| a | b |\n- | -\n",
+		"<p>| a | b |</p>\n<ul>\n<li>| -</li>\n</ul>\n",
+		"a list marker beats a delimiter row")
+
+	// A delimiter row with no paragraph above it is just a paragraph.
+	check("| - |\n", "<p>| - |</p>\n", "no paragraph above")
+	check("\n| - |\n", "<p>| - |</p>\n", "no paragraph above")
+	// …and it must be the line *directly* above.
+	check("| a |\n\n| - |\n", "<p>| a |</p>\n<p>| - |</p>\n", "not the line directly above")
+
+	// A table nests in a block quote and in a list item.
+	check("> | a | b |\n> | - | - |\n> | c | d |\n",
+		"<blockquote>\n"+tableHTML(
+			thead([]string{thCell("a"), thCell("b")}),
+			tbody([][]string{{tdCell("c"), tdCell("d")}}),
+		)+"</blockquote>\n",
+		"inside a block quote")
+	check("- | a | b |\n  | - | - |\n  | c | d |\n",
+		"<ul>\n<li>\n"+tableHTML(
+			thead([]string{thCell("a"), thCell("b")}),
+			tbody([][]string{{tdCell("c"), tdCell("d")}}),
+		)+"</li>\n</ul>\n",
+		"inside a list item")
+	// A lazy continuation is not a delimiter row: the quote's marker is
+	// missing, so the paragraph simply carries on.
+	check("> | a | b |\n| - | - |\n",
+		"<blockquote>\n<p>| a | b |\n| - | - |</p>\n</blockquote>\n",
+		"a lazy continuation is not a delimiter row")
+
+	// A table immediately followed by another table. Separated by a blank line:
+	// two tables.
+	check("| a |\n| - |\n| 1 |\n\n| b |\n| - |\n| 2 |\n",
+		tableHTML(thead([]string{thCell("a")}), tbody([][]string{{tdCell("1")}}))+
+			tableHTML(thead([]string{thCell("b")}), tbody([][]string{{tdCell("2")}})),
+		"two tables separated by a blank line")
+	// Without one, the second "table" is body rows of the first — a delimiter
+	// row is only special directly under a *paragraph*.
+	check("| a |\n| - |\n| b |\n| - |\n",
+		tableHTML(thead([]string{thCell("a")}),
+			tbody([][]string{{tdCell("b")}, {tdCell("-")}})),
+		"no blank line means body rows")
+
+	// Inlines inside cells are parsed, and only inlines.
+	check("| a |\n| - |\n| *e* ~~s~~ `c` [l](/u) www.x.com |\n",
+		tableHTML(thead([]string{thCell("a")}), tbody([][]string{{tdCell(
+			"<em>e</em> <del>s</del> <code>c</code> " +
+				"<a href=\"/u\">l</a> <a href=\"http://www.x.com\">www.x.com</a>")}})),
+		"inlines in cells, autolink literals included")
+	// The tagfilter is a render-time step and still applies inside a cell.
+	check("| a |\n| - |\n| <title>x |\n",
+		tableHTML(thead([]string{thCell("a")}), tbody([][]string{{tdCell("&lt;title>x")}})),
+		"the tagfilter applies inside a cell")
+}
+
+// --- escaped pipes, in detail ---
+
+func TestGFMTablesEscapedPipes(t *testing.T) {
+	check := func(src, want, why string) {
+		t.Helper()
+		if got := ToHTML(src, gfmOpts); got != want {
+			t.Errorf("%s: %q\n got  %q\n want %q", why, src, got, want)
+		}
+	}
+
+	// Splitting is on unescaped pipes only: one cell, not two.
+	check("| a\\|b |\n| - |\n", tableHTML(thead([]string{thCell("a|b")})),
+		"an escaped pipe never separates")
+	// `\\` is an escaped backslash, so the pipe after it *does* separate.
+	check("| x | y |\n| - | - |\n| a\\\\ | b |\n",
+		tableHTML(thead([]string{thCell("x"), thCell("y")}),
+			tbody([][]string{{tdCell("a\\"), tdCell("b")}})),
+		"a backslash cannot shield the pipe after it")
+	// A trailing pipe that is itself escaped is content, not the optional
+	// trailing delimiter.
+	check("| a\\| |\n| - |\n", tableHTML(thead([]string{thCell("a|")})),
+		"an escaped trailing pipe is content")
+
+	// An escaped pipe becomes a literal pipe BEFORE inline parsing. This is the
+	// whole point of resolving `\|` at split time: a code span is a literal, so
+	// nothing downstream could turn `\|` into `|` inside one.
+	check("| a |\n| - |\n| `\\|` |\n",
+		tableHTML(thead([]string{thCell("a")}), tbody([][]string{{tdCell("<code>|</code>")}})),
+		"a code span sees a raw pipe")
+	check("| a |\n| - |\n| **\\|** |\n",
+		tableHTML(thead([]string{thCell("a")}), tbody([][]string{{tdCell("<strong>|</strong>")}})),
+		"strong emphasis around a raw pipe")
+	// …and the cell text is not unescaped twice: every other escape is left for
+	// the inline phase, which handles it exactly once.
+	check("| a |\n| - |\n| \\*not em\\* |\n",
+		tableHTML(thead([]string{thCell("a")}), tbody([][]string{{tdCell("*not em*")}})),
+		"other escapes are left to the inline phase")
+	check("| a |\n| - |\n| \\\\ |\n",
+		tableHTML(thead([]string{thCell("a")}), tbody([][]string{{tdCell("\\")}})),
+		"an escaped backslash is unescaped exactly once")
+
+	// Byte-vs-rune: a multi-byte character on either side of a split or a trim
+	// must survive whole. A previous port mojibake'd every non-ASCII character
+	// by appending a byte.
+	check("| é | 日本語 |\n| - | - |\n|  🎉  | a\\|é |\n",
+		tableHTML(
+			thead([]string{thCell("é"), thCell("日本語")}),
+			tbody([][]string{{tdCell("🎉"), tdCell("a|é")}}),
+		),
+		"non-ASCII cell content survives splitting and trimming")
+}
+
+// --- the AST projection ---
+
+func TestGFMTablesAST(t *testing.T) {
+	doc := jsonRoundMD(ParseDocument("| h1 | h2 |\n| :- | -: |\n| b1 | b2 |\n", gfmOpts)).(map[string]any)
+	children := doc["children"].([]any)
+	if 1 != len(children) {
+		t.Fatalf("expected 1 block, got %d", len(children))
+	}
+
+	table := children[0].(map[string]any)
+	if "table" != table["type"] {
+		t.Fatalf("type = %v, want table", table["type"])
+	}
+	if want := []any{"left", "right"}; !reflect.DeepEqual(table["align"], want) {
+		t.Errorf("align = %#v, want %#v", table["align"], want)
+	}
+	rows := table["children"].([]any)
+	if 2 != len(rows) {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+
+	// mdast has no header flag: the FIRST row is the header, by convention.
+	cell := func(v string) any {
+		return map[string]any{
+			"type":     "tableCell",
+			"children": []any{map[string]any{"type": "text", "value": v}},
+		}
+	}
+	wantHead := map[string]any{"type": "tableRow", "children": []any{cell("h1"), cell("h2")}}
+	if !reflect.DeepEqual(rows[0], wantHead) {
+		t.Errorf("header row = %#v, want %#v", rows[0], wantHead)
+	}
+	wantBody := map[string]any{"type": "tableRow", "children": []any{cell("b1"), cell("b2")}}
+	if !reflect.DeepEqual(rows[1], wantBody) {
+		t.Errorf("body row = %#v, want %#v", rows[1], wantBody)
+	}
+
+	// align carries null for a column with no colon — one entry per column,
+	// always, and `[null, ...]` rather than `[""]` or `null`.
+	doc = jsonRoundMD(ParseDocument("| a | b | c |\n| --- | :-: | --: |\n", gfmOpts)).(map[string]any)
+	table = doc["children"].([]any)[0].(map[string]any)
+	if want := []any{nil, "center", "right"}; !reflect.DeepEqual(table["align"], want) {
+		t.Errorf("align = %#v, want %#v", table["align"], want)
+	}
+	if n := len(table["children"].([]any)[0].(map[string]any)["children"].([]any)); 3 != n {
+		t.Errorf("header row has %d cells, want 3", n)
+	}
+
+	// Padded cells are real, empty cells — `children: []`, not null.
+	doc = jsonRoundMD(ParseDocument("| a | b |\n| - | - |\n| x |\n", gfmOpts)).(map[string]any)
+	body := doc["children"].([]any)[0].(map[string]any)["children"].([]any)[1].(map[string]any)
+	cells := body["children"].([]any)
+	if 2 != len(cells) {
+		t.Fatalf("padded row has %d cells, want 2", len(cells))
+	}
+	if want := map[string]any{"type": "tableCell", "children": []any{}}; !reflect.DeepEqual(cells[1], want) {
+		t.Errorf("padded cell = %#v, want %#v", cells[1], want)
+	}
+
+	// Cells hold inline nodes.
+	doc = jsonRoundMD(ParseDocument("| a |\n| - |\n| *x* |\n", gfmOpts)).(map[string]any)
+	got := doc["children"].([]any)[0].(map[string]any)["children"].([]any)[1].(map[string]any)["children"].([]any)[0]
+	want := map[string]any{
+		"type": "tableCell",
+		"children": []any{map[string]any{
+			"type":     "emphasis",
+			"children": []any{map[string]any{"type": "text", "value": "x"}},
+		}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("cell = %#v, want %#v", got, want)
+	}
+
+	// A table nested in a list item projects in place.
+	doc = jsonRoundMD(ParseDocument("- | a |\n  | - |\n", gfmOpts)).(map[string]any)
+	item := doc["children"].([]any)[0].(map[string]any)["children"].([]any)[0].(map[string]any)
+	blocks := item["children"].([]any)
+	if 1 != len(blocks) {
+		t.Fatalf("item has %d blocks, want 1", len(blocks))
+	}
+	if "table" != blocks[0].(map[string]any)["type"] {
+		t.Errorf("item block type = %v, want table", blocks[0].(map[string]any)["type"])
+	}
+
+	// An empty align array marshals as [], never null. Unreachable from a real
+	// parse — parseDelimiterRow rejects a zero-cell row — so it is asserted on
+	// a hand-built node, which is where a nil slice would leak out.
+	tree := Parse("| a |\n| - |\n", gfmOpts)
+	tree.FirstChild.TableAlign = nil
+	raw, err := json.Marshal(ToAST(tree, gfmOpts))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"align":[]`) {
+		t.Errorf("empty align must marshal as [], got %s", raw)
+	}
+}
+
+// --- gfm:false ---
+
+func TestGFMTablesDisabled(t *testing.T) {
+	sources := []string{
+		"| foo | bar |\n| --- | --- |\n| baz | bim |\n",
+		"| abc | defghi |\n:-: | -----------:\nbar | baz\n",
+		"| f\\|oo  |\n| ------ |\n| b `\\|` az |\n",
+		"| abc | def |\n| --- | --- |\n",
+		"aaa\n| a | b |\n| - | - |\n",
+	}
+	for _, src := range sources {
+		out := ToHTML(src, cmOpts)
+		if strings.Contains(out, "<table") {
+			t.Errorf("%q: gfm:false produced a table: %q", src, out)
+		}
+		// Exactly what a paragraph of these lines renders as — the escaping and
+		// the soft breaks included.
+		if want := RenderHTML(Parse(src, cmOpts), cmOpts); out != want {
+			t.Errorf("%q:\n got  %q\n want %q", src, out, want)
+		}
+		if !strings.HasPrefix(out, "<p>") {
+			t.Errorf("%q: expected a paragraph, got %q", src, out)
+		}
+		for _, block := range ParseDocument(src, cmOpts)["children"].([]any) {
+			if "table" == block.(map[string]any)["type"] {
+				t.Errorf("%q: gfm:false produced a table node", src)
+			}
+		}
+	}
+	// The delimiter row is not even a paragraph break: it all stays one.
+	if got, want := ToHTML("| a | b |\n| - | - |\n| c | d |\n", cmOpts),
+		"<p>| a | b |\n| - | - |\n| c | d |</p>\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+
+	// RenderHTML on a tree parsed with GFM off, spelled the way html.go
+	// documents the canonical runtime's "renderHTML(tree) with no options":
+	// the flavour follows the parse.
+	off := Parse("| a |\n| - |\n", cmOpts)
+	if got, want := RenderHTML(off, Options{GFM: off.GFM}), "<p>| a |\n| - |</p>\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	on := Parse("| a |\n| - |\n", gfmOpts)
+	if got := RenderHTML(on, Options{GFM: on.GFM}); !strings.HasPrefix(got, "<table>") {
+		t.Errorf("got %q, want a table", got)
+	}
+}
+
+// --- robustness -------------------------------------------------------------
+//
+// Nothing here may panic, and nothing may become super-linear: the inputs are
+// adversarial, and untrusted input picks them.
+
+func TestGFMTablesRobustness(t *testing.T) {
+	// A 10000-column delimiter row.
+	const cols = 10000
+	src := "|" + strings.Repeat(" h |", cols) + "\n" +
+		"|" + strings.Repeat(" --- |", cols) + "\n" +
+		"|" + strings.Repeat(" b |", cols) + "\n"
+	out := ToHTML(src, gfmOpts)
+	if n := strings.Count(out, "<th>"); n != cols {
+		t.Errorf("wide table: %d <th>, want %d", n, cols)
+	}
+	if n := strings.Count(out, "<td>"); n != cols {
+		t.Errorf("wide table: %d <td>, want %d", n, cols)
+	}
+	table := ParseDocument(src, gfmOpts)["children"].([]any)[0].(map[string]any)
+	if n := len(table["align"].([]any)); n != cols {
+		t.Errorf("wide table: align has %d entries, want %d", n, cols)
+	}
+	if n := len(table["children"].([]any)[0].(map[string]any)["children"].([]any)); n != cols {
+		t.Errorf("wide table: header row has %d cells, want %d", n, cols)
+	}
+
+	// 10000 body rows.
+	const rows = 10000
+	src = "| a | b |\n| - | - |\n" + strings.Repeat("| x | y |\n", rows)
+	out = ToHTML(src, gfmOpts)
+	if n := strings.Count(out, "<tr>"); n != rows+1 {
+		t.Errorf("tall table: %d <tr>, want %d", n, rows+1)
+	}
+	table = ParseDocument(src, gfmOpts)["children"].([]any)[0].(map[string]any)
+	if n := len(table["children"].([]any)); n != rows+1 {
+		t.Errorf("tall table: %d rows, want %d", n, rows+1)
+	}
+
+	// A pipe repeated 50000 times. On its own it is one paragraph and nothing
+	// more; as a header row over a matching delimiter row it is a very wide
+	// table — n pipes with the leading and trailing one stripped is n-1 empty
+	// cells.
+	const n = 50000
+	_ = ToHTML(strings.Repeat("|", n)+"\n", gfmOpts)
+	_ = ToHTML(strings.Repeat("|", n)+"\n", cmOpts)
+	out = ToHTML(strings.Repeat("|", n)+"\n|"+strings.Repeat(" - |", n-1)+"\n", gfmOpts)
+	if c := strings.Count(out, "<th></th>"); c != n-1 {
+		t.Errorf("pipe storm: %d empty cells, want %d", c, n-1)
+	}
+}
+
+// TestGFMTablePaddingIsBounded pins maxAutocompletedCells.
+//
+// Padding short rows is the one shape whose node count is not bounded by the
+// input: 10000 columns over 10000 one-cell rows asks for 10^8 cells. The
+// autocomplete budget caps it, so quadrupling the rows must not grow the work.
+func TestGFMTablePaddingIsBounded(t *testing.T) {
+	header := "|" + strings.Repeat(" h |", 10000) + "\n" +
+		"|" + strings.Repeat(" --- |", 10000) + "\n"
+	measure := func(rows int) (time.Duration, int) {
+		src := header + strings.Repeat("| x |\n", rows)
+		start := time.Now()
+		out := ToHTML(src, gfmOpts)
+		return time.Since(start), len(out)
+	}
+
+	baseMs, baseLen := measure(5000)
+	largeMs, largeLen := measure(20000)
+
+	// The output is capped, not proportional to the row count.
+	if ratio := float64(largeLen) / float64(baseLen); ratio >= 3 {
+		t.Errorf("output grew %.1fx for 4x the rows", ratio)
+	}
+	if baseMs < 5*time.Millisecond {
+		return // too fast to measure reliably
+	}
+	if ratio := float64(largeMs) / float64(baseMs); ratio >= 6 {
+		t.Errorf("4x rows took %.1fx time (%v -> %v)", ratio, baseMs, largeMs)
+	}
+}
+
+// TestGFMTableDelimiterRowIsLinear pins blockParser.lastAddedLine.
+//
+// Every second line is a syntactically valid delimiter row that fails the
+// cell-count test, so the paragraph grows without bound and each line asks for
+// its last line again. Reading that back out of the accumulated content —
+// re-flattening a rope in the canonical runtime, scanning back for a newline
+// here — is O(n) per line, and this is the input that shows it.
+func TestGFMTableDelimiterRowIsLinear(t *testing.T) {
+	measure := func(n int) time.Duration {
+		src := strings.Repeat("| a | b |\n| --- |\n", n)
+		start := time.Now()
+		_ = ToHTML(src, gfmOpts)
+		return time.Since(start)
+	}
+
+	measure(2000)
+	small := bestOf(5, func() time.Duration { return measure(20000) })
+	large := bestOf(5, func() time.Duration { return measure(80000) })
+
+	if small < 2*time.Millisecond {
+		return // too fast to measure reliably; assert nothing rather than flake
+	}
+	if ratio := float64(large) / float64(small); ratio > 12 {
+		t.Errorf("4x input took %.1fx time (%v -> %v); linear is ~4x, quadratic ~16x",
+			ratio, small, large)
+	}
+}
+
+func TestGFMTableDegenerateFragments(t *testing.T) {
+	for _, src := range []string{
+		"|", "||", "|||", "\\|", "|\\", "| - ", " - |", "|-|", ":", "::", ":-:", "-:",
+		"a\n|", "a\n:", "a\n-:", "a\n|-", "a\n||", "a\n:-:|", "a|b\n-|-|-", "a\n\\|",
+		"|a|\n|\\|", "a\n|\t-\t|", "|\n|", "| |\n| |", "a\n" + strings.Repeat("-", 10000),
+		strings.Repeat("|", 200) + "\n" + strings.Repeat("-|", 200), "> a\n> |-|", "- a\n  |-|",
+		"a\n---\n", "a\n- | -", "|a\n|-\n    x", "\\\\|\n-",
+		// Byte-vs-rune: a delimiter row whose cells hold multi-byte characters,
+		// and a header row that ends mid-rune's worth of pipes.
+		"é|é\n-|-", "| 😀 |\n| - |\n| 😀 |", "—|—\n-|-",
+	} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("panic on %q: %v", src, r)
+				}
+			}()
+			for _, opts := range []Options{gfmOpts, cmOpts} {
+				_ = ToHTML(src+"\n", opts)
+				_ = ParseDocument(src+"\n", opts)
+			}
+		}()
+	}
+}
+
 // --- task list items --------------------------------------------------------
 
 func TestGFMTaskListItems(t *testing.T) {
