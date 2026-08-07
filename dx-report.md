@@ -439,6 +439,22 @@ parentheses.
   produces a nested anchor, because the outer `<a>` is an `html_inline`
   literal and not a `link` node. cmark-gfm behaves the same way; a
   renderer that cares needs a sanitizer, which it needs anyway.
+* **The two length caps in §15 are semantic, not only budgetary.** The
+  §15 wording ("anything past the cap is still scanned, just as the path
+  rather than as the domain") describes the common case but understates
+  two edges, and both are divergences in their own right:
+  * An underscore past the 253rd character of a domain run no longer
+    invalidates the domain, because validation never sees it. `www.` +
+    248 characters + `_b.c` is correctly rejected; the same shape with
+    249 characters is linked. cmark-gfm rejects both.
+  * An email local part of 65 characters or more is not recognised at
+    all — the rewind from the `@` stops at 64 and lands mid-word, which
+    is not a valid autolink start. cmark-gfm has no such limit.
+
+  Neither is corpus-visible, no real domain or address reaches either
+  bound, and both runtimes agree — the caps are what keep the pass
+  linear on `'_www.a_b.c'.repeat(n)`. Recorded here because they are
+  observable behaviour, not just a performance measure.
 
 ## 17. Follow-ups this leaves
 
@@ -592,3 +608,127 @@ the automated nets check the cases someone thought of.
 * **A TypeScript twin of `TestCaseFoldingIsASCIIOnly`** was not added:
   TypeScript is already correct here and the defect was Go-only. It would
   still be worth having as a guard on the canonical side.
+
+---
+
+# 2026-08-07 — adversarial verification pass
+
+Everything below is an independent re-run of the claims in the two
+entries above, plus what that re-run found. The scoreboards hold:
+TypeScript 652/652 and 17/24 (the seven failures all Tables), Go
+`go test ./...` green, doc examples 35/35.
+
+## 25. What the verification actually covered
+
+* **Corpus integrity.** `test/commonmark/spec.json` is byte-identical to
+  `origin/main`. `test/gfm/spec.json` was re-extracted from the upstream
+  spec prose independently — all 24 extension examples, byte-for-byte,
+  with upstream's own example numbers and nothing omitted. Neither runner
+  was loosened; `ts/tools/conformance.mjs` is untouched and the GFM
+  runner compares with `===` and counts a throw as a failure.
+* **`gfm:false` inertness**, the highest-risk regression, checked against
+  a real `origin/main` worktree over all 676 examples × `breaks`:
+  **1352 records, zero HTML differences.** The AST differs in exactly one
+  way — the added `checked: null` key on `listItem`, on 322 nodes — and a
+  structural diff confirms there is no other change of value, key order
+  or shape anywhere. The autolink post-pass does not run with `gfm:false`.
+* **Cross-runtime parity**, TypeScript against Go, AST + HTML + the
+  native tree including `sourcepos`: **2704 records, zero differences**
+  on the corpora; **20 016 records, zero differences** on a
+  deliberately non-ASCII fuzz corpus (homoglyphs, 2/3/4-byte runes and
+  Unicode spaces at every boundary the new code computes); **33 172
+  records, zero differences** on an entity corpus covering all 2125
+  canonical names.
+* **Robustness.** 60 TypeScript runs and 76 Go runs over the adversarial
+  set — 50k `www.` runs, 10 000 parens each way, 10 000 task markers,
+  1000-deep nesting, autolinks inside links/code/raw HTML/alt text,
+  lone surrogates, NUL bytes and (Go only) genuinely invalid UTF-8:
+  **no throw and no panic anywhere.**
+
+## 26. The linearity claim, measured properly
+
+§15's claim is correct, but the end-to-end timings that appear to
+support it are not the evidence they look like. Measuring
+`parse`+`renderHTML` at 4× input steps flags five shapes at 8–9×
+(`'(www.a.b'.repeat(n)`, `'http://a.b)'.repeat(n)` and friends) — which
+reads as n^1.5.
+
+It is not. Timing `linkifyAutolinks` **alone**, on a paragraph holding a
+single text node, gives **2.00–2.05× per doubling on every shape out to
+6–16 MB** — flatly linear, including the two the domain cap exists for.
+The 8–9× readings are a one-off heap/GC step in the surrounding parse
+and render at one particular input size: the ratio spikes at ~640 KB and
+returns to ~2.0× at the next doubling, which no quadratic term does.
+
+Worth keeping in mind for the committed perf job §24 asks for: a
+whole-pipeline timing ratio is too noisy to assert on, and the isolated
+pass is both quieter and the thing actually under test.
+
+## 27. Two pre-existing Go entity defects the fuzzing found
+
+Same class as §23, found the same way, and — like §23 — present on
+`origin/main` and unrelated to the GFM work. `go/common.go` decodes named
+references with the standard library's table; two things about that table
+are not §6.2's rules.
+
+**`html.UnescapeString` matches the legacy semicolon-less aliases as a
+*prefix* of a longer name.** `&ampa;` came back as `&a;` and `&nbspa;`
+as U+00A0 followed by `a;`, because the stdlib consumed `&amp` / `&nbsp`
+and left the tail; `decodeEntity` only checked that the whole run ended
+in `;`, which it did. §6.2 admits only the exact semicolon-terminated
+names, so both are literal text, which is what the TypeScript's explicit
+2125-entry table gives. The gate now also rejects a decode that left part
+of the reference behind — the residue is always a non-empty suffix of the
+name plus the `;`, and `body` is capped at 32 characters by
+`entityPattern`, so the check is bounded.
+
+**`&nGt;` and `&nLt;` are in the WHATWG table but not the stdlib's.**
+`html.UnescapeString` returns them unchanged, so Go emitted them
+literally where TypeScript emitted U+226B/U+226A + U+20D2.
+`missingEntities` supplies the two; the test below proves they are the
+only gaps.
+
+Both are pinned by `go/entities_test.go`, which reads
+`ts/src/entities.ts` — the canonical generated table — and asserts Go
+agrees on **every one of the 2125 names**, and on the near-misses formed
+by appending a character to each. That last assertion has to be stated as
+"decodes iff the table has it", not "does not decode": some real names
+are proper prefixes of other real names (`sup` → `sup1`, `le` → `leq`,
+`colone` → `coloneq`), which is exactly why a prefix-matching decoder
+looked plausible in the first place.
+
+This is the third defect in this class (§23, and both halves of this
+section). The pattern is now unmistakable: **every place Go leans on a
+standard-library text routine where TypeScript spells the rule out is a
+divergence candidate**, because the stdlib implements HTML5's rules and
+this parser implements CommonMark's. `go/common.go`'s header already
+flags entity decoding and Unicode punctuation as the two such places;
+entity decoding has now been wrong twice.
+
+## 28. Corrections to earlier sections
+
+* **§13 and `AGENTS.md` overstated the reference-definition claim.**
+  Deciding the task marker on raw text does not make it "beat a
+  `[x]: /url` reference definition" — `- [x]: /url` *is* a reference
+  definition, and the item comes out empty. What it beats is the
+  reference *link* that definition would otherwise produce: with `[x]:
+  /url` in the document, `- [x] foo` is a task item while `- [x]foo`
+  (no space, so no marker) renders as `<a href="/url">x</a>foo`.
+  `AGENTS.md` has been corrected; the comment in `block.ts` was already
+  precise.
+* **§15's caps are semantic, not only budgetary** — written up in §16,
+  where the other divergences are.
+
+## 29. Follow-ups this leaves
+
+* Everything in §24 still stands, and §23's argument for a committed
+  adversarial cross-runtime job is now stronger by two more defects.
+  The generator that found these is worth rebuilding as a committed
+  job rather than a throwaway: it is templates with a hole, filled with
+  a character set chosen for byte-vs-rune and case-folding hazards.
+* **Audit the remaining stdlib leans in `go/common.go`** against the
+  TypeScript, in the same table-driven way `entities_test.go` now does
+  for entities. `isUnicodePunctuation` is the one left.
+* **A TypeScript-side entity table test** is not needed — `entities.ts`
+  *is* the table — but nothing currently asserts that the generator's
+  output still matches upstream `entities.json`.
