@@ -1656,15 +1656,27 @@ func linkifyAutolinks(block *MdNode) {
 	}
 }
 
+// inlineContentBlocks are the blocks whose raw content the block phase left
+// for this phase to parse.
+var inlineContentBlocks = map[NodeType]bool{
+	NodeParagraph: true,
+	NodeHeading:   true,
+	// GFM table cells hold inlines and nothing else — "block-level elements
+	// cannot be inserted in a table" — so a cell is parsed exactly as a
+	// paragraph is, autolink post-pass included.
+	NodeTableCell: true,
+}
+
 // parseInlines is the phase 2 entry point: walk the block tree and parse the
-// string content of every paragraph and heading into inline children.
+// string content of every paragraph, heading and table cell into inline
+// children.
 func parseInlines(doc *MdNode, refmap RefMap, opts Options) {
 	parser := &inlineParser{refmap: refmap, options: opts}
 	walker := doc.Walker()
 
 	for ev := walker.Next(); ev != nil; ev = walker.Next() {
 		node := ev.Node
-		if !ev.Entering && (node.Type == NodeParagraph || node.Type == NodeHeading) {
+		if !ev.Entering && inlineContentBlocks[node.Type] {
 			parser.parse(node)
 			if opts.GFM {
 				linkifyAutolinks(node)

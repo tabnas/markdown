@@ -31,7 +31,7 @@
 // paragraphs and headings that the inline phase consumes.
 
 import { MdNode } from './node.ts'
-import type { ListData, NodeType } from './node.ts'
+import type { ListData, NodeType, SourcePos, TableAlign } from './node.ts'
 import { unescapeString } from './common.ts'
 import { parseReference } from './inline.ts'
 import type { ParserOptions, RefMap } from './options.ts'
@@ -44,6 +44,8 @@ const C_SPACE = 32
 const C_GREATERTHAN = 62
 const C_LESSTHAN = 60
 const C_OPEN_BRACKET = 91
+const C_BACKSLASH = 92
+const C_PIPE = 124
 
 /** §2.1: \r\n, \n and a lone \r are all line endings. */
 const RE_LINE_ENDING = /\r\n|\n|\r/
@@ -53,6 +55,17 @@ const RE_THEMATIC_BREAK = /^(?:\*[ \t]*){3,}$|^(?:_[ \t]*){3,}$|^(?:-[ \t]*){3,}
 
 /** Fast reject: every block start begins with one of these characters. */
 const RE_MAYBE_SPECIAL = /^[#`~*+_=<>0-9-]/
+
+/**
+ * The same fast reject with `|` and `:` added, used when `gfm` is on: a GFM
+ * table's delimiter row may begin with either (`| --- |`, `:-: | ---:`), and
+ * neither is a CommonMark block start.
+ *
+ * Kept as a separate constant rather than folded into the one above so that a
+ * `gfm:false` parse takes exactly the path it always did — same characters
+ * rejected, same lines never offered to the block starts at all.
+ */
+const RE_MAYBE_SPECIAL_GFM = /^[#`~*+_=<>0-9:|-]/
 
 const RE_NON_SPACE = /[^ \t\f\v\r\n]/
 
@@ -207,6 +220,143 @@ function isBlank(s: string): boolean {
   return !RE_NON_SPACE.test(s)
 }
 
+// --- GFM tables (extension) -------------------------------------------------
+//
+// Everything the extension needs from a line is here: how a row splits into
+// cells, and whether a line is a delimiter row. Both are pure functions of one
+// line of text, which is what lets the block start below stay a few lines
+// long.
+
+/** ASCII whitespace, the set `cmark_isspace` trims from a table cell. */
+function isAsciiSpace(c: number): boolean {
+  return 32 === c || (9 <= c && c <= 13)
+}
+
+function trimAsciiSpace(s: string): string {
+  let start = 0
+  let end = s.length
+  while (start < end && isAsciiSpace(s.charCodeAt(start))) start++
+  while (end > start && isAsciiSpace(s.charCodeAt(end - 1))) end--
+  return 0 === start && end === s.length ? s : s.slice(start, end)
+}
+
+/**
+ * Split one row of a table into its cell texts.
+ *
+ * Cells are separated by *unescaped* pipes; a leading and a trailing pipe are
+ * both optional and may differ from row to row, so they are stripped before
+ * the split rather than producing empty cells at the ends. A trailing pipe is
+ * only a delimiter if it is itself unescaped, which is why the backslash run
+ * before it is counted.
+ *
+ * `\|` is resolved to a literal `|` *here*, as the extension requires ("include
+ * a pipe in a cell's content by escaping it, including inside other inline
+ * spans"). Doing it at split time is the whole point: the inline phase never
+ * sees the backslash, so a code span in the cell yields a real pipe —
+ * `` b `\|` az `` is `b <code>|</code> az`, which no amount of unescaping
+ * *after* inline parsing could produce. Every other backslash escape is left
+ * exactly as written for the inline phase to handle in the usual way, so no
+ * cell text is unescaped twice.
+ *
+ * Scanning skips the character after any backslash, so `\\` cannot shield the
+ * pipe that follows it: `a\\|b` is two cells, the first holding `a\\`.
+ *
+ * A row of nothing but whitespace has no cells at all, which is how a header
+ * candidate that is really empty fails the cell-count test instead of matching
+ * a one-column delimiter row.
+ */
+function splitTableRow(line: string): string[] {
+  let start = 0
+  let end = line.length
+  while (start < end && isAsciiSpace(line.charCodeAt(start))) start++
+  while (end > start && isAsciiSpace(line.charCodeAt(end - 1))) end--
+
+  if (start === end) return []
+
+  // Optional leading pipe.
+  if (C_PIPE === line.charCodeAt(start)) start++
+
+  // Optional trailing pipe — but an escaped one is content, not a delimiter.
+  if (start < end && C_PIPE === line.charCodeAt(end - 1)) {
+    let bs = end - 2
+    while (start <= bs && C_BACKSLASH === line.charCodeAt(bs)) bs--
+    // An even-length backslash run leaves the pipe unescaped.
+    if (0 === (end - 2 - bs) % 2) end--
+  }
+
+  const cells: string[] = []
+  // `cur` holds the parts of the current cell that have already been rewritten;
+  // `seg` is the start of the run since then, so the common case (no escapes)
+  // costs one slice per cell rather than one per character.
+  let cur = ''
+  let seg = start
+  let i = start
+
+  while (i < end) {
+    const c = line.charCodeAt(i)
+    if (C_BACKSLASH === c && i + 1 < end) {
+      if (C_PIPE === line.charCodeAt(i + 1)) {
+        cur += line.slice(seg, i) + '|'
+        i += 2
+        seg = i
+      } else {
+        i += 2
+      }
+      continue
+    }
+    if (C_PIPE === c) {
+      cells.push(trimAsciiSpace(cur + line.slice(seg, i)))
+      cur = ''
+      i++
+      seg = i
+      continue
+    }
+    i++
+  }
+  cells.push(trimAsciiSpace(cur + line.slice(seg, end)))
+
+  return cells
+}
+
+/**
+ * A delimiter cell is hyphens with an optional leading and/or trailing colon,
+ * and nothing else. One `+`, one space in the middle, one stray character and
+ * the line is not a delimiter row.
+ */
+const RE_TABLE_DELIMITER_CELL = /^(:?)-+(:?)$/
+
+/**
+ * Read a line as a table's delimiter row, returning one alignment per column,
+ * or null if it is not one.
+ */
+function parseDelimiterRow(line: string): TableAlign[] | null {
+  const cells = splitTableRow(line)
+  if (0 === cells.length) return null
+
+  const align: TableAlign[] = []
+  for (const cell of cells) {
+    const m = RE_TABLE_DELIMITER_CELL.exec(cell)
+    if (null === m) return null
+    const left = ':' === m[1]
+    const right = ':' === m[2]
+    align.push(left && right ? 'center' : left ? 'left' : right ? 'right' : null)
+  }
+  return align
+}
+
+/**
+ * Cap on the empty cells inserted to pad short body rows, across a whole
+ * document — cmark-gfm's `MAX_AUTOCOMPLETED_CELLS`, and for the same reason.
+ *
+ * Padding is the one place where a table's node count is not bounded by the
+ * size of its source: a 10000-column header followed by 10000 one-cell rows is
+ * 60 KB of input asking for 10^8 cells. Every other part of the extension is
+ * linear in the input, so this single budget is what keeps the whole of it so.
+ * Reaching it needs input that is already pathological; ordinary tables are
+ * nowhere near.
+ */
+const MAX_AUTOCOMPLETED_CELLS = 0x80000
+
 /** §5.3: two markers make the same list only if type, bullet and delimiter agree. */
 function listsMatch(listData: ListData, itemData: ListData): boolean {
   return (
@@ -252,8 +402,18 @@ type BlockHandler = {
   /** Called once when the block is closed. */
   finalize: (parser: BlockParser, block: MdNode) => void
   canContain: (t: NodeType) => boolean
-  /** Leaves that accumulate raw text: code blocks, HTML blocks, paragraphs. */
+  /** Leaves that accumulate raw text: code blocks, HTML blocks, paragraphs, tables. */
   acceptsLines: boolean
+  /**
+   * Lines belonging to this block are literal text, so Appendix A step 2 does
+   * not look for block starts while it is the last matched container.
+   *
+   * True for exactly the two blocks the spec names — code blocks and HTML
+   * blocks. Paragraphs and GFM tables also accept lines, but a block start may
+   * still interrupt either: that is how `> bar` ends a table, and how `# h`
+   * ends a paragraph.
+   */
+  verbatim: boolean
 }
 
 const notItem = (t: NodeType): boolean => 'item' !== t
@@ -265,6 +425,7 @@ const BLOCK_HANDLERS: Record<string, BlockHandler> = {
     finalize: () => undefined,
     canContain: notItem,
     acceptsLines: false,
+    verbatim: false,
   },
 
   list: {
@@ -294,6 +455,7 @@ const BLOCK_HANDLERS: Record<string, BlockHandler> = {
     },
     canContain: (t) => 'item' === t,
     acceptsLines: false,
+    verbatim: false,
   },
 
   block_quote: {
@@ -311,6 +473,7 @@ const BLOCK_HANDLERS: Record<string, BlockHandler> = {
     finalize: () => undefined,
     canContain: notItem,
     acceptsLines: false,
+    verbatim: false,
   },
 
   item: {
@@ -346,6 +509,7 @@ const BLOCK_HANDLERS: Record<string, BlockHandler> = {
     },
     canContain: notItem,
     acceptsLines: false,
+    verbatim: false,
   },
 
   heading: {
@@ -355,6 +519,7 @@ const BLOCK_HANDLERS: Record<string, BlockHandler> = {
     finalize: () => undefined,
     canContain: noChildren,
     acceptsLines: false,
+    verbatim: false,
   },
 
   thematic_break: {
@@ -362,6 +527,7 @@ const BLOCK_HANDLERS: Record<string, BlockHandler> = {
     finalize: () => undefined,
     canContain: noChildren,
     acceptsLines: false,
+    verbatim: false,
   },
 
   code_block: {
@@ -418,6 +584,7 @@ const BLOCK_HANDLERS: Record<string, BlockHandler> = {
     },
     canContain: noChildren,
     acceptsLines: true,
+    verbatim: true,
   },
 
   html_block: {
@@ -433,6 +600,7 @@ const BLOCK_HANDLERS: Record<string, BlockHandler> = {
     },
     canContain: noChildren,
     acceptsLines: true,
+    verbatim: true,
   },
 
   paragraph: {
@@ -453,7 +621,115 @@ const BLOCK_HANDLERS: Record<string, BlockHandler> = {
     },
     canContain: noChildren,
     acceptsLines: true,
+    verbatim: false,
   },
+
+  // GFM tables. The header row is built when the table opens (see
+  // `tryOpenTable`); every later line is accumulated raw and split into a body
+  // row at finalize, so the table behaves like a paragraph that happens to
+  // print as a grid — it ends at a blank line, and any block start interrupts
+  // it, because `verbatim` is false and `canContain` refuses everything the
+  // block starts can open.
+  table: {
+    continue: (parser) => (parser.blank ? 1 : 0),
+    finalize: (parser, block) => finalizeTable(parser, block),
+    canContain: (t) => 'table_row' === t,
+    acceptsLines: true,
+    verbatim: false,
+  },
+
+  // Rows and cells are created closed, and are never the parser's tip, so
+  // nothing here is reached in a normal parse. They exist so that `handlerFor`
+  // — which throws for an unknown type — cannot be the way a malformed tree
+  // surfaces.
+  table_row: {
+    continue: () => 1,
+    finalize: () => undefined,
+    canContain: (t) => 'table_cell' === t,
+    acceptsLines: false,
+    verbatim: false,
+  },
+
+  table_cell: {
+    continue: () => 1,
+    finalize: () => undefined,
+    canContain: noChildren,
+    acceptsLines: false,
+    verbatim: false,
+  },
+}
+
+/**
+ * Append one row of `cells` to `table`, padded with empty cells or truncated
+ * so that it is exactly as wide as the delimiter row said.
+ *
+ * Rows and cells are built closed: they are not part of the open spine, and
+ * the line walk in `incorporateLine` must stop at the table itself.
+ */
+function addTableRow(
+  parser: BlockParser,
+  table: MdNode,
+  cells: string[],
+  isHeader: boolean,
+  lineNumber: number,
+  endColumn: number,
+): void {
+  const width = table.tableAlign?.length ?? 0
+
+  // See MAX_AUTOCOMPLETED_CELLS: padding is the only unbounded part of a table.
+  let limit = width
+  if (cells.length < width) {
+    const budget = MAX_AUTOCOMPLETED_CELLS - parser.autocompletedCells
+    const padding = width - cells.length
+    if (padding > budget) limit = cells.length + (0 < budget ? budget : 0)
+    parser.autocompletedCells += limit - cells.length
+  }
+
+  // A row and its cells occupy one source line. Columns within that line are
+  // not tracked: nothing reads them (the AST drops sourcepos and the renderer
+  // ignores it), and threading offsets through the cell split to invent them
+  // would be cost with no reader. Each node needs its own array — sourcepos is
+  // mutable — so the span is rebuilt rather than shared.
+  const span = (): SourcePos => [
+    [lineNumber, 1],
+    [lineNumber, endColumn],
+  ]
+
+  const row = new MdNode('table_row', span())
+  row.isHeaderRow = isHeader
+  row.open = false
+  table.appendChild(row)
+
+  for (let i = 0; i < limit; i++) {
+    const cell = new MdNode('table_cell', span())
+    cell.open = false
+    // Consumed by the inline phase, exactly as a paragraph's content is.
+    cell.stringContent = i < cells.length ? cells[i] : ''
+    row.appendChild(cell)
+  }
+}
+
+/**
+ * Close a table: turn the raw lines it accumulated into body rows.
+ *
+ * The first accumulated line is the delimiter row that opened the table. It
+ * carries no data — its alignments are already on the node — so it is skipped
+ * here, which is also what keeps the source line numbering of the rows below
+ * it straightforward: the table accepts exactly one line per source line, and
+ * a blank line closes it, so there are no gaps.
+ */
+function finalizeTable(parser: BlockParser, table: MdNode): void {
+  const lines = table.stringContent.split('\n')
+  table.stringContent = ''
+
+  // Line 0 is the delimiter row; the last element is the empty string after
+  // the final newline.
+  const headerLine = table.sourcepos[0][0]
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i]
+    if ('' === line) continue
+    addTableRow(parser, table, splitTableRow(line), false, headerLine + i + 1, charCount(line))
+  }
 }
 
 function handlerFor(type: NodeType): BlockHandler {
@@ -707,6 +983,15 @@ const BLOCK_STARTS: BlockStart[] = [
     parser.addChild('code_block', parser.offset)
     return 2
   },
+
+  // GFM table (extension) — a delimiter row directly under an open paragraph.
+  //
+  // Last, and the position is load-bearing in both directions. It must come
+  // after the setext underline so that `foo` over `---` stays an `<h2>` rather
+  // than becoming a one-column table, and after the list marker so that `- | -`
+  // stays a list item; cmark-gfm reaches its extensions from the same place,
+  // once every built-in start has refused the line.
+  (parser, container) => (parser.tryOpenTable(container) ? 2 : 0),
 ]
 
 // --- the parser -------------------------------------------------------------
@@ -748,12 +1033,37 @@ class BlockParser {
   indented = false
   blank = false
 
+  /** Empty cells inserted so far to pad short table rows. See MAX_AUTOCOMPLETED_CELLS. */
+  autocompletedCells = 0
+
+  /**
+   * The text `addLine` last appended, and the block it went to.
+   *
+   * `tryOpenTable` needs the *last line* of an open paragraph, and reading it
+   * back out of `stringContent` is not affordable: that content is built by
+   * repeated `+=`, so every index into it flattens a fresh rope — O(n) per
+   * line, O(n²) over a paragraph whose every other line looks like a delimiter
+   * row, which untrusted input can write. Keeping the line itself here costs
+   * two field writes and never touches the accumulated string.
+   *
+   * The node is recorded alongside it because "the previous line went to this
+   * very paragraph" is the extension's own rule, not a cache-validity trick:
+   * a header row is by definition the line immediately above the delimiter
+   * row. If some other block took that line, there is no header row.
+   */
+  lastAddedLine = ''
+  lastAddedTo: MdNode | null = null
+
+  /** Step 2's fast reject, widened for a table's delimiter row when `gfm` is on. */
+  readonly maybeSpecial: RegExp
+
   // MdNode has no field for the HTML block type, and the tree contract is not
   // ours to change, so open HTML blocks carry it here.
   private htmlBlockTypes = new Map<MdNode, number>()
 
   constructor(options: ParserOptions) {
     this.options = options
+    this.maybeSpecial = options.gfm ? RE_MAYBE_SPECIAL_GFM : RE_MAYBE_SPECIAL
     this.doc = new MdNode('document', [
       [1, 1],
       [0, 0],
@@ -847,12 +1157,16 @@ class BlockParser {
   /** Add the rest of the current line to the tip's raw content. */
   addLine(): void {
     const tip = this.openTip
+    let text = ''
     if (this.partiallyConsumedTab) {
       this.offset += 1 // step over the tab
       const charsToTab = 4 - (this.column % 4)
-      tip.stringContent += ' '.repeat(charsToTab)
+      text = ' '.repeat(charsToTab)
     }
-    tip.stringContent += this.currentLine.slice(this.offset) + '\n'
+    text += this.currentLine.slice(this.offset)
+    tip.stringContent += text + '\n'
+    this.lastAddedLine = text
+    this.lastAddedTo = tip
   }
 
   /**
@@ -897,6 +1211,62 @@ class BlockParser {
     this.openTip.appendChild(node)
     this.tip = node
     return node
+  }
+
+  /**
+   * GFM tables: try to read the current line as the delimiter row of a table
+   * whose header row is the last line of the open paragraph `container`.
+   *
+   * The two rows must agree on the number of cells; if they do not, there is
+   * no table and the line is nothing special (spec example 6 keeps the whole
+   * thing a paragraph). The header row is the paragraph's **last** line only,
+   * so a paragraph that had earlier lines is split: those lines stay a
+   * paragraph — finalized here, which is what still lets them contribute link
+   * reference definitions — and the table is opened after it.
+   *
+   * On success the table is the tip and the caller returns "leaf started", so
+   * step 3 adds the delimiter row itself to the table's raw content. It is
+   * skipped again by `finalizeTable`; keeping it costs nothing and makes the
+   * table's accumulated lines line up one-for-one with the source lines.
+   */
+  tryOpenTable(container: MdNode): boolean {
+    if (!this.options.gfm || this.indented || 'paragraph' !== container.type) return false
+
+    const align = parseDelimiterRow(this.currentLine.slice(this.nextNonspace))
+    if (null === align) return false
+
+    // The header row is the line directly above, which is the line `addLine`
+    // last wrote — to this paragraph, or there is no header row at all.
+    if (this.lastAddedTo !== container) return false
+    const headerCells = splitTableRow(this.lastAddedLine)
+    if (headerCells.length !== align.length) return false
+
+    this.closeUnmatchedBlocks()
+
+    const headerLine = this.lineNumber - 1
+    // `stringContent` ends with that same line plus the newline `addLine` put
+    // after it, so the header row starts this far in — no scan needed, and the
+    // content is only ever touched on the split branch, at most once per table.
+    const content = container.stringContent
+    const headerStart = content.length - this.lastAddedLine.length - 1
+    if (0 < headerStart) {
+      // Split: everything above the header row stays a paragraph.
+      container.stringContent = content.slice(0, headerStart)
+      this.finalize(container, headerLine - 1)
+    } else {
+      const parent = container.parent
+      container.unlink()
+      this.tip = parent
+    }
+
+    const table = this.addChild('table', this.nextNonspace)
+    // The table begins at the header row, one line above the delimiter row
+    // that `addChild` dated it from.
+    table.sourcepos[0][0] = headerLine
+    table.tableAlign = align
+
+    addTableRow(this, table, headerCells, true, headerLine, this.lastLineLength)
+    return true
   }
 
   /** Close every block that failed its continuation condition on this line. */
@@ -968,13 +1338,15 @@ class BlockParser {
     this.allClosed = container === this.oldtip
     this.lastMatchedContainer = container
 
-    // Step 2: look for new block starts under the last matched container.
-    let matchedLeaf = 'paragraph' !== container.type && handlerFor(container.type).acceptsLines
+    // Step 2: look for new block starts under the last matched container —
+    // unless its lines are literal text, in which case there is nothing to
+    // look for.
+    let matchedLeaf = handlerFor(container.type).verbatim
 
     while (!matchedLeaf) {
       this.findNextNonspace()
 
-      if (!this.indented && !RE_MAYBE_SPECIAL.test(ln.slice(this.nextNonspace))) {
+      if (!this.indented && !this.maybeSpecial.test(ln.slice(this.nextNonspace))) {
         this.advanceNextNonspace()
         break
       }

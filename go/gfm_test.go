@@ -5,9 +5,9 @@ package tabnasmarkdown
 // GFM extension conformance and behaviour, the Go twin of the GFM half of
 // ts/test/commonmark.test.ts.
 //
-// Four extensions are implemented — strikethrough, task list items, autolink
-// literals and the disallowed-raw-HTML filter — and all four are gated on the
-// single GFM option. Tables are not, and are deliberately out of scope here.
+// Five extensions are implemented — tables, strikethrough, task list items,
+// autolink literals and the disallowed-raw-HTML filter — and all five are
+// gated on the single GFM option.
 //
 // The corpus is test/gfm/spec.json, the same 24 extension examples
 // ts/tools/gfm-conformance.mjs reports on, so the two runtimes are held to one
@@ -33,8 +33,9 @@ var (
 	cmOpts  = Options{GFM: false, Breaks: false}
 )
 
-// implementedGFMSections must be complete. Tables are a later change.
+// implementedGFMSections must be complete — every vendored section.
 var implementedGFMSections = map[string]bool{
+	"Tables (extension)":              true,
 	"Task list items (extension)":     true,
 	"Strikethrough (extension)":       true,
 	"Autolinks (extension)":           true,

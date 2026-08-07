@@ -31,8 +31,8 @@ import { MdNode } from './node.ts'
 
 export type MarkdownOptions = {
   /**
-   * Enable the GFM extensions — strikethrough, task list items, autolink
-   * literals and the disallowed-raw-HTML filter. Default true.
+   * Enable the GFM extensions — tables, strikethrough, task list items,
+   * autolink literals and the disallowed-raw-HTML filter. Default true.
    */
   gfm?: boolean
   /** When true, a single soft break becomes a hard break. Default false. */
@@ -177,6 +177,9 @@ export type {
   CodeNode,
   HtmlNode,
   ThematicBreakNode,
+  TableNode,
+  TableRowNode,
+  TableCellNode,
   Inline,
   TextNode,
   EmphasisNode,

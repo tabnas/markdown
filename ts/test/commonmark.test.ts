@@ -174,8 +174,8 @@ describe('ast projection', () => {
 // ---------------------------------------------------------------------------
 // GFM extensions
 //
-// Four are implemented — strikethrough, task list items, disallowed raw HTML
-// and autolink literals — and all four are gated on `gfm`. Tables are not.
+// Five are implemented — tables, strikethrough, task list items, disallowed
+// raw HTML and autolink literals — and all five are gated on `gfm`.
 //
 // `ts/tools/gfm-conformance.mjs` reports these as a per-section table; this is
 // the version that belongs to `npm test`.
@@ -183,8 +183,9 @@ describe('ast projection', () => {
 const gfmSpecFile = join(__dirname, '..', '..', 'test', 'gfm', 'spec.json')
 const gfmCases: SpecCase[] = JSON.parse(readFileSync(gfmSpecFile, 'utf8'))
 
-// Tables are a later change; every other extension section must be complete.
+// Every vendored extension section must be complete.
 const IMPLEMENTED_SECTIONS = [
+  'Tables (extension)',
   'Task list items (extension)',
   'Strikethrough (extension)',
   'Autolinks (extension)',
@@ -211,6 +212,486 @@ describe('gfm-extensions corpus', () => {
       }
     })
   }
+})
+
+describe('gfm tables', () => {
+  const html = (src: string) => toHtml(src, GFM)
+
+  // A table's HTML is verbose enough that a literal expectation buries the
+  // thing being tested, so rows are assembled from their cells here. Newline
+  // placement is still byte-exact — that is what the corpus judges.
+  const tr = (cells: string[], tag: 'th' | 'td') =>
+    '<tr>\n' + cells.map((c) => c + '\n').join('') + '</tr>\n'
+  const thead = (cells: string[]) => '<thead>\n' + tr(cells, 'th') + '</thead>\n'
+  const tbody = (rows: string[][]) =>
+    '<tbody>\n' + rows.map((r) => tr(r, 'td')).join('') + '</tbody>\n'
+  const table = (head: string, body?: string) =>
+    '<table>\n' + head + (undefined === body ? '' : body) + '</table>\n'
+
+  const th = (s: string, align?: string) =>
+    '<th' + (align ? ` align="${align}"` : '') + '>' + s + '</th>'
+  const td = (s: string, align?: string) =>
+    '<td' + (align ? ` align="${align}"` : '') + '>' + s + '</td>'
+
+  // --- the eight spec behaviours, each asserted on its own ---
+
+  test('1. header row, delimiter row, data row', () => {
+    assert.equal(
+      html('| foo | bar |\n| --- | --- |\n| baz | bim |\n'),
+      table(thead([th('foo'), th('bar')]), tbody([[td('baz'), td('bim')]])),
+    )
+  })
+
+  test('2. colons set alignment, and pipes may be inconsistent', () => {
+    // Cell widths need not match, and a leading/trailing pipe is optional on
+    // every row independently.
+    assert.equal(
+      html('| abc | defghi |\n:-: | -----------:\nbar | baz\n'),
+      table(
+        thead([th('abc', 'center'), th('defghi', 'right')]),
+        tbody([[td('bar', 'center'), td('baz', 'right')]]),
+      ),
+    )
+    // All four delimiter shapes, and `null` means no attribute at all.
+    assert.equal(
+      html('| a | b | c | d |\n| :- | -: | :-: | --- |\n| 1 | 2 | 3 | 4 |\n'),
+      table(
+        thead([th('a', 'left'), th('b', 'right'), th('c', 'center'), th('d')]),
+        tbody([[td('1', 'left'), td('2', 'right'), td('3', 'center'), td('4')]]),
+      ),
+    )
+  })
+
+  test('3. an escaped pipe is content, inside other inline spans too', () => {
+    assert.equal(
+      html('| f\\|oo  |\n| ------ |\n| b `\\|` az |\n| b **\\|** im |\n'),
+      table(
+        thead([th('f|oo')]),
+        tbody([[td('b <code>|</code> az')], [td('b <strong>|</strong> im')]]),
+      ),
+    )
+  })
+
+  test('4. another block-level structure breaks the table', () => {
+    assert.equal(
+      html('| abc | def |\n| --- | --- |\n| bar | baz |\n> bar\n'),
+      table(thead([th('abc'), th('def')]), tbody([[td('bar'), td('baz')]])) +
+        '<blockquote>\n<p>bar</p>\n</blockquote>\n',
+    )
+  })
+
+  test('5. a blank line breaks the table', () => {
+    assert.equal(
+      html('| abc | def |\n| --- | --- |\n| bar | baz |\nbar\n\nbar\n'),
+      table(
+        thead([th('abc'), th('def')]),
+        tbody([
+          [td('bar'), td('baz')],
+          [td('bar'), td('')],
+        ]),
+      ) + '<p>bar</p>\n',
+    )
+  })
+
+  test('6. header and delimiter must agree on the cell count', () => {
+    // Not a table at all — the whole thing stays one paragraph.
+    assert.equal(
+      html('| abc | def |\n| --- |\n| bar |\n'),
+      '<p>| abc | def |\n| --- |\n| bar |</p>\n',
+    )
+    // The mismatch is on the count, not the widths: 1-vs-1 and 3-vs-3 match.
+    assert.equal(html('| abc |\n| --- |\n'), table(thead([th('abc')])))
+    assert.equal(html('| abc | def |\n| --- | --- | --- |\n').startsWith('<p>'), true)
+  })
+
+  test('7. short rows are padded, long rows are truncated', () => {
+    assert.equal(
+      html('| abc | def |\n| --- | --- |\n| bar |\n| bar | baz | boo |\n'),
+      table(
+        thead([th('abc'), th('def')]),
+        tbody([
+          [td('bar'), td('')],
+          [td('bar'), td('baz')],
+        ]),
+      ),
+    )
+  })
+
+  test('8. no body rows means no <tbody> at all', () => {
+    const out = html('| abc | def |\n| --- | --- |\n')
+    assert.equal(out, table(thead([th('abc'), th('def')])))
+    assert.ok(!out.includes('tbody'))
+  })
+
+  // --- the rules those examples rest on ---
+
+  test('a delimiter cell is hyphens and at most two colons', () => {
+    // Leading and trailing pipes are optional here as everywhere. A row of
+    // nothing but hyphens (`-`, `---`) is left out: it is a setext underline
+    // first, which the test below covers.
+    for (const delim of [
+      '| --- |', '| :-- |', '| --: |', '| :-: |', '| - |', '|-|', '|--', '--|',
+      ':-', '-:', ':-:', ':---:',
+    ]) {
+      assert.ok(html('| a |\n' + delim + '\n').startsWith('<table>'), delim)
+    }
+    for (const delim of [
+      '| === |', '| -+- |', '| - - |', '| :: |', '| :  |', '| a |', '|  |', '| ::- |',
+      '| -:- |', '| *** |', '| — |',
+    ]) {
+      assert.ok(html('| a |\n' + delim + '\n').startsWith('<p>'), delim)
+    }
+  })
+
+  test('spaces and tabs between pipes and content are trimmed', () => {
+    assert.equal(
+      html('|   a   |\t b\t|\n| - | - |\n|\tx\t|   y   |\n'),
+      table(thead([th('a'), th('b')]), tbody([[td('x'), td('y')]])),
+    )
+  })
+
+  test('the header row is the paragraph’s last line, so the paragraph splits', () => {
+    assert.equal(
+      html('aaa\nbbb\n| a | b |\n| - | - |\n| c | d |\n'),
+      '<p>aaa\nbbb</p>\n' +
+        table(thead([th('a'), th('b')]), tbody([[td('c'), td('d')]])),
+    )
+    // The lines left behind are a real paragraph: their reference definitions
+    // still register, because splitting finalizes them.
+    assert.equal(
+      html('[r]: /url\n| a |\n| - |\n\n[r]\n'),
+      table(thead([th('a')])) + '<p><a href="/url">r</a></p>\n',
+    )
+  })
+
+  test('a setext underline still wins over a one-column delimiter row', () => {
+    // `---` is both. The block starts are ordered so the heading wins, exactly
+    // as cmark-gfm orders them; `| foo |` as heading text is the giveaway.
+    assert.equal(html('foo\n---\n'), '<h2>foo</h2>\n')
+    assert.equal(html('| foo |\n---\n'), '<h2>| foo |</h2>\n')
+    // A list marker wins too: `- | -` is a bullet, not a two-column delimiter.
+    assert.equal(
+      html('| a | b |\n- | -\n'),
+      '<p>| a | b |</p>\n<ul>\n<li>| -</li>\n</ul>\n',
+    )
+  })
+
+  test('a delimiter row with no paragraph above it is just a paragraph', () => {
+    assert.equal(html('| - |\n'), '<p>| - |</p>\n')
+    assert.equal(html('\n| - |\n'), '<p>| - |</p>\n')
+    // …and it must be the line *directly* above.
+    assert.equal(html('| a |\n\n| - |\n'), '<p>| a |</p>\n<p>| - |</p>\n')
+  })
+
+  test('a table nests in a block quote and in a list item', () => {
+    assert.equal(
+      html('> | a | b |\n> | - | - |\n> | c | d |\n'),
+      '<blockquote>\n' +
+        table(thead([th('a'), th('b')]), tbody([[td('c'), td('d')]])) +
+        '</blockquote>\n',
+    )
+    assert.equal(
+      html('- | a | b |\n  | - | - |\n  | c | d |\n'),
+      '<ul>\n<li>\n' +
+        table(thead([th('a'), th('b')]), tbody([[td('c'), td('d')]])) +
+        '</li>\n</ul>\n',
+    )
+    // A lazy continuation is not a delimiter row: the quote's marker is
+    // missing, so the paragraph simply carries on.
+    assert.equal(
+      html('> | a | b |\n| - | - |\n'),
+      '<blockquote>\n<p>| a | b |\n| - | - |</p>\n</blockquote>\n',
+    )
+  })
+
+  test('a table immediately followed by another table', () => {
+    // Separated by a blank line: two tables.
+    assert.equal(
+      html('| a |\n| - |\n| 1 |\n\n| b |\n| - |\n| 2 |\n'),
+      table(thead([th('a')]), tbody([[td('1')]])) +
+        table(thead([th('b')]), tbody([[td('2')]])),
+    )
+    // Without one, the second "table" is body rows of the first — a delimiter
+    // row is only special directly under a *paragraph*.
+    assert.equal(
+      html('| a |\n| - |\n| b |\n| - |\n'),
+      table(thead([th('a')]), tbody([[td('b')], [td('-')]])),
+    )
+  })
+
+  test('inlines inside cells are parsed, and only inlines', () => {
+    assert.equal(
+      html('| a |\n| - |\n| *e* ~~s~~ `c` [l](/u) www.x.com |\n'),
+      table(
+        thead([th('a')]),
+        tbody([
+          [
+            td(
+              '<em>e</em> <del>s</del> <code>c</code> ' +
+                '<a href="/u">l</a> <a href="http://www.x.com">www.x.com</a>',
+            ),
+          ],
+        ]),
+      ),
+    )
+    // The tagfilter is a render-time step and still applies inside a cell.
+    assert.equal(
+      html('| a |\n| - |\n| <title>x |\n'),
+      table(thead([th('a')]), tbody([[td('&lt;title>x')]])),
+    )
+  })
+
+  // --- escaped pipes, in detail ---
+
+  test('splitting is on unescaped pipes only', () => {
+    // One cell, not two: `\|` never separates.
+    assert.equal(html('| a\\|b |\n| - |\n'), table(thead([th('a|b')])))
+    // `\\` is an escaped backslash, so the pipe after it *does* separate.
+    assert.equal(
+      html('| x | y |\n| - | - |\n| a\\\\ | b |\n'),
+      table(thead([th('x'), th('y')]), tbody([[td('a\\'), td('b')]])),
+    )
+    // A trailing pipe that is itself escaped is content, not the optional
+    // trailing delimiter.
+    assert.equal(html('| a\\| |\n| - |\n'), table(thead([th('a|')])))
+  })
+
+  test('an escaped pipe becomes a literal pipe before inline parsing', () => {
+    // This is the whole point of resolving `\|` at split time: a code span is
+    // a literal, so nothing downstream could turn `\|` into `|` inside one.
+    assert.equal(
+      html('| a |\n| - |\n| `\\|` |\n'),
+      table(thead([th('a')]), tbody([[td('<code>|</code>')]])),
+    )
+    assert.equal(
+      html('| a |\n| - |\n| **\\|** |\n'),
+      table(thead([th('a')]), tbody([[td('<strong>|</strong>')]])),
+    )
+    // …and the cell text is not unescaped twice: every other escape is left
+    // for the inline phase, which handles it exactly once.
+    assert.equal(
+      html('| a |\n| - |\n| \\*not em\\* |\n'),
+      table(thead([th('a')]), tbody([[td('*not em*')]])),
+    )
+    assert.equal(
+      html('| a |\n| - |\n| \\\\ |\n'),
+      table(thead([th('a')]), tbody([[td('\\')]])),
+    )
+  })
+
+  // --- the AST projection ---
+
+  test('AST: table, tableRow, tableCell, and align', () => {
+    const doc: any = parseDocument('| h1 | h2 |\n| :- | -: |\n| b1 | b2 |\n', GFM)
+    assert.equal(doc.children.length, 1)
+
+    const t = doc.children[0]
+    assert.equal(t.type, 'table')
+    assert.deepEqual(t.align, ['left', 'right'])
+    assert.equal(t.children.length, 2)
+
+    // mdast has no header flag: the FIRST row is the header, by convention.
+    assert.deepEqual(t.children[0], {
+      type: 'tableRow',
+      children: [
+        { type: 'tableCell', children: [{ type: 'text', value: 'h1' }] },
+        { type: 'tableCell', children: [{ type: 'text', value: 'h2' }] },
+      ],
+    })
+    assert.deepEqual(t.children[1], {
+      type: 'tableRow',
+      children: [
+        { type: 'tableCell', children: [{ type: 'text', value: 'b1' }] },
+        { type: 'tableCell', children: [{ type: 'text', value: 'b2' }] },
+      ],
+    })
+  })
+
+  test('AST: align carries null for a column with no colon', () => {
+    const doc: any = parseDocument('| a | b | c |\n| --- | :-: | --: |\n', GFM)
+    assert.deepEqual(doc.children[0].align, [null, 'center', 'right'])
+    // One entry per column, always.
+    assert.equal(doc.children[0].align.length, 3)
+    assert.equal(doc.children[0].children[0].children.length, 3)
+  })
+
+  test('AST: padded cells are real, empty cells', () => {
+    const doc: any = parseDocument('| a | b |\n| - | - |\n| x |\n', GFM)
+    const body = doc.children[0].children[1]
+    assert.equal(body.children.length, 2)
+    assert.deepEqual(body.children[1], { type: 'tableCell', children: [] })
+  })
+
+  test('AST: cells hold inline nodes', () => {
+    const doc: any = parseDocument('| a |\n| - |\n| *x* |\n', GFM)
+    assert.deepEqual(doc.children[0].children[1].children[0], {
+      type: 'tableCell',
+      children: [{ type: 'emphasis', children: [{ type: 'text', value: 'x' }] }],
+    })
+  })
+
+  test('AST: a table nested in a list item projects in place', () => {
+    const doc: any = parseDocument('- | a |\n  | - |\n', GFM)
+    const item = doc.children[0].children[0]
+    assert.equal(item.children.length, 1)
+    assert.equal(item.children[0].type, 'table')
+  })
+
+  // --- gfm:false ---
+
+  test('gfm:false produces no table nodes and byte-identical paragraph HTML', () => {
+    const sources = [
+      '| foo | bar |\n| --- | --- |\n| baz | bim |\n',
+      '| abc | defghi |\n:-: | -----------:\nbar | baz\n',
+      '| f\\|oo  |\n| ------ |\n| b `\\|` az |\n',
+      '| abc | def |\n| --- | --- |\n',
+      'aaa\n| a | b |\n| - | - |\n',
+    ]
+    for (const src of sources) {
+      const out = toHtml(src, OPTS)
+      assert.ok(!out.includes('<table'), JSON.stringify(src))
+      // Exactly what a paragraph of these lines renders as — the escaping and
+      // the soft breaks included.
+      assert.equal(out, renderHTML(parse(src, OPTS)), JSON.stringify(src))
+      assert.ok(out.startsWith('<p>'), JSON.stringify(src))
+
+      const doc: any = parseDocument(src, OPTS)
+      for (const block of doc.children) {
+        assert.notEqual(block.type, 'table', JSON.stringify(src))
+      }
+    }
+    // The delimiter row is not even a paragraph break: it all stays one.
+    assert.equal(
+      toHtml('| a | b |\n| - | - |\n| c | d |\n', OPTS),
+      '<p>| a | b |\n| - | - |\n| c | d |</p>\n',
+    )
+  })
+
+  test('renderHTML with no options follows the parse for tables too', () => {
+    assert.equal(renderHTML(parse('| a |\n| - |\n', OPTS)), '<p>| a |\n| - |</p>\n')
+    assert.ok(renderHTML(parse('| a |\n| - |\n', GFM)).startsWith('<table>'))
+  })
+})
+
+describe('gfm table robustness', () => {
+  // Nothing here may throw, and nothing may become super-linear: the inputs
+  // are adversarial, and untrusted input picks them.
+
+  test('a 10000-column delimiter row', () => {
+    const cols = 10000
+    const src =
+      '|' + ' h |'.repeat(cols) + '\n' +
+      '|' + ' --- |'.repeat(cols) + '\n' +
+      '|' + ' b |'.repeat(cols) + '\n'
+    let out = ''
+    assert.doesNotThrow(() => {
+      out = toHtml(src, GFM)
+    })
+    assert.equal(out.split('<th>').length - 1, cols)
+    assert.equal(out.split('<td>').length - 1, cols)
+
+    const doc: any = parseDocument(src, GFM)
+    assert.equal(doc.children[0].align.length, cols)
+    assert.equal(doc.children[0].children[0].children.length, cols)
+  })
+
+  test('10000 body rows', () => {
+    const rows = 10000
+    const src = '| a | b |\n| - | - |\n' + '| x | y |\n'.repeat(rows)
+    let out = ''
+    assert.doesNotThrow(() => {
+      out = toHtml(src, GFM)
+    })
+    // One header row plus every body row.
+    assert.equal(out.split('<tr>').length - 1, rows + 1)
+    const doc: any = parseDocument(src, GFM)
+    assert.equal(doc.children[0].children.length, rows + 1)
+  })
+
+  test('a pipe repeated 50000 times', () => {
+    const n = 50000
+    // On its own it is one paragraph and nothing more.
+    assert.doesNotThrow(() => toHtml('|'.repeat(n) + '\n', GFM))
+    assert.doesNotThrow(() => toHtml('|'.repeat(n) + '\n', OPTS))
+    // As a header row over a matching delimiter row it is a very wide table:
+    // n pipes with the leading and trailing one stripped is n-1 empty cells.
+    let out = ''
+    assert.doesNotThrow(() => {
+      out = toHtml('|'.repeat(n) + '\n|' + ' - |'.repeat(n - 1) + '\n', GFM)
+    })
+    assert.equal(out.split('<th></th>').length - 1, n - 1)
+  })
+
+  test('padding a very wide table over very many rows stays bounded', () => {
+    // The one shape whose node count is not bounded by the input: 10000
+    // columns over 10000 one-cell rows asks for 10^8 cells. The autocomplete
+    // budget caps it, so quadrupling the rows must not grow the work.
+    const header = '|' + ' h |'.repeat(10000) + '\n' + '|' + ' --- |'.repeat(10000) + '\n'
+    const measure = (rows: number) => {
+      const src = header + '| x |\n'.repeat(rows)
+      const t0 = performance.now()
+      const out = toHtml(src, GFM)
+      return { ms: performance.now() - t0, len: out.length }
+    }
+
+    const base = measure(5000)
+    const large = measure(20000)
+
+    // The output is capped, not proportional to the row count.
+    assert.ok(3 > large.len / base.len, `output grew ${(large.len / base.len).toFixed(1)}x`)
+    if (5 > base.ms) return
+    assert.ok(
+      6 > large.ms / base.ms,
+      `4x rows took ${(large.ms / base.ms).toFixed(1)}x time ` +
+        `(${base.ms.toFixed(1)}ms -> ${large.ms.toFixed(1)}ms)`,
+    )
+  })
+
+  test('a delimiter row that never matches stays linear', () => {
+    // Every second line is a syntactically valid delimiter row that fails the
+    // cell-count test, so the paragraph grows without bound and each line asks
+    // for its last line again. Reading that back out of the accumulated
+    // content re-flattens a rope every time — O(n^2), and this is the input
+    // that shows it.
+    const measure = (n: number) => {
+      const src = '| a | b |\n| --- |\n'.repeat(n)
+      let bestMs = Infinity
+      for (let i = 0; i < 3; i++) {
+        const t0 = performance.now()
+        toHtml(src, GFM)
+        bestMs = Math.min(bestMs, performance.now() - t0)
+      }
+      return bestMs
+    }
+
+    measure(2000) // warm up the JIT
+    const base = measure(20000)
+    const large = measure(80000)
+
+    // Below this the measurement is noise, not signal (see the sourcepos test).
+    if (5 > base) return
+
+    const ratio = large / base
+    assert.ok(
+      12 > ratio,
+      `4x input took ${ratio.toFixed(1)}x time (${base.toFixed(1)}ms -> ${large.toFixed(1)}ms); ` +
+        'linear is ~4x, quadratic ~16x',
+    )
+  })
+
+  test('degenerate table fragments parse and render', () => {
+    for (const src of [
+      '|', '||', '|||', '\\|', '|\\', '| - ', ' - |', '|-|', ':', '::', ':-:', '-:',
+      'a\n|', 'a\n:', 'a\n-:', 'a\n|-', 'a\n||', 'a\n:-:|', 'a|b\n-|-|-', 'a\n\\|',
+      '|a|\n|\\|', 'a\n|\t-\t|', '|\n|', '| |\n| |', 'a\n' + '-'.repeat(10000),
+      '|'.repeat(200) + '\n' + '-|'.repeat(200), '> a\n> |-|', '- a\n  |-|',
+      'a\n---\n', 'a\n- | -', '|a\n|-\n    x', '\\\\|\n-',
+    ]) {
+      assert.doesNotThrow(() => toHtml(src + '\n', GFM), JSON.stringify(src))
+      assert.doesNotThrow(() => toHtml(src + '\n', OPTS), JSON.stringify(src))
+      assert.doesNotThrow(() => parseDocument(src + '\n', GFM), JSON.stringify(src))
+    }
+  })
 })
 
 describe('gfm task list items', () => {
@@ -499,6 +980,8 @@ describe('gfm:false disables every extension', () => {
     ['http://commonmark.org\n', '<p>http://commonmark.org</p>\n'],
     ['foo@bar.baz\n', '<p>foo@bar.baz</p>\n'],
     ['~~x~~\n', '<p>~~x~~</p>\n'],
+    ['| a | b |\n| - | - |\n| c | d |\n', '<p>| a | b |\n| - | - |\n| c | d |</p>\n'],
+    ['a\n:-:\n', '<p>a\n:-:</p>\n'],
   ]
 
   test('toHtml with gfm:false', () => {

@@ -33,6 +33,14 @@ const (
 	NodeCodeBlock     NodeType = "code_block"
 	NodeHTMLBlock     NodeType = "html_block"
 
+	// GFM tables (extension): a leaf block as far as the spec's algorithm is
+	// concerned — no block-level element can be inserted in one — but a
+	// container as far as the tree is concerned, since its rows and cells are
+	// real nodes and its cells hold inlines.
+	NodeTable     NodeType = "table"
+	NodeTableRow  NodeType = "table_row"
+	NodeTableCell NodeType = "table_cell"
+
 	// Inlines.
 	NodeText       NodeType = "text"
 	NodeSoftbreak  NodeType = "softbreak"
@@ -53,12 +61,31 @@ var containerTypes = map[NodeType]bool{
 	NodeItem:       true,
 	NodeParagraph:  true,
 	NodeHeading:    true,
+	NodeTable:      true,
+	NodeTableRow:   true,
+	NodeTableCell:  true,
 	NodeEmph:       true,
 	NodeStrong:     true,
 	NodeLink:       true,
 	NodeImage:      true,
 	NodeDel:        true,
 }
+
+// TableAlign is the per-column alignment of a GFM table, from the colons in
+// its delimiter row: `:--` left, `--:` right, `:-:` center, `---` none.
+//
+// The canonical runtime spells "none" as `null` in a `'left'|'right'|'center'|
+// null` union; here it is the empty string, the same stand-in node.go already
+// uses for an absent Info or Destination. ast.go turns it back into a JSON
+// null so the two runtimes' `align` arrays marshal identically.
+type TableAlign string
+
+const (
+	AlignNone   TableAlign = ""
+	AlignLeft   TableAlign = "left"
+	AlignRight  TableAlign = "right"
+	AlignCenter TableAlign = "center"
+)
 
 // ListType distinguishes bullet from ordered lists.
 type ListType string
@@ -122,6 +149,19 @@ type MdNode struct {
 	FenceOffset int
 
 	ListData *ListData
+
+	// TableAlign is the GFM table alignment: one entry per column, in order,
+	// set on the TABLE node by the block phase from the delimiter row. Every
+	// row of the table — header and body alike — has exactly this many cells,
+	// because short rows are padded and long ones are truncated. Nil on every
+	// other node type.
+	TableAlign []TableAlign
+
+	// IsHeaderRow marks the one table_row that is the header row, which is
+	// always the table's first child. mdast has no header flag and relies on
+	// that convention, but the renderer needs to choose <th> over <td> without
+	// walking back up to the table.
+	IsHeaderRow bool
 
 	// Checked is the GFM task list item state (`- [x] foo`): true or false for
 	// a task item, and meaningless unless HasChecked is set. HasChecked is

@@ -21,7 +21,7 @@
 // The renderer reads only the finished tree — never `stringContent`, which
 // the inline phase has already consumed.
 
-import type { MdNode } from './node.ts'
+import type { MdNode, TableAlign } from './node.ts'
 import { escapeXml, normalizeURI } from './common.ts'
 import { resolveOptions } from './options.ts'
 import type { ParserOptions } from './options.ts'
@@ -109,6 +109,14 @@ export function renderHTML(doc: MdNode, options?: Partial<ParserOptions>): strin
     if (true === selfClosing) s += ' /'
     lit(s + '>')
   }
+
+  // GFM tables carry their alignment once, on the table, but it is rendered
+  // per cell. Tracking the current table's array and the current row's column
+  // as the walk goes is what keeps that an O(1) lookup instead of counting a
+  // cell's previous siblings — and a table can never contain another table
+  // (its cells hold inlines only), so one of each is enough.
+  let tableAlign: TableAlign[] = []
+  let cellIndex = 0
 
   const walker = doc.walker()
   let event = walker.next()
@@ -253,6 +261,65 @@ export function renderHTML(doc: MdNode, options?: Partial<ParserOptions>): strin
         lit(rawHtml(node.literal))
         cr()
         break
+
+      // --- GFM tables ---
+      //
+      // `<thead>` and `<tbody>` have no node of their own: the header row is
+      // the one row flagged as such, and the body is every row after it. That
+      // is also why `<tbody>` is written by the *first* body row rather than
+      // unconditionally — a table with no body rows must have no `<tbody>` at
+      // all.
+
+      case 'table':
+        if (entering) {
+          tableAlign = node.tableAlign ?? []
+          cr()
+          tag('table')
+        } else {
+          cr()
+          tag('/table')
+        }
+        cr()
+        break
+
+      case 'table_row': {
+        const header = node.isHeaderRow
+        if (entering) {
+          if (header) {
+            cr()
+            tag('thead')
+          } else if (null === node.prev || node.prev.isHeaderRow) {
+            cr()
+            tag('tbody')
+          }
+          cr()
+          tag('tr')
+          cellIndex = 0
+        } else {
+          cr()
+          tag('/tr')
+          cr()
+          if (header) tag('/thead')
+          else if (null === node.next) tag('/tbody')
+        }
+        cr()
+        break
+      }
+
+      case 'table_cell': {
+        const name = null !== node.parent && node.parent.isHeaderRow ? 'th' : 'td'
+        if (entering) {
+          const attrs: Attr[] = []
+          const align = tableAlign[cellIndex]
+          if (undefined !== align && null !== align) attrs.push(['align', align])
+          cellIndex += 1
+          tag(name, attrs)
+        } else {
+          tag('/' + name)
+          cr()
+        }
+        break
+      }
 
       case 'text':
         lit(escapeXml(null === node.literal ? '' : node.literal))

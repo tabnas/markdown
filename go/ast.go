@@ -193,6 +193,40 @@ func toBlock(node *MdNode, opts Options) map[string]any {
 	case NodeHTMLBlock:
 		return map[string]any{"type": "html", "value": node.Literal}
 
+	case NodeTable:
+		// A table's children are rows and cells rather than blocks, so
+		// blockChildren never descends into one; the nesting is a fixed three
+		// levels deep and cannot be driven past the stack by input.
+		rows := make([]any, 0, 4)
+		for row := node.FirstChild; row != nil; row = row.Next {
+			if row.Type != NodeTableRow {
+				continue
+			}
+			cells := make([]any, 0, 4)
+			for cell := row.FirstChild; cell != nil; cell = cell.Next {
+				if cell.Type != NodeTableCell {
+					continue
+				}
+				cells = append(cells, map[string]any{
+					"type":     "tableCell",
+					"children": inlineChildren(cell, opts),
+				})
+			}
+			rows = append(rows, map[string]any{"type": "tableRow", "children": cells})
+		}
+		// []any with nil entries, not []TableAlign: a column with no colon is
+		// JSON null in the canonical runtime, and a table with no columns is
+		// `[]` rather than `null`.
+		align := make([]any, 0, len(node.TableAlign))
+		for _, a := range node.TableAlign {
+			if AlignNone == a {
+				align = append(align, nil)
+			} else {
+				align = append(align, string(a))
+			}
+		}
+		return map[string]any{"type": "table", "align": align, "children": rows}
+
 	case NodeList:
 		data := node.ListData
 		ordered := data != nil && data.Type == ListOrdered

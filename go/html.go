@@ -233,6 +233,14 @@ func RenderHTML(doc *MdNode, opts Options) string {
 
 	r := &htmlRenderer{atLineStart: true}
 
+	// GFM tables carry their alignment once, on the table, but it is rendered
+	// per cell. Tracking the current table's slice and the current row's column
+	// as the walk goes is what keeps that an O(1) lookup instead of counting a
+	// cell's previous siblings — and a table can never contain another table
+	// (its cells hold inlines only), so one of each is enough.
+	var tableAlign []TableAlign
+	cellIndex := 0
+
 	walker := doc.Walker()
 	event := walker.Next()
 
@@ -383,6 +391,69 @@ func RenderHTML(doc *MdNode, opts Options) string {
 			r.cr()
 			r.lit(rawHTML(node.Literal, opts.GFM))
 			r.cr()
+
+		// --- GFM tables ---
+		//
+		// <thead> and <tbody> have no node of their own: the header row is the
+		// one row flagged as such, and the body is every row after it. That is
+		// also why <tbody> is written by the *first* body row rather than
+		// unconditionally — a table with no body rows must have no <tbody> at
+		// all.
+
+		case NodeTable:
+			if entering {
+				tableAlign = node.TableAlign
+				r.cr()
+				r.tag("table", nil, false)
+			} else {
+				r.cr()
+				r.tag("/table", nil, false)
+			}
+			r.cr()
+
+		case NodeTableRow:
+			header := node.IsHeaderRow
+			if entering {
+				if header {
+					r.cr()
+					r.tag("thead", nil, false)
+				} else if nil == node.Prev || node.Prev.IsHeaderRow {
+					r.cr()
+					r.tag("tbody", nil, false)
+				}
+				r.cr()
+				r.tag("tr", nil, false)
+				cellIndex = 0
+			} else {
+				r.cr()
+				r.tag("/tr", nil, false)
+				r.cr()
+				if header {
+					r.tag("/thead", nil, false)
+				} else if nil == node.Next {
+					r.tag("/tbody", nil, false)
+				}
+			}
+			r.cr()
+
+		case NodeTableCell:
+			name := "td"
+			if nil != node.Parent && node.Parent.IsHeaderRow {
+				name = "th"
+			}
+			if entering {
+				var attrs []attr
+				// Out of range is the TypeScript's `undefined`, and AlignNone
+				// its `null`: both mean no attribute at all.
+				if cellIndex < len(tableAlign) && AlignNone != tableAlign[cellIndex] {
+					attrs = append(attrs, attr{"align", string(tableAlign[cellIndex])})
+				}
+				cellIndex += 1
+				r.tag(name, attrs, false)
+			} else {
+				r.tag("/"+name, nil, false)
+				r.cr()
+			}
 
 		case NodeText:
 			r.lit(escapeXML(node.Literal))

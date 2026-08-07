@@ -27,6 +27,13 @@ export type NodeType =
   | 'thematic_break'
   | 'code_block'
   | 'html_block'
+  // GFM tables (extension): a leaf block as far as the spec's algorithm is
+  // concerned — no block-level element can be inserted in one — but a
+  // container as far as the tree is concerned, since its rows and cells are
+  // real nodes and its cells hold inlines.
+  | 'table'
+  | 'table_row'
+  | 'table_cell'
   // inlines
   | 'text'
   | 'softbreak'
@@ -46,12 +53,21 @@ const CONTAINER_TYPES: Record<string, true> = {
   item: true,
   paragraph: true,
   heading: true,
+  table: true,
+  table_row: true,
+  table_cell: true,
   emph: true,
   strong: true,
   link: true,
   image: true,
   del: true,
 }
+
+/**
+ * Per-column alignment of a GFM table, from the colons in its delimiter row:
+ * `:--` left, `--:` right, `:-:` center, `---` none.
+ */
+export type TableAlign = 'left' | 'right' | 'center' | null
 
 export type ListType = 'bullet' | 'ordered'
 
@@ -105,6 +121,22 @@ export class MdNode {
   fenceOffset = 0
 
   listData: ListData | null = null
+
+  /**
+   * GFM tables: one entry per column, in order, set on the **table** node by
+   * the block phase from the delimiter row. Every row of the table — header
+   * and body alike — has exactly this many cells, because short rows are
+   * padded and long ones are truncated. Null on every other node type.
+   */
+  tableAlign: TableAlign[] | null = null
+
+  /**
+   * GFM tables: true on the one `table_row` that is the header row, which is
+   * always the table's first child. mdast has no header flag and relies on
+   * that convention, but the renderer needs to choose `<th>` over `<td>`
+   * without walking back up to the table.
+   */
+  isHeaderRow = false
 
   /**
    * GFM task list items (`- [x] foo`): `true`/`false` for a checked/unchecked

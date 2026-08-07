@@ -9,12 +9,12 @@ package tabnasmarkdown
 type Options struct {
 	// GFM enables the GFM extensions. Default true.
 	//
-	// Four are implemented, and this one flag gates all of them together:
-	// strikethrough (~~x~~), task list items (- [x] foo), autolink literals
-	// (bare www. / http:// / https:// / ftp:// / a@b.co) and the
-	// disallowed-raw-HTML filter. Tables and footnotes are not implemented.
+	// Five are implemented, and this one flag gates all of them together:
+	// tables, strikethrough (~~x~~), task list items (- [x] foo), autolink
+	// literals (bare www. / http:// / https:// / ftp:// / a@b.co) and the
+	// disallowed-raw-HTML filter. Footnotes are not implemented.
 	//
-	// The first three are parse-time; the raw-HTML filter is applied by the
+	// The first four are parse-time; the raw-HTML filter is applied by the
 	// renderer, which is why html.go reads this option too. With GFM off the
 	// output is plain CommonMark, byte for byte.
 	GFM bool

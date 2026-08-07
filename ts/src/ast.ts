@@ -18,6 +18,7 @@
 //     field carried no information; nothing can have depended on it.
 
 import { MdNode } from './node.ts'
+import type { TableAlign } from './node.ts'
 import type { ParserOptions } from './options.ts'
 
 export type DocumentNode = { type: 'document'; children: Block[] }
@@ -31,6 +32,7 @@ export type Block =
   | CodeNode
   | HtmlNode
   | ThematicBreakNode
+  | TableNode
 
 export type HeadingNode = {
   type: 'heading'
@@ -65,6 +67,24 @@ export type CodeNode = {
 }
 export type HtmlNode = { type: 'html'; value: string }
 export type ThematicBreakNode = { type: 'thematicBreak' }
+
+/**
+ * A GFM table, in mdast's shape.
+ *
+ * `align` has one entry per column — `null` where the delimiter row gave no
+ * colon — and every row has exactly that many cells, since the block phase
+ * pads short rows and truncates long ones.
+ *
+ * mdast has no header flag: the **first** row is the header row, by
+ * convention, and this projection preserves that ordering from the tree.
+ */
+export type TableNode = {
+  type: 'table'
+  align: TableAlign[]
+  children: TableRowNode[]
+}
+export type TableRowNode = { type: 'tableRow'; children: TableCellNode[] }
+export type TableCellNode = { type: 'tableCell'; children: Inline[] }
 
 export type Inline =
   | TextNode
@@ -321,6 +341,24 @@ function buildBlock(
 
     case 'html_block':
       return { type: 'html', value: node.literal ?? '' }
+
+    case 'table': {
+      // Built here rather than through `built`, because a table's children are
+      // rows and cells rather than blocks — `blockChildren` never descends
+      // into one. The nesting is a fixed three levels deep, so unlike the
+      // block containers this cannot be driven past the stack by input.
+      const rows: TableRowNode[] = []
+      for (let row = node.firstChild; row; row = row.next) {
+        if ('table_row' !== row.type) continue
+        const cells: TableCellNode[] = []
+        for (let cell = row.firstChild; cell; cell = cell.next) {
+          if ('table_cell' !== cell.type) continue
+          cells.push({ type: 'tableCell', children: inlineChildren(cell, opts) })
+        }
+        rows.push({ type: 'tableRow', children: cells })
+      }
+      return { type: 'table', align: node.tableAlign ?? [], children: rows }
+    }
 
     case 'list': {
       const data = node.listData

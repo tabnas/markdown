@@ -1409,9 +1409,19 @@ export function linkifyAutolinks(block: MdNode): void {
   }
 }
 
+/** Blocks whose raw content the block phase left for this phase to parse. */
+const INLINE_CONTENT_BLOCKS: Record<string, true> = {
+  paragraph: true,
+  heading: true,
+  // GFM table cells hold inlines and nothing else — "block-level elements
+  // cannot be inserted in a table" — so a cell is parsed exactly as a
+  // paragraph is, autolink post-pass included.
+  table_cell: true,
+}
+
 /**
  * Phase 2 entry point: walk the block tree and parse the string content of
- * every paragraph and heading into inline children.
+ * every paragraph, heading and table cell into inline children.
  */
 export function parseInlines(doc: MdNode, refmap: RefMap, options: ParserOptions): void {
   const parser = new InlineParser(refmap, options)
@@ -1420,7 +1430,7 @@ export function parseInlines(doc: MdNode, refmap: RefMap, options: ParserOptions
   let ev = walker.next()
   while (null !== ev) {
     const node = ev.node
-    if (!ev.entering && ('paragraph' === node.type || 'heading' === node.type)) {
+    if (!ev.entering && true === INLINE_CONTENT_BLOCKS[node.type]) {
       parser.parse(node)
       if (options.gfm) linkifyAutolinks(node)
     }
