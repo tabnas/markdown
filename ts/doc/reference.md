@@ -5,6 +5,12 @@ HTML output rules. For a guided introduction start with the [tutorial](tutorial.
 task recipes see the [how-to guide](guide.md); for design rationale see
 [concepts](concepts.md).
 
+**Conformant to CommonMark 0.31.2.** 652/652 examples of the specification's own test
+suite, all 26 sections, in both the TypeScript and the Go runtime. The suite is vendored
+at `test/commonmark/spec.json` and is run with `npm run conformance`. The five GFM
+extensions score 24/24 on the vendored extension corpus `test/gfm/spec.json`, run with
+`npm run conformance-gfm`. Full figures in [Conformance](#conformance).
+
 ## Outputs
 
 The package has two documented outputs. The AST is the primary one; HTML is opt-in.
@@ -33,7 +39,8 @@ toHtml('# Hello\n\nHello *world*') // => '<h1>Hello</h1>\n<p>Hello <em>world</em
 
 **The HTML is not sanitized.** Raw HTML blocks and inline tags pass through verbatim, as
 CommonMark specifies. The one exception is GFM's disallowed-raw-HTML filter, which is
-applied when `gfm` is on and rewrites the leading `<` of nine tag names.
+applied when `gfm` is on and rewrites the leading `<` of nine tag names; it is not a
+sanitizer. See [Sanitization](#sanitization).
 
 ```js
 import { toHtml } from '@tabnas/markdown'
@@ -95,7 +102,7 @@ import type { MarkdownOptions, ParserOptions, DocumentNode, Block, Inline } from
 | `grammarText` | `string` | The embedded text of `markdown-grammar.jsonic`. |
 | `MarkdownOptions` | type | See [Options](#options). |
 | `ParserOptions` | type | Re-export of `src/options.ts`. See [Options](#options). |
-| `DocumentNode`, `Block`, `HeadingNode`, `ParagraphNode`, `BlockquoteNode`, `ListNode`, `ListItemNode`, `CodeNode`, `HtmlNode`, `ThematicBreakNode` | types | See [Block nodes](#block-nodes). |
+| `DocumentNode`, `Block`, `HeadingNode`, `ParagraphNode`, `BlockquoteNode`, `ListNode`, `ListItemNode`, `CodeNode`, `HtmlNode`, `ThematicBreakNode`, `TableNode`, `TableRowNode`, `TableCellNode` | types | See [Block nodes](#block-nodes) and [Table nodes](#table-nodes). |
 | `Inline`, `TextNode`, `EmphasisNode`, `StrongNode`, `InlineCodeNode`, `LinkNode`, `ImageNode`, `BreakNode`, `DeleteNode` | types | See [Inline nodes](#inline-nodes). |
 
 ### `parseDocument(src, opts?)`
@@ -200,7 +207,7 @@ type ParserOptions = { gfm: boolean; breaks: boolean }
 
 | Option | Type | Default | Effect |
 |---|---|---|---|
-| `gfm` | `boolean` | `true` | Enables four GFM extensions together: strikethrough (`~~text~~` → a `delete` node / `<del>`, opening and closing runs the same length), task list items (`listItem.checked`), autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`), and the disallowed-raw-HTML filter. The first three are parse-time; the filter is applied by the renderer. |
+| `gfm` | `boolean` | `true` | Enables five GFM extensions together: tables (`table`, `tableRow`, `tableCell` nodes; a delimiter row under a paragraph's last line), strikethrough (`~~text~~` → a `delete` node / `<del>`, opening and closing runs the same length), task list items (`listItem.checked`), autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`), and the disallowed-raw-HTML filter. The first four are parse-time — tables in the block phase, task list markers in the block phase, strikethrough in the inline scanner, autolink literals in a post-pass over the inline tree — and the filter alone is applied by the renderer. |
 | `breaks` | `boolean` | `false` | When `true`, a soft line break becomes a `break` node in the AST and `<br />\n` in HTML. When `false`, a soft line break becomes a single space in the AST and `\n` in HTML. Hard line breaks (two or more trailing spaces, or a trailing backslash) are `break` nodes and `<br />` either way. |
 
 `renderHTML` reads `breaks`, and reads `gfm` for one thing only — the disallowed-raw-HTML
@@ -226,6 +233,7 @@ type DocumentNode = { type: 'document'; children: Block[] }
 type Block =
   | HeadingNode | ParagraphNode | BlockquoteNode | ListNode
   | ListItemNode | CodeNode | HtmlNode | ThematicBreakNode
+  | TableNode
 
 type Inline =
   | TextNode | EmphasisNode | StrongNode | InlineCodeNode
@@ -296,6 +304,59 @@ type Inline =
 | Field | Type | Notes |
 |---|---|---|
 | `type` | `'thematicBreak'` | No other fields. |
+
+### Table nodes
+
+Produced only when `gfm` is `true`. Three types, in mdast's shape. `table` is a `Block`;
+`tableRow` appears only as a child of `table`, and `tableCell` only as a child of
+`tableRow`.
+
+```ts
+type TableAlign = 'left' | 'right' | 'center' | null
+
+type TableNode = { type: 'table'; align: TableAlign[]; children: TableRowNode[] }
+type TableRowNode = { type: 'tableRow'; children: TableCellNode[] }
+type TableCellNode = { type: 'tableCell'; children: Inline[] }
+```
+
+**`table`**
+
+| Field | Type | Notes |
+|---|---|---|
+| `type` | `'table'` | |
+| `align` | `('left' \| 'right' \| 'center' \| null)[]` | One entry per column, in order, from the colons in the delimiter row: `:--` `'left'`, `--:` `'right'`, `:-:` `'center'`, `---` `null`. |
+| `children` | `TableRowNode[]` | The first row is the header row. mdast has no header flag; the ordering carries it. A header-only table has exactly one child. |
+
+**`tableRow`**
+
+| Field | Type | Notes |
+|---|---|---|
+| `type` | `'tableRow'` | |
+| `children` | `TableCellNode[]` | Length always equals `table.align.length`: the block phase pads short rows with empty cells and truncates long ones. |
+
+**`tableCell`**
+
+| Field | Type | Notes |
+|---|---|---|
+| `type` | `'tableCell'` | |
+| `children` | `Inline[]` | Inline content, parsed as a paragraph's would be. Empty array for an empty or padded cell. A backslash-escaped pipe becomes a literal `\|` *before* inline parsing, so it does not split the cell and a code span containing it holds a real pipe. |
+
+```js
+import { parseDocument } from '@tabnas/markdown'
+
+parseDocument('| a | b |\n| :- | -: |\n| 1 | 2 |\n').children[0] // => { type: 'table', align: ['left', 'right'], children: [ { type: 'tableRow', children: [ { type: 'tableCell', children: [ { type: 'text', value: 'a' } ] }, { type: 'tableCell', children: [ { type: 'text', value: 'b' } ] } ] }, { type: 'tableRow', children: [ { type: 'tableCell', children: [ { type: 'text', value: '1' } ] }, { type: 'tableCell', children: [ { type: 'text', value: '2' } ] } ] } ] }
+```
+
+Recognition rules:
+
+| Rule | Detail |
+|---|---|
+| Start | A delimiter row on the line directly after an open paragraph whose **last line** splits into the same number of cells. A paragraph with earlier lines is split: those lines stay a paragraph and the table begins after them. |
+| Delimiter cell | `-+` with an optional leading and/or trailing `:`, and nothing else. |
+| Pipes | A leading and a trailing pipe are both optional on every row, and may differ between rows. A backslash-escaped pipe is content, not a delimiter. |
+| End | A blank line, or the start of any other block. |
+| Indentation | A delimiter row indented four or more columns does not open a table; it continues the paragraph. |
+| `gfm: false` | No `table` node is produced; the lines remain a paragraph. |
 
 ### Inline nodes
 
@@ -379,6 +440,7 @@ parseDocument('Hello <b>bold</b>') // => { type: 'document', children: [ { type:
 | Source positions | `MdNode.sourcepos` on the native tree's block nodes. |
 | Soft line breaks as nodes (with `breaks: false`) | `softbreak` nodes on the native tree. In the AST a soft break becomes a single space inside the surrounding text run. |
 | The block/inline distinction for `html` | `html_block` vs `html_inline` on the native tree. |
+| The table header-row flag | `MdNode.isHeaderRow` on the native tree. In the AST the first `tableRow` is the header row, by mdast convention. |
 | Container open/closed state, `stringContent` | Block-phase bookkeeping on the native tree; not meaningful after the parse finishes. |
 
 ## Native tree
@@ -392,10 +454,16 @@ tree: children are reached with `firstChild`/`next`, not an array.
 |---|---|
 | Containers (block) | `document`, `block_quote`, `list`, `item` |
 | Leaf blocks | `paragraph`, `heading`, `thematic_break`, `code_block`, `html_block` |
+| GFM tables | `table`, `table_row`, `table_cell` |
 | Inlines | `text`, `softbreak`, `linebreak`, `code`, `html_inline`, `emph`, `strong`, `link`, `image`, `del` |
 
 `isContainer()` returns `true` for `document`, `block_quote`, `list`, `item`, `paragraph`,
-`heading`, `emph`, `strong`, `link`, `image`, `del`.
+`heading`, `table`, `table_row`, `table_cell`, `emph`, `strong`, `link`, `image`, `del`.
+
+A `table` accepts lines like a leaf block — no block-level element can be placed inside
+one — but is a container in the tree: its children are `table_row` nodes, whose children
+are `table_cell` nodes, whose children are inlines. `table` nodes appear only when `gfm`
+is `true`.
 
 ### `MdNode` fields
 
@@ -418,6 +486,10 @@ tree: children are reached with `firstChild`/`next`, not an array.
 | `fenceLength` | `number` | `0` | fenced `code_block` |
 | `fenceOffset` | `number` | `0` | fenced `code_block` |
 | `listData` | `ListData \| null` | `null` | `list`, `item` |
+| `tableAlign` | `TableAlign[] \| null` | `null` | `table` — one entry per column, from the delimiter row; `null` on every other type |
+| `isHeaderRow` | `boolean` | `false` | `table_row` — `true` on the table's first child only |
+| `checked` | `boolean \| null` | `null` | `item` — GFM task list state; `null` on an ordinary item and on every item when `gfm` is off |
+| `gfm` | `boolean` | `true` | `document` — the `gfm` option the tree was parsed with, read by `renderHTML` when it is called with no options |
 | `open` | `boolean` | `true` | block-phase bookkeeping |
 | `stringContent` | `string` | `''` | block-phase bookkeeping; consumed and cleared by phase 2 |
 | `lastLineBlank` | `boolean` | `false` | block-phase bookkeeping |
@@ -435,12 +507,15 @@ tree: children are reached with `firstChild`/`next`, not an array.
 | `unlink` | `() => void` | Detaches from parent and siblings; the node itself stays intact. |
 | `walker` | `() => NodeWalker` | A depth-first walker rooted at this node. |
 
-### `SourcePos` and `ListData`
+### `SourcePos`, `ListData` and `TableAlign`
 
 ```ts
 type SourcePos = [[number, number], [number, number]] // [[startLine, startCol], [endLine, endCol]], 1-based
 type ListType = 'bullet' | 'ordered'
+type TableAlign = 'left' | 'right' | 'center' | null
 ```
+
+`TableAlign` is declared in `src/node.ts` and is not re-exported from the package entry.
 
 | `ListData` field | Type | Meaning |
 |---|---|---|
@@ -483,6 +558,9 @@ tree.
 | `item` | `<li>` … `</li>` |
 | `code_block` | `<pre><code>` … `</code></pre>`; `class="language-X"` is added when the info string has a first word, `X` |
 | `html_block` | `literal`, verbatim and unescaped |
+| `table` | `<table>` … `</table>` |
+| `table_row` | `<tr>` … `</tr>`, wrapped in `<thead>` … `</thead>` when `isHeaderRow`, and in `<tbody>` … `</tbody>` for the run of rows after it. `<tbody>` is written by the first body row, so a header-only table emits no `<tbody>` at all |
+| `table_cell` | `<th>` … `</th>` in the header row, `<td>` … `</td>` elsewhere; `align="left"`, `align="right"` or `align="center"` is added when the column's `tableAlign` entry is not `null` |
 | `text` | `literal`, XML-escaped |
 | `softbreak` | `\n`, or `<br />\n` when `breaks: true` |
 | `linebreak` | `<br />\n` |
@@ -512,6 +590,15 @@ import { toHtml } from '@tabnas/markdown'
 
 toHtml('- a\n- b') // => '<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n'
 toHtml('- a\n\n- b') // => '<ul>\n<li>\n<p>a</p>\n</li>\n<li>\n<p>b</p>\n</li>\n</ul>\n'
+```
+
+### Table output
+
+```js
+import { toHtml } from '@tabnas/markdown'
+
+toHtml('| a | b |\n| :- | -: |\n| 1 | 2 |\n') // => '<table>\n<thead>\n<tr>\n<th align="left">a</th>\n<th align="right">b</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td align="left">1</td>\n<td align="right">2</td>\n</tr>\n</tbody>\n</table>\n'
+toHtml('| a | b |\n| - | - |\n') // => '<table>\n<thead>\n<tr>\n<th>a</th>\n<th>b</th>\n</tr>\n</thead>\n</table>\n'
 ```
 
 ### Escaping
@@ -554,10 +641,12 @@ renderer.
 
 ## Conformance
 
+**Conformant to CommonMark 0.31.2.**
+
 | | |
 |---|---|
 | Spec | CommonMark 0.31.2 |
-| Result | **652/652** |
+| Result | **652/652**, all 26 sections |
 | Suite | `test/commonmark/spec.json`, vendored |
 | Command | `npm run conformance` (no build step, no engine required) |
 | Options used | `{ gfm: false, breaks: false }` — the suite is pure CommonMark |
@@ -587,17 +676,46 @@ between TypeScript and Go. The 36 shared AST fixtures in `test/spec/*.tsv` pass 
 
 ### GFM
 
-| Extension | Status |
-|---|---|
-| Strikethrough (`~~x~~`) | Implemented, gated on `gfm` |
-| Task list items (`- [x] done`) | Implemented, gated on `gfm` |
-| Autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`) | Implemented, gated on `gfm` |
-| Disallowed raw HTML filtering | Implemented, gated on `gfm`; applied by the renderer |
-| Tables | Not implemented |
-| Footnotes | Not implemented |
+The extension set is complete: **24/24** on the vendored GFM extension corpus.
 
-`gfm: false` disables all four together, and the output is then plain CommonMark. The Go
-port is behind on the last three; see the top-level README for the current split.
+| | |
+|---|---|
+| Result | **24/24**, all 5 extension sections |
+| Suite | `test/gfm/spec.json`, vendored — the extension sections of the GFM spec only |
+| Command | `npm run conformance-gfm` |
+| Options used | `{ gfm: true, breaks: false }` |
+| Go port | `cd go && go test -run TestGFMSpec -v ./...`, also 24/24 |
+
+| Section | Examples |
+|---|---|
+| Tables | 8 |
+| Task list items | 2 |
+| Strikethrough | 2 |
+| Autolinks | 11 |
+| Disallowed Raw HTML | 1 |
+
+| Extension | Status | Phase |
+|---|---|---|
+| Tables (`table`, `tableRow`, `tableCell`) | Implemented, gated on `gfm` | Block phase |
+| Task list items (`- [x] done`) | Implemented, gated on `gfm` | Block phase |
+| Strikethrough (`~~x~~`, `~x~`) | Implemented, gated on `gfm` | Inline scanner |
+| Autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`) | Implemented, gated on `gfm` | Post-pass over the inline tree |
+| Disallowed raw HTML filtering | Implemented, gated on `gfm` | Renderer |
+| Footnotes | Not implemented | — |
+
+`gfm: false` disables all five together, and the output is then plain CommonMark —
+byte-identical to a pure-CommonMark parse over 1360 checked records. Both runtimes
+implement all five.
+
+**Tables.** A delimiter row on the line directly after an open paragraph whose last line
+splits into the same number of cells opens a table; earlier lines of that paragraph are
+split off and stay a paragraph. A delimiter cell is hyphens with an optional leading
+and/or trailing colon. Leading and trailing pipes are optional and may differ between
+rows. A backslash-escaped pipe is resolved to a literal `|` before inline parsing, so it
+does not split a cell and a code span sees a raw pipe. Every row has exactly as many cells
+as the delimiter row had columns — short rows are padded, long ones truncated. The table
+ends at a blank line or at the start of another block. See
+[Table nodes](#table-nodes) and [Table output](#table-output).
 
 **Task list items.** A list item whose first block is a paragraph starting with a task
 list item marker — optional spaces, `[`, a space/tab or `x`/`X`, `]`, then at least one
@@ -615,7 +733,39 @@ Never produced inside a link, a code span, raw HTML or an image description.
 **Disallowed raw HTML.** In `html` block and inline output the leading `<` of `title`,
 `textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext` —
 opening or closing, any case — is written as `&lt;`. The node's `value` keeps the
-original text; only the rendered HTML changes.
+original text; only the rendered HTML changes. It escapes those nine tag names and nothing
+else: it is not a sanitizer. See [Sanitization](#sanitization).
+
+### Not implemented
+
+**Footnotes.** A GitHub product feature, not part of the GFM specification suite. There is
+no option that enables them. `[^1]` is a valid CommonMark link label, so a
+GitHub-authored footnote does not error — it renders as a broken link. With no matching
+definition the reference stays literal text and the definition line becomes a paragraph;
+if the definition body happens to parse as a link destination, the reference becomes a
+real link.
+
+```js
+import { toHtml } from '@tabnas/markdown'
+
+toHtml('Text[^1]\n\n[^1]: Note text here.\n') // => '<p>Text[^1]</p>\n<p>[^1]: Note text here.</p>\n'
+toHtml('Text[^1]\n\n[^1]: /note\n') // => '<p>Text<a href="/note">^1</a></p>\n'
+```
+
+**Single-tilde subscript.** GFM strikethrough accepts a single `~`, which collides with
+the `H~2~O` subscript syntax of other dialects. Under `gfm: true`, `H~2~O` is
+`H<del>2</del>O`.
+
+```js
+import { toHtml } from '@tabnas/markdown'
+
+toHtml('H~2~O\n') // => '<p>H<del>2</del>O</p>\n'
+toHtml('H~2~O\n', { gfm: false }) // => '<p>H~2~O</p>\n'
+```
+
+**Outside CommonMark and GFM.** Not implemented, and not gated on `gfm`: math, front
+matter, definition lists, heading attributes, admonitions, wiki links, emoji shortcodes,
+highlight, sub/superscript. Each would need its own opt-in option.
 
 ## Grammar file
 

@@ -136,18 +136,16 @@ cmark-gfm tracks CommonMark 0.29, and nine of its emphasis cases expect
 pre-0.31.2 output this parser correctly no longer produces. Core
 conformance is `commonmark/spec.json`, against 0.31.2.
 
-**17/24 today, in both runtimes.** The seven failures are all Tables,
-which is not implemented in either. Everything else passes in both.
+**24/24 today, in both runtimes.** Every section passes in both.
 
 ## Who runs what
 
-- TypeScript: `ts/test/commonmark.test.ts` runs the four implemented
-  sections as part of `npm test`; it does not run Tables.
+- TypeScript: `ts/test/commonmark.test.ts` runs every section as part of
+  `npm test`.
 - TypeScript, no build and no engine: `node ts/tools/gfm-conformance.mjs`,
   which reports a per-section table and takes `--failures` and `--section=`.
 - Go: `go/gfm_test.go` (`go test -run TestGFMSpec -v ./...`) prints the
-  same per-section table. It runs all 24 but only *asserts* the four
-  implemented sections, so Tables is reported without failing the build.
+  same per-section table, and asserts every section.
 
 ## Editing it
 

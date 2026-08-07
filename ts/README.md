@@ -1,7 +1,14 @@
 # @tabnas/markdown (TypeScript)
 
-A CommonMark parser for the [Tabnas](https://github.com/tabnas/parser) engine, scoring
-**652/652 on the CommonMark 0.31.2 spec suite**, with four GFM extensions.
+A CommonMark parser for the [Tabnas](https://github.com/tabnas/parser) engine.
+
+**This parser is conformant to CommonMark 0.31.2** — all 652 examples, across all 26
+sections of the spec suite, in both runtimes. The suite is vendored in this repository, so
+the claim is checkable: `npm run conformance` reports 652/652, with no build step and no
+engine installed. It also implements **all five GFM extensions** — tables, task list
+items, autolink literals, strikethrough and disallowed raw HTML — 24/24 on the vendored
+GFM corpus, via `npm run conformance-gfm`.
+
 This is the canonical implementation; [`go/`](../go/README.md) is a port of it.
 
 [![npm version](https://img.shields.io/npm/v/@tabnas/markdown.svg)](https://npmjs.com/package/@tabnas/markdown)
@@ -68,6 +75,20 @@ tn.parse('# Hello') // => { type: 'document', children: [ { type: 'heading', dep
 block nodes, and can be walked or mutated and then rendered. See the
 [reference](doc/reference.md).
 
+GFM tables add three node types, in mdast's shape — `table`, `tableRow` and `tableCell`.
+`align` has one entry per column, `null` where the delimiter cell had no colon; there is
+no header flag, so the first row is the header row by convention, and every row has
+exactly as many cells as `align` has entries.
+
+```js
+import { parseDocument } from '@tabnas/markdown'
+
+const doc = parseDocument('| a | b |\n| :- | -: |\n| 1 | 2 |')
+
+doc.children[0].align // => [ 'left', 'right' ]
+doc.children[0].children[0].children[0] // => { type: 'tableCell', children: [ { type: 'text', value: 'a' } ] }
+```
+
 ## Install
 
 ```bash
@@ -84,18 +105,41 @@ work with no build step and no engine installed — it stages `src/*.ts` in a te
 whose `package.json` says `"type": "module"` and runs them under Node's type stripping:
 
 ```bash
-npm run conformance              # 652/652
+npm run conformance              # 652/652, all 26 sections
 npm run conformance -- --failures
+npm run conformance-gfm          # 24/24, all five extensions
 ```
 
 The `// =>` assertions in this repo's Markdown are executed as tests
 (`test/doc-examples.test.ts`, and `tools/check-doc-examples.mjs` for the engine-free
 check), so a wrong expected value is a failing test.
 
-Options are `gfm` (default `true`) and `breaks` (default `false`). `gfm` gates four
-extensions together — strikethrough, task list items, autolink literals (bare `www.` /
-`https://` / `a@b.co`) and the disallowed-raw-HTML filter. Tables and footnotes are not
+Options are `gfm` (default `true`) and `breaks` (default `false`). `gfm` gates five
+extensions together — tables, strikethrough, task list items, autolink literals (bare
+`www.` / `https://` / `a@b.co`) and the disallowed-raw-HTML filter. Footnotes are not
 implemented. With `gfm:false` the output is plain CommonMark.
+
+Footnotes are a GitHub product feature rather than part of the GFM spec suite, and their
+absence is quiet: `[^1]` is a valid CommonMark link label, so a footnote authored on
+GitHub renders as a broken link instead of raising an error.
+
+```js
+import { toHtml } from '@tabnas/markdown'
+
+toHtml('Text[^1]\n\n[^1]: note') // => '<p>Text<a href="note">^1</a></p>\n'
+```
+
+Nothing outside CommonMark and GFM is implemented — no math, front matter, definition
+lists, heading attributes, admonitions, wiki links, emoji shortcodes, highlight or
+sub/superscript. Each would need its own opt-in flag; `gfm` is not going to grow to mean
+"everything". Note one collision: GFM's single-tilde strikethrough takes the syntax other
+dialects use for subscript, so `H~2~O` is a deletion under the default `gfm:true`.
+
+```js
+import { toHtml } from '@tabnas/markdown'
+
+toHtml('H~2~O') // => '<p>H<del>2</del>O</p>\n'
+```
 
 ## Documentation
 

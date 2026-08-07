@@ -9,12 +9,21 @@ Two answers first, because most of these recipes depend on them:
 - **The AST is the primary output.** `parseDocument(src, opts)` returns it,
   without running the renderer and without loading the engine.
 - **HTML output is available**: `toHtml(src, opts)`. The CommonMark suite
-  scores HTML, so the renderer is what makes the 652/652 result measurable; it
-  is a first-class output, not a side utility. It is also **not sanitized** —
+  scores HTML, so the renderer is what makes the conformance result measurable;
+  it is a first-class output, not a side utility. It is also **not sanitized** —
   see [Render untrusted Markdown safely](#render-untrusted-markdown-safely).
 
-The parser is CommonMark 0.31.2 plus four GFM extensions: strikethrough, task
-list items, autolink literals and the disallowed-raw-HTML filter.
+**The parser is conformant to CommonMark 0.31.2**: 652/652 examples of the
+specification's own suite, all 26 sections, in both the TypeScript and the Go
+runtime. The suite is vendored in this repository, so the claim is checkable —
+`npm run conformance` runs it; see
+[Check conformance yourself](#check-conformance-yourself).
+
+On top of CommonMark it implements the complete set of five GFM extensions —
+tables, task list items, autolink literals, strikethrough and the
+disallowed-raw-HTML filter. That is 24/24 on the vendored GFM extension suite,
+which `npm run conformance-gfm` runs. All five are gated on the `gfm` option,
+default `true`.
 
 ## Get just the AST, without the engine
 
@@ -206,9 +215,9 @@ There are two options, `gfm` (default `true`) and `breaks` (default `false`),
 and they behave the same on `parseDocument`, `parseInline`, `toHtml`,
 `parseTree` and `.use(Markdown, opts)`.
 
-`gfm` gates four extensions as one switch — strikethrough, task list items,
-autolink literals and the disallowed-raw-HTML filter. Tables and footnotes are
-not implemented, with `gfm: true` or without it. With `gfm: false` the output is
+`gfm` gates five extensions as one switch — tables, strikethrough, task list
+items, autolink literals and the disallowed-raw-HTML filter. Footnotes are not
+implemented, with `gfm: true` or without it. With `gfm: false` the output is
 plain CommonMark.
 
 ```js
@@ -217,6 +226,85 @@ import { parseDocument, toHtml } from '@tabnas/markdown'
 parseDocument('~~gone~~').children[0].children // => [{ type: 'delete', children: [{ type: 'text', value: 'gone' }] }]
 parseDocument('~~gone~~', { gfm: false }).children[0].children // => [{ type: 'text', value: '~~gone~~' }]
 toHtml('~~gone~~', { gfm: false }) // => '<p>~~gone~~</p>\n'
+```
+
+## Read a table
+
+A table is three AST node types: `table`, `tableRow` and `tableCell`. Start from
+the `table` node and read `align` for the column alignments.
+
+```js
+import { parseDocument } from '@tabnas/markdown'
+
+const doc = parseDocument('| Item | Qty |\n| :--- | ---: |\n| pen | 3 |\n| ink | 12 |\n')
+const table = doc.children[0]
+
+table.type // => 'table'
+table.align // => ['left', 'right']
+table.children.length // => 3
+```
+
+`align` has one entry per column, taken from the colons in the delimiter row:
+`:--` is `'left'`, `--:` is `'right'`, `:-:` is `'center'`, and a cell with no
+colon gives `null`.
+
+There is no header flag — this is mdast's shape, and mdast's convention is that
+the **first** row is the header row. Take it off the front and the rest are body
+rows:
+
+```js
+import { parseDocument } from '@tabnas/markdown'
+
+const table = parseDocument('| Item | Qty |\n| :--- | ---: |\n| pen | 3 |\n| ink | 12 |\n').children[0]
+const [header, ...body] = table.children
+
+header.children.map((cell) => cell.children[0].value) // => ['Item', 'Qty']
+body.map((row) => row.children.map((cell) => cell.children[0].value)) // => [['pen', '3'], ['ink', '12']]
+```
+
+That indexing is safe because every row has exactly as many cells as `align` has
+entries: the block phase pads short rows with empty cells and truncates long
+ones. So `table.align[i]` is the alignment of cell `i` of every row, and
+`row.children.length === table.align.length` always holds.
+
+A cell's `children` are inline nodes, the same ones you get anywhere else, so
+walk them the way you walk a paragraph:
+
+```js
+import { parseDocument } from '@tabnas/markdown'
+
+parseDocument('| a | b |\n| - | - |\n| *x* | `y` |\n').children[0].children[1] // => { type: 'tableRow', children: [{ type: 'tableCell', children: [{ type: 'emphasis', children: [{ type: 'text', value: 'x' }] }] }, { type: 'tableCell', children: [{ type: 'inlineCode', value: 'y' }] }] }
+```
+
+To get a pipe inside a cell, escape it. `\|` never splits a cell, and it is
+turned into a literal `|` before the inline phase runs, so a code span in that
+cell holds a real pipe:
+
+```js
+import { parseDocument, toHtml } from '@tabnas/markdown'
+
+parseDocument('| a |\n| - |\n| b `\\|` az |\n').children[0].children[1].children[0].children // => [{ type: 'text', value: 'b ' }, { type: 'inlineCode', value: '|' }, { type: 'text', value: ' az' }]
+toHtml('| a |\n| - |\n| b `\\|` az |\n') // => '<table>\n<thead>\n<tr>\n<th>a</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>b <code>|</code> az</td>\n</tr>\n</tbody>\n</table>\n'
+```
+
+If a table does not appear where you expected one, the shape of the source is
+usually why:
+
+- A table is recognised when a delimiter row directly follows a paragraph whose
+  **last line** has the same number of cells. Earlier lines of that paragraph
+  stay a paragraph, and the table starts after it.
+- A delimiter cell is hyphens with an optional leading and/or trailing colon and
+  nothing else. One stray character and the line is just text.
+- Leading and trailing pipes are optional, and may differ from row to row.
+- The table ends at a blank line or at the start of another block.
+- With `gfm: false` there is no table at all: the lines stay one paragraph.
+
+Rendering is `toHtml` as usual. A table with no body rows emits no `<tbody>`:
+
+```js
+import { toHtml } from '@tabnas/markdown'
+
+toHtml('| a | b |\n| - | - |\n') // => '<table>\n<thead>\n<tr>\n<th>a</th>\n<th>b</th>\n</tr>\n</thead>\n</table>\n'
 ```
 
 ## Work with task lists and bare URLs
@@ -253,6 +341,54 @@ parseDocument('a\nb', { breaks: true }).children[0].children // => [{ type: 'tex
 toHtml('a\nb', { breaks: true }) // => '<p>a<br />\nb</p>\n'
 ```
 
+## Handle Markdown written for GitHub, or for another dialect
+
+The five GFM extensions are the whole of what `gfm` turns on. Two things that
+authors write anyway will parse without complaint and render as something else,
+so check for them rather than waiting for a bug report.
+
+**Footnotes are not implemented.** They are a GitHub product feature, not part
+of the GFM specification suite. Nothing errors, because `[^1]` is a valid
+CommonMark link label: the reference falls through to literal text, and the
+definition line becomes an ordinary paragraph.
+
+```js
+import { toHtml } from '@tabnas/markdown'
+
+toHtml('Text[^1]\n\n[^1]: Note text here.\n') // => '<p>Text[^1]</p>\n<p>[^1]: Note text here.</p>\n'
+```
+
+Worse, a definition whose body happens to look like a destination *is* a valid
+link reference definition, so the footnote quietly becomes a link:
+
+```js
+import { toHtml } from '@tabnas/markdown'
+
+toHtml('Text[^1]\n\n[^1]: /note\n') // => '<p>Text<a href="/note">^1</a></p>\n'
+```
+
+Scan for `[^` before you convert a corpus, and strip or rewrite footnotes in the
+source. There is no option that changes this.
+
+**Single-tilde subscript collides with strikethrough.** GFM's strikethrough
+accepts a single `~` as well as `~~`, so the `H~2~O` subscript syntax that
+Pandoc and several other dialects use comes out as `<del>`:
+
+```js
+import { toHtml } from '@tabnas/markdown'
+
+toHtml('H~2~O\n') // => '<p>H<del>2</del>O</p>\n'
+toHtml('H~2~O\n', { gfm: false }) // => '<p>H~2~O</p>\n'
+```
+
+If your input is really Pandoc-flavoured, escape the tildes (`H\~2\~O`) or parse
+with `gfm: false`; there is no way to keep strikethrough and lose the collision.
+
+Everything else outside CommonMark and the five GFM extensions is also absent —
+math, front matter, definition lists, heading attributes, admonitions, wiki
+links, emoji shortcodes, highlight, and sub/superscript. Each would need its own
+opt-in flag rather than joining `gfm`, so none of them appear under `gfm: true`.
+
 ## Report errors with line numbers
 
 Use `parseTree`. The JSON AST has no source positions — they are one of the
@@ -280,7 +416,8 @@ problems // => ['line 5: heading level 4']
 
 Native node types are the CommonMark ones (`heading`, `paragraph`,
 `block_quote`, `list`, `item`, `code_block`, `html_block`, `emph`, `strong`,
-`link`, …), not the AST's mdast-adjacent names.
+`link`, …), not the AST's mdast-adjacent names. A table is `table`, `table_row`
+and `table_cell` there.
 
 ## Check conformance yourself
 
@@ -292,8 +429,10 @@ cd ts
 npm run conformance
 ```
 
-It prints a per-section table and a total, which is `652/652 100.00%`. Narrow
-it down when you are chasing one case:
+It prints a per-section table and a total, which is `652/652 100.00%` across all
+26 sections — that is the substantiation for "conformant to CommonMark 0.31.2",
+and the spec suite it reads, `test/commonmark/spec.json`, is vendored in the
+repository. Narrow it down when you are chasing one case:
 
 ```bash
 node tools/conformance.mjs --section=Emphasis\ and\ strong\ emphasis
@@ -302,11 +441,22 @@ node tools/conformance.mjs --failures
 node tools/conformance.mjs --json
 ```
 
-The Go port runs the same 652 examples:
+The GFM extension corpus, `test/gfm/spec.json`, is vendored the same way and has
+its own runner. It prints `24/24` over the five extension sections:
+
+```bash
+cd ts
+npm run conformance-gfm
+node tools/gfm-conformance.mjs --section=Tables
+node tools/gfm-conformance.mjs --failures
+```
+
+The Go port runs the same 652 CommonMark examples and the same 24 GFM examples:
 
 ```bash
 cd go
 go test -run TestCommonMarkSpec -v ./...
+go test -run TestGFMSpec -v ./...
 ```
 
 The 36 shared AST fixtures in `test/spec/*.tsv` are asserted by both runtimes —

@@ -16,28 +16,43 @@ the single `gfm` option (default `true`). The two runtimes are level:
 | Task list items (`- [x] foo`) | yes | yes |
 | Autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`) | yes | yes |
 | Disallowed raw HTML (tagfilter) | yes | yes |
-| Tables | no | no |
+| Tables | yes | yes |
 | Footnotes | no | no |
 
-Both score **17/24** on the vendored GFM extension corpus
-(`test/gfm/spec.json`); the seven failures are all Tables.
-`node ts/tools/gfm-conformance.mjs` and `go test -run TestGFMSpec -v ./...`
-print the same per-section table.
+Both score **24/24** on the vendored GFM extension corpus
+(`test/gfm/spec.json`). `node ts/tools/gfm-conformance.mjs` and
+`go test -run TestGFMSpec -v ./...` print the same per-section table.
 
 `gfm:false` turns all of them off and the output is plain CommonMark,
 byte for byte — the 652-example suite runs that way, so it is a hard
 contract, not a convenience. When you describe this package — in code
 comments, in docs, in commit messages — say "CommonMark, with GFM
 extensions", and name them. Do not write "CommonMark/GFM", which implies
-tables.
+footnotes too.
 
 `test/spec/*.tsv` pins `listItem.checked`, which both runtimes now
 project. If you ever see those five parity rows fail again, the fixtures
 are right and the runtime is wrong — do not "fix" it by editing them.
 
-Where the three newer extensions live is deliberate, and the two runtimes
+Where the four newer extensions live is deliberate, and the two runtimes
 keep the same placement:
 
+* **Tables** — `block.ts` / `block.go`, as a block start tried *last*, after
+  every built-in start has refused the line (which is where cmark-gfm reaches
+  its extensions from, and is what keeps `foo` over `---` an `<h2>` and
+  `- | -` a list item). `tryOpenTable` reads the delimiter row, matches its
+  cell count against the last line of the open paragraph, and splits that
+  paragraph; body rows accumulate raw and are split at finalize. Three node
+  types (`table`/`table_row`/`table_cell`), `tableAlign` (Go: `TableAlign`)
+  and `isHeaderRow` (Go: `IsHeaderRow`) on the node, a `table_cell` entry in
+  the inline phase's content-block set, and cases in `html.*` and `ast.*`.
+  `\|` becomes a literal `|` at *split* time, before inline parsing, which is
+  the only way a code span in a cell can hold a pipe. Two costs are bounded
+  deliberately: `lastAddedLine`/`lastAddedTo` on the parser keep "the
+  paragraph's last line" O(1) instead of re-reading accumulated content per
+  line, and `MAX_AUTOCOMPLETED_CELLS` / `maxAutocompletedCells` caps the empty
+  cells inserted to pad short rows — the one place a table's node count is not
+  bounded by its input.
 * **Task list items** — `block.ts` / `block.go` (`markTaskListItems`, at
   the end of the block phase, over `stringContent` / `StringContent`),
   plus `MdNode.checked` (Go: `Checked` + `HasChecked`), plus a branch in

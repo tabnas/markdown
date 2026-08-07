@@ -5,6 +5,13 @@ tree and the HTML output rules. For a guided introduction start with the
 [tutorial](tutorial.md); for task recipes see the [how-to guide](guide.md); for design
 rationale see [concepts](concepts.md).
 
+**Conformant to CommonMark 0.31.2**: 652/652 examples, all 26 sections, in this runtime
+and in the TypeScript one. Substantiated by the vendored suite at
+`test/commonmark/spec.json`, run by `go test -run TestCommonMarkSpec -v ./...` from `go/`.
+The five GFM extensions are complete: 24/24 on the vendored extension suite at
+`test/gfm/spec.json`, run by `go test -run TestGFMSpec -v ./...`. See
+[Conformance](#conformance).
+
 ## Outputs
 
 The package has two documented outputs. The AST is the primary one; HTML is opt-in.
@@ -59,9 +66,9 @@ import tabnasmarkdown "github.com/tabnas/markdown/go"
 |---|---|
 | Module | `github.com/tabnas/markdown/go` |
 | Package | `tabnasmarkdown` |
-| `Version` | `"0.4.2"` |
+| `Version` | `"0.5.0"` |
 | `go` directive | `1.24.7` |
-| Requirements | `github.com/tabnas/parser/go v0.4.1` — the bare engine — and nothing else |
+| Requirements | `github.com/tabnas/parser/go v0.6.0` — the bare engine — and nothing else |
 | Indirect requirements | none |
 | License | MIT |
 
@@ -72,7 +79,7 @@ module github.com/tabnas/markdown/go
 
 go 1.24.7
 
-require github.com/tabnas/parser/go v0.4.1
+require github.com/tabnas/parser/go v0.6.0
 ```
 
 ## Files
@@ -86,7 +93,7 @@ require github.com/tabnas/parser/go v0.4.1
 | `ast.go` | `ToAST` — projection to the map-based AST. | None. |
 | `html.go` | `RenderHTML`, and GFM's disallowed-raw-HTML filter. | None. |
 | `common.go` | Character classes, unescaping, label normalisation, URL and XML escaping, `IsEscapable`. | None. |
-| `node.go` | `MdNode`, `NodeType`, `ListData`, `SourcePos`, `NodeWalker`. | None. |
+| `node.go` | `MdNode`, `NodeType`, `ListData`, `TableAlign`, `SourcePos`, `NodeWalker`. | None. |
 | `options.go` | `Options`, `DefaultOptions`, `ResolveOptions`, `RefMap`, `RefDef`. | None. |
 
 `markdown.go` is the only file that imports the engine; nothing reachable from
@@ -102,7 +109,7 @@ the `Parse`, `ParseDocument`, `ParseInline`, `ToHTML`, `ParseTree`, `ToAST` or
 | `Markdown` | func | `func(j *parser.Tabnas, options map[string]any) error` — satisfies `parser.Plugin` |
 | `Make` | func | `func(options ...map[string]any) *parser.Tabnas` |
 | `Defaults` | var | `map[string]any{"gfm": true, "breaks": false}` |
-| `Version` | const | `"0.4.2"` — untyped string |
+| `Version` | const | `"0.5.0"` — untyped string |
 | `Options` | type | `struct{ GFM bool; Breaks bool }` |
 | `DefaultOptions` | var | `Options{GFM: true, Breaks: false}` |
 | `ResolveOptions` | func | `func(opts map[string]any) Options` |
@@ -118,6 +125,7 @@ the `Parse`, `ParseDocument`, `ParseInline`, `ToHTML`, `ParseTree`, `ToAST` or
 | `NodeType` | type | `string`. See [`NodeType`](#nodetype). |
 | `ListType` | type | `string`, with constants `ListBullet` (`"bullet"`) and `ListOrdered` (`"ordered"`) |
 | `ListData` | type | struct. See [`ListData`](#listdata). |
+| `TableAlign` | type | `string`, with constants `AlignNone` (`""`), `AlignLeft` (`"left"`), `AlignRight` (`"right"`), `AlignCenter` (`"center"`). See [`TableAlign`](#tablealign). |
 | `SourcePos` | type | `[2][2]int`. See [`SourcePos`](#sourcepos). |
 | `NodeWalker` | type | struct with methods `Next`, `ResumeAt`. |
 | `WalkEvent` | type | `struct{ Entering bool; Node *MdNode }` |
@@ -236,7 +244,7 @@ var DefaultOptions = Options{GFM: true, Breaks: false}
 
 | Field | Map key | Type | Default | Effect |
 |---|---|---|---|---|
-| `GFM` | `gfm` | `bool` | `true` | Enables four GFM extensions together: strikethrough (`~~text~~` → a `delete` node / `<del>`, opening and closing runs the same length), task list items (`listItem.checked`), autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`), and the disallowed-raw-HTML filter. The first three are parse-time; the filter is applied by the renderer. |
+| `GFM` | `gfm` | `bool` | `true` | Enables five GFM extensions together: tables (`table` / `tableRow` / `tableCell` nodes), strikethrough (`~~text~~` → a `delete` node / `<del>`, opening and closing runs the same length), task list items (`listItem.checked`), autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`), and the disallowed-raw-HTML filter. The first four are parse-time; the filter is applied by the renderer. |
 | `Breaks` | `breaks` | `bool` | `false` | When `true`, a soft line break becomes a `break` node in the AST and `<br />\n` in HTML. When `false`, a soft line break becomes a single space in the AST and `\n` in HTML. Hard line breaks (two or more trailing spaces, or a trailing backslash) are `break` nodes and `<br />` either way. |
 
 `ResolveOptions(opts)` converts the plugin's option map to an `Options`. A `nil` map,
@@ -368,6 +376,39 @@ neither carries meaning.
 |---|---|---|
 | `type` | `string` | `"thematicBreak"`. No other keys. |
 
+**`table`** — a GFM table. Produced only when `GFM: true`.
+
+| Key | Go type | Notes |
+|---|---|---|
+| `type` | `string` | `"table"` |
+| `align` | `[]any` | One entry per column, in source order. Each entry is `"left"`, `"right"`, `"center"` or an untyped `nil` for a delimiter cell with no colon, so it marshals as e.g. `[null,"center"]`. Non-nil: a table with no columns marshals as `[]`, not `null`. |
+| `children` | `[]any` | `tableRow` nodes only. Non-nil. |
+
+There is no header flag. mdast has none, and relies on the convention that the **first**
+row is the header row; the native tree carries `MdNode.IsHeaderRow` instead, for the
+renderer's benefit.
+
+**`tableRow`**
+
+| Key | Go type | Notes |
+|---|---|---|
+| `type` | `string` | `"tableRow"` |
+| `children` | `[]any` | `tableCell` nodes only. Non-nil, and always exactly as many as `align` has entries: the block phase pads short rows with empty cells and truncates long ones. |
+
+**`tableCell`**
+
+| Key | Go type | Notes |
+|---|---|---|
+| `type` | `string` | `"tableCell"` |
+| `children` | `[]any` | Inline nodes, as in a paragraph. Non-nil, so an empty cell marshals as `[]`. |
+
+```go
+doc := tabnasmarkdown.ParseDocument("| a | b |\n| --- | :-: |\n| 1 | 2 |\n", opts)
+b, _ := json.Marshal(doc)
+fmt.Println(string(b))
+// {"children":[{"align":[null,"center"],"children":[{"children":[{"children":[{"type":"text","value":"a"}],"type":"tableCell"},{"children":[{"type":"text","value":"b"}],"type":"tableCell"}],"type":"tableRow"},{"children":[{"children":[{"type":"text","value":"1"}],"type":"tableCell"},{"children":[{"type":"text","value":"2"}],"type":"tableCell"}],"type":"tableRow"}],"type":"table"}],"type":"document"}
+```
+
 ### Inline nodes
 
 **`text`**
@@ -463,10 +504,16 @@ tree: children are reached with `FirstChild`/`Next`, not a slice.
 |---|---|---|
 | Containers (block) | `NodeDocument`, `NodeBlockQuote`, `NodeList`, `NodeItem` | `document`, `block_quote`, `list`, `item` |
 | Leaf blocks | `NodeParagraph`, `NodeHeading`, `NodeThematicBreak`, `NodeCodeBlock`, `NodeHTMLBlock` | `paragraph`, `heading`, `thematic_break`, `code_block`, `html_block` |
+| GFM tables | `NodeTable`, `NodeTableRow`, `NodeTableCell` | `table`, `table_row`, `table_cell` |
 | Inlines | `NodeText`, `NodeSoftbreak`, `NodeLinebreak`, `NodeCode`, `NodeHTMLInline`, `NodeEmph`, `NodeStrong`, `NodeLink`, `NodeImage`, `NodeDel` | `text`, `softbreak`, `linebreak`, `code`, `html_inline`, `emph`, `strong`, `link`, `image`, `del` |
 
+A table is a leaf block to the block algorithm — no block-level element can be inserted in
+one — and a container to the tree, since its rows and cells are real nodes and its cells
+hold inlines. A `table`'s children are `table_row`s, a row's are `table_cell`s, and the
+nesting is exactly three levels deep.
+
 `IsContainer()` returns `true` for `document`, `block_quote`, `list`, `item`, `paragraph`,
-`heading`, `emph`, `strong`, `link`, `image`, `del`.
+`heading`, `table`, `table_row`, `table_cell`, `emph`, `strong`, `link`, `image`, `del`.
 
 ### `MdNode` fields
 
@@ -491,6 +538,8 @@ tree: children are reached with `FirstChild`/`Next`, not a slice.
 | `FenceLength` | `int` | `0` | fenced `code_block` |
 | `FenceOffset` | `int` | `0` | fenced `code_block` |
 | `ListData` | `*ListData` | `nil` | `list`, `item` |
+| `TableAlign` | `[]TableAlign` | `nil` | `table` only — one entry per column, in order. `nil` on every other node type. See [`TableAlign`](#tablealign). |
+| `IsHeaderRow` | `bool` | `false` | `table_row` — `true` on the one header row, which is always the table's first child |
 | `Checked` | `bool` | `false` | `item` — GFM task list state; meaningless unless `HasChecked` |
 | `HasChecked` | `bool` | `false` | `item` — `true` only for a task list item, with `GFM` on |
 | `GFM` | `bool` | `false` | the `document` node only — the `GFM` option the tree was parsed with |
@@ -550,6 +599,28 @@ const (
 | `MarkerOffset` | `int` | Column at which the marker starts. |
 
 A `list` and each of its `item` children point at the same `*ListData`.
+
+### `TableAlign`
+
+```go
+type TableAlign string
+
+const (
+	AlignNone   TableAlign = ""
+	AlignLeft   TableAlign = "left"
+	AlignRight  TableAlign = "right"
+	AlignCenter TableAlign = "center"
+)
+```
+
+Set on the `table` node by the block phase, from the colons in the delimiter row: `:--` is
+`AlignLeft`, `--:` is `AlignRight`, `:-:` is `AlignCenter`, `---` is `AlignNone`. Every row
+of the table, header and body alike, has exactly `len(TableAlign)` cells.
+
+`AlignNone` is the empty string, the same stand-in `node.go` uses for an absent `Info` or
+`Destination`, where the TypeScript's union is `'left' | 'right' | 'center' | null`.
+`ast.go` turns it back into an untyped `nil` in the map AST's `align`, so the two runtimes'
+`align` arrays marshal identically.
 
 ### `NodeWalker`
 
@@ -692,16 +763,16 @@ between TypeScript and Go. The 36 shared AST fixtures in `test/spec/*.tsv` pass 
 
 | Extension | Status |
 |---|---|
+| Tables | Implemented, gated on `GFM` |
 | Strikethrough (`~~x~~`) | Implemented, gated on `GFM` |
 | Task list items (`- [x] done`) | Implemented, gated on `GFM` |
 | Autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`) | Implemented, gated on `GFM` |
 | Disallowed raw HTML filtering | Implemented, gated on `GFM`; applied by the renderer |
-| Tables | Not implemented |
 | Footnotes | Not implemented |
 
-`GFM: false` disables all four together, and the output is then plain CommonMark, byte for
+`GFM: false` disables all five together, and the output is then plain CommonMark, byte for
 byte. The extension corpus is `test/gfm/spec.json`; `go test -run TestGFMSpec -v ./...`
-prints the per-section table (17/24 — the seven failures are all Tables).
+prints the per-section table (24/24).
 
 ```go
 fmt.Printf("%q\n", tabnasmarkdown.ToHTML("~~x~~", tabnasmarkdown.Options{GFM: true}))

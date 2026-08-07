@@ -277,13 +277,15 @@ about attributes or `javascript:` destinations.
 
 ## What is and is not GFM
 
-The package parses CommonMark, with four GFM extensions: strikethrough, task list items,
-autolink literals and disallowed raw HTML. Tables and footnotes are not implemented, and
-`GFM` gates the four as a single switch rather than as four flags — a document is either
+The package parses CommonMark, with five GFM extensions: tables, strikethrough, task list
+items, autolink literals and disallowed raw HTML. Footnotes are not implemented, and
+`GFM` gates the five as a single switch rather than as five flags — a document is either
 GitHub-flavoured or it is not, and a per-extension matrix is configuration surface nobody
 asked for.
 
-Three of the four are deliberately *not* in the inline scanner. Task list markers are
+Four of the five are deliberately *not* in the inline scanner. Tables are a block start,
+so a cell's content reaches the inline scanner as a paragraph's would and nothing about
+emphasis or code spans changes. Task list markers are
 consumed in the block phase, over a paragraph's raw text, before the inline scanner sees
 brackets at all; autolink literals are a post-pass over the finished inline tree; the
 raw-HTML filter is a rendering step. That keeps the scanner that decides code spans, raw
@@ -292,7 +294,7 @@ HTML, emphasis and links exactly as CommonMark specifies it — which is what ma
 result that has to be re-earned by every extension.
 
 The honest statement of scope is still narrower than "CommonMark/GFM": a caller who needs
-tables knows to look elsewhere rather than discovering it at runtime.
+footnotes knows to look elsewhere rather than discovering it at runtime.
 
 ## The grammar file is inert
 

@@ -4,8 +4,15 @@ Background and design rationale — why the parser is shaped the way it is, and 
 shape cost. For the API see the [reference](reference.md); for recipes see the
 [how-to guide](guide.md).
 
-Two things are worth settling before anything else, because they decide how you read the
+Three things are worth settling before anything else, because they decide how you read the
 rest of this document.
+
+**The parser is conformant to CommonMark 0.31.2.** All 652 examples of the specification's
+own test suite pass, in all 26 sections, in both the TypeScript and the Go runtime. The
+suite is vendored at `test/commonmark/spec.json` and `npm run conformance` runs it, so the
+claim is a measurement anyone can repeat rather than a description of intent. Most of what
+follows is an account of what it cost to make that number true, which is why the number
+comes first.
 
 **The AST is the primary output.** A JSON tree of blocks and inlines is what this package
 exists to produce, and what `parseDocument` returns. Nothing else runs when you ask for
@@ -149,7 +156,7 @@ before the rewrite, and the rewrite kept it that way — the shared `.tsv` fixtu
 untouched. Two things did change: raw inline tags now get their own `html` node instead of
 leaking into `text`, and `spread` acquired a meaning — see below.
 
-The projection is deliberately lossy, in three places.
+The projection is deliberately lossy, in four places.
 
 *Soft breaks collapse.* With `breaks: false`, a soft line break becomes a single space
 inside the surrounding text run instead of a node of its own. This is long-standing
@@ -167,6 +174,10 @@ ask.
 block from an inline tag; the AST calls both `html`. Their context makes them
 unambiguous — one appears among blocks, the other among inlines — so the distinction is
 recoverable, and one node type is simpler.
+
+*A table's header-row flag goes.* The native tree marks the header row, because the
+renderer needs to pick `<th>` over `<td>` mid-walk. The AST relies on mdast's convention
+instead: the first row is the header row. See below.
 
 One thing the projection now does *better* is `spread`. It follows mdast semantics: a list
 is spread when it is loose, an item when it holds blank-line-separated blocks. The previous
@@ -260,22 +271,136 @@ about attributes or `javascript:` destinations.
 
 ## What is and is not GFM
 
-The package parses CommonMark, with four GFM extensions: strikethrough, task list items,
-autolink literals and disallowed raw HTML. Tables and footnotes are not implemented, and
-`gfm` gates the four as a single switch rather than as four flags — a document is either
-GitHub-flavoured or it is not, and a per-extension matrix is configuration surface nobody
-asked for.
+The package parses CommonMark, with the complete set of five GFM extensions: tables, task
+list items, autolink literals, strikethrough and disallowed raw HTML. That is 24/24 on the
+GFM specification's extension corpus, and the set is closed — there is no sixth extension
+in the specification waiting to be written. `gfm` gates the five as a single switch rather
+than as five flags: a document is either GitHub-flavoured or it is not, and a
+per-extension matrix is configuration surface nobody asked for.
 
-Three of the four are deliberately *not* in the inline scanner. Task list markers are
-consumed in the block phase, over a paragraph's raw text, before the inline scanner sees
-brackets at all; autolink literals are a post-pass over the finished inline tree; the
-raw-HTML filter is a rendering step. That keeps the scanner that decides code spans, raw
-HTML, emphasis and links exactly as CommonMark specifies it — which is what makes
-"652/652 with `gfm: true` as well as `gfm: false`" a structural property rather than a
-result that has to be re-earned by every extension.
+Four of the five are deliberately *not* in the inline scanner. Tables are decided in the
+block phase, so a cell's content reaches the inline scanner exactly as a paragraph's would
+and nothing about emphasis or code spans changes. Task list markers are consumed in the
+block phase too, over a paragraph's raw text, before the inline scanner sees brackets at
+all; autolink literals are a post-pass over the finished inline tree; the raw-HTML filter
+is a rendering step. Only strikethrough is a genuine addition to the scanner, and it is
+one delimiter character the scanner previously ignored.
 
-The honest statement of scope is still narrower than "CommonMark/GFM": a caller who needs
-tables knows to look elsewhere rather than discovering it at runtime.
+That keeps the machinery that decides code spans, raw HTML, emphasis and links exactly as
+CommonMark specifies it, and the consequence is that `gfm: false` is not an approximation
+of CommonMark but the same parse: byte-identical output over 1360 checked records, not a
+resemblance. Turning the extensions on does move nine of the 652 spec examples — six in
+HTML blocks, where the disallowed-raw-HTML filter escapes the `<script>`, `<style>` and
+`<textarea>` the suite expects verbatim, and three in Autolinks, where text the suite
+expects to stay literal becomes a link. Those nine are the extensions doing precisely what
+they are specified to do. It is also why the conformance figure is measured where the
+specification's own options are, with `gfm: false`, rather than being quoted from a run
+that has extensions layered over it.
+
+What `gfm` does *not* mean is "everything a Markdown file might contain". Footnotes are the
+closest miss: they are a GitHub product feature, not part of the GFM specification suite,
+and there is nothing to conform to. The failure mode is quiet rather than loud, because
+`[^1]` is a perfectly good CommonMark link label — a GitHub-authored footnote renders as a
+broken link rather than raising anything. If the definition body happens to look like a
+destination it is a link reference definition, and the footnote marker silently becomes a
+real link to it.
+
+The other collision is inherited from GFM itself. Strikethrough accepts a single `~`, and
+several other dialects spell subscript with single tildes, so `H~2~O` becomes
+`H<del>2</del>O` under `gfm: true`. There is no way to have GFM strikethrough and not have
+that; the only escape is `gfm: false` or escaping the tildes in the source.
+
+Everything further out — math, front matter, definition lists, heading attributes,
+admonitions, wiki links, emoji shortcodes, highlight, sub/superscript — is absent on
+purpose. Each is a different dialect's idea, and each would need its own opt-in flag if it
+were ever added. Letting `gfm` grow to mean "everything" would turn a flag whose meaning
+is defined by an external specification into a flag whose meaning is whatever this package
+happened to implement last, and would take the conformance argument above with it. The
+honest statement of scope is still narrower than "CommonMark/GFM": a caller who needs
+footnotes knows to look elsewhere rather than discovering it at runtime.
+
+## Tables are the extension that reaches backwards
+
+Every other extension looks forward. The scanner reads a `~`, or the block phase reads a
+`[x]` at the head of an item it has already opened, or the renderer reads a tag name it is
+about to write. Tables are the one construct in CommonMark or GFM whose trigger appears
+*after* the text it governs, and that single fact accounts for nearly everything odd about
+how they are implemented.
+
+A delimiter row — `| --- | :-: |` — is meaningless on its own. It only means "table" if
+the line above it is a header row with the same number of cells, and by the time the block
+phase reads it, that line is no longer a line: it has been appended to an open paragraph's
+accumulated text and the paragraph is the tip of the spine. So the table start has to
+reach back into the paragraph, take its last line away, and decide from the two lines
+together. If the paragraph had earlier lines, they are not part of the table: the
+paragraph is truncated to those lines and finalised, and the table opens as a sibling
+after it. Finalising it rather than discarding it matters, because a paragraph's front may
+hold link reference definitions, and a definition that has already been written into the
+document should not vanish because the last line of the same paragraph turned out to be a
+table header.
+
+CommonMark has one construct that reaches back at all — the Setext underline, which
+consumes the paragraph above it and turns it into a heading — and it is instructive that
+the table start is worse. Setext takes the paragraph *whole*: the block is replaced, and
+nothing is left over. A table start takes only the last line and leaves the rest standing
+as a paragraph, which means it is the one block start in the parser that has to edit the
+accumulated text of a block it is not replacing. Everything else the block phase does is
+additive: match continuations, open new blocks, close unmatched ones. That is why the
+whole of the reaching-backwards logic is confined to one function.
+
+That exception is also why tables are the one extension that could plausibly have cost
+core conformance. The other four are bolted on where nothing else is looking — a
+character the scanner ignored, a post-pass, a render step — but a table start is
+evaluated against an open paragraph on lines that CommonMark has its own opinions about.
+Spec examples full of pipes, Setext headings whose underline is a run of hyphens, list
+items beginning with `-`: all of them present lines that a careless delimiter-row test
+would claim. The mitigations are ordering and strictness. The table start is tried last, on
+a line every built-in start has already refused: after the Setext underline, so `foo` over
+`---` is still an `<h2>` and not a one-column table; after the thematic break; after the
+list marker, so `- | -` is still a list item. Then it is strict about what it accepts. A
+delimiter cell must be hyphens with at most one leading and one trailing colon and nothing
+else, so a single stray character puts the line back to being ordinary text, and the two
+rows must agree on their cell count exactly, which is what stops a paragraph with an
+incidental pipe in it from dragging the next line into a table. The 652 examples are the
+check on all of that: they are scored with `gfm: false`, and run again under every
+`gfm` × `breaks` combination as a standing assertion that no example throws.
+
+Escaped pipes are the second consequence of reaching backwards, and the one place where
+the extension has to break the usual order of operations. A cell is delimited by unescaped
+pipes, so splitting a row means understanding `\|` — that much is unavoidable. What is
+less obvious is that `\|` must be *resolved* to a literal `|` at split time, before the
+inline phase ever sees the cell, rather than being left for the ordinary escape handling
+that resolves `\*` and `\[`. The reason is code spans. Inline escape resolution does not
+happen inside a code span; that is what a code span is for. So a cell written
+`` b `\|` az `` would keep its backslash forever if the resolution waited for the inline
+phase, and would render as `b <code>\|</code> az` instead of `b <code>|</code> az`. No
+amount of unescaping *after* inline parsing can fix it either, because by then the
+backslash is inside a literal that is defined to be untouched. Resolving at split time is
+the only point in the pipeline where the information is still editable, which is why the
+splitter rewrites exactly this one escape and leaves every other backslash alone for the
+inline phase to handle in the usual way.
+
+Tables are also the only extension that added node types rather than a field. Task lists
+became `listItem.checked`, strikethrough reused the `delete` node the AST already had,
+autolink literals produce ordinary `link` nodes, and the raw-HTML filter changes no tree
+at all. A table cannot be expressed that way. It is not a variation on a block that
+already exists — it is a two-dimensional structure with per-column data attached to the
+container rather than to the cells, and rows and cells that hold content in their own
+right. Any attempt to encode it in existing types (a list of lists, a paragraph with a
+marker field) would make consumers reconstruct the shape from a convention, which is worse
+than three honest node types. mdast had already settled the question, and matching it
+means `table`, `tableRow` and `tableCell` behave for downstream tooling exactly as they do
+everywhere else in that ecosystem.
+
+Matching mdast also imports one of its conventions: there is no header flag. The first row
+is the header row, and that is all. The native tree does carry a flag, because the
+renderer has to choose `<th>` over `<td>` while walking a row and cannot afford to walk
+back up to the table to ask. The projection drops it, on the grounds that a convention two
+ecosystems already share is cheaper than a field that can disagree with the ordering. The
+same reasoning explains the padding: rather than let a row be short and make every
+consumer handle a ragged table, the block phase pads short rows and truncates long ones so
+that a row's cell count always equals the column count. `align[i]` is then the alignment of
+cell `i` of every row, with no bounds checking anywhere.
 
 ## The grammar file is inert
 
