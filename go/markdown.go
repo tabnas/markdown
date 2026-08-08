@@ -20,7 +20,7 @@ import (
 	parser "github.com/tabnas/parser/go"
 )
 
-const Version = "0.5.0"
+const Version = "0.5.1"
 
 // --- BEGIN EMBEDDED markdown-grammar.jsonic ---
 const grammarText = `
