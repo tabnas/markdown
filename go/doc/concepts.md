@@ -579,9 +579,9 @@ across its five sections, the same way.
 Cross-runtime agreement is checked on top of that, and it is worth being precise about what
 each check does and does not cover, because an earlier version of this document claimed
 "everything else behaves the same across both runtimes, as enforced by `test/spec/`" — and
-`test/spec/` has 39 fixtures. Thirty-nine cases cannot enforce agreement over a parser.
+`test/spec/` has 75 fixtures. Seventy-five cases cannot enforce agreement over a parser.
 
-What `test/spec/*.tsv` actually guarantees: 39 hand-written cases, each an input plus the
+What `test/spec/*.tsv` actually guarantees: 75 hand-written cases, each an input plus the
 expected AST as JSON plus an optional options map, run through the **plugin** path
 (`j.Parse`) by `go/parity_test.go` here and `ts/test/parity.test.ts` there, and auto-
 discovered so adding a `.tsv` runs it in both. They are a regression net for the AST shapes

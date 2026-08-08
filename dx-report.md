@@ -1023,3 +1023,87 @@ rather than have to infer it.
 The wider point, which §16 made about autolinks and applies again: every cap
 that exists to keep a pass linear is also a semantic edge, and the two are worth
 stating together rather than filing one under performance.
+
+## 41. 2026-08-07 — conformance re-verified against upstream, fixture counts corrected
+
+Both claims were re-run from scratch, and both hold:
+
+* **CommonMark 0.31.2 — 652/652, both runtimes.** `cd ts && npm run
+  conformance` and `cd go && go test -run TestCommonMarkSpec -v ./...` each
+  report 652/652 across all 26 sections.
+* **GFM extensions — 24/24, both runtimes.** `node ts/tools/gfm-conformance.mjs`
+  and `go test -run TestGFMSpec -v ./...` each report 24/24 across all five
+  sections.
+
+The vendored corpora were checked against upstream rather than taken on trust,
+which is the step none of the earlier verification sections recorded:
+
+* `test/commonmark/spec.json` is **byte-identical** to
+  `https://spec.commonmark.org/0.31.2/spec.json`
+  (sha256 `d431b29d97b6f73e69d547109cf5081578fac931e72afe95639ebe766c1b2a20`,
+  140487 bytes, 652 examples). The score is therefore a score against the
+  published suite, not against a local copy of it.
+* `test/gfm/spec.json` matches the 24 `example table` / `example autolink` /
+  `example strikethrough` / `example tagfilter` / `example disabled` blocks
+  extracted from `github/cmark-gfm`'s `test/spec.txt` — same markdown, same
+  expected HTML, zero differences, and no example present here that is not
+  upstream.
+
+The parity figure §36 and the READMEs quote was re-measured the same way:
+676 examples (652 + 24) × 4 `gfm` × `breaks` combinations = **2704 records**,
+comparing both the projected AST and the rendered HTML, TypeScript build against
+Go build. **0 differing ASTs, 0 differing HTML outputs.** The `gfm:true` figure
+for the CommonMark suite is likewise confirmed at **643/652** — six in HTML
+blocks (the tag filter) and three in Autolinks, which is the extensions working.
+
+The eight `go/README.md` Go examples were executed against the real package in a
+scratch module — the manual check AGENTS.md asks for, since no harness runs Go
+blocks — and every one produced exactly its documented output, `Make()`
+included.
+
+### Correction to §17, §24, §39 and the doc set: the fixture count
+
+`test/spec/` was documented everywhere as **39 cases in 8 files**. It has been
+**75 cases in 10 files** for some time: `autolink.tsv` (23), `blockquote.tsv`
+(2), `code.tsv` (4), `heading.tsv` (7), `inline.tsv` (13), `list.tsv` (6),
+`mixed.tsv` (1), `paragraph.tsv` (4), `table.tsv` (10), `thematic.tsv` (5).
+Both runners agree on 75, being directory-driven.
+
+Two consequences the docs had not caught up with:
+
+* §39's follow-up "a `table.tsv` would close that" is **done**. `table.tsv`
+  pins `table` / `tableRow` / `tableCell`, `align`, escaped pipes, and row
+  padding and truncation in both runtimes, so `test/AGENTS.md`'s "what this
+  corpus does not yet pin" paragraph no longer applied and has been replaced.
+  The HTML side of tables is still per-runtime and hand-mirrored.
+* `listItem.checked` is carried by **eight** rows, not five — six in
+  `list.tsv`, one each in `blockquote.tsv` and `mixed.tsv`.
+
+Counts corrected in `AGENTS.md`, `test/AGENTS.md`, `README.md`,
+`ts/doc/{guide,reference}.md` and `go/doc/{guide,reference,concepts}.md`. No
+code changed; the corpora, the runners and the comparisons were left exactly as
+they were.
+
+One further doc fix, same rule (the text must match the code): AGENTS.md's
+three-outputs table spelled the Go renderer `RenderHTML(tree)`. The signature is
+`RenderHTML(doc *MdNode, opts Options)`, as the same file says correctly two
+screens further down.
+
+### The native-tree / `SourcePos` comparison, finally run
+
+Queued in §10, §17, §24 and §39 and never done: the AST drops source positions
+and the HTML does not encode them, so nothing in the repo could see a positional
+divergence between the runtimes. It has now been measured, ad hoc, the same
+shape as the AST/HTML run — `parseTree` / `ParseTree` over all 676 examples ×
+4 option combinations, dumping each node as `{type, sourcepos, children}` in
+document order and comparing the serialisations:
+
+**2704 records, 0 differing native trees.** Structure, node types and
+`sourcepos` / `SourcePos` all agree, tables included — which is what §39 was
+worried about, since tables set positions on rows and cells.
+
+Still open, and now the only part of that follow-up left: **it is not a
+committed check.** The run lived in a scratch module outside the repo, so the
+next positional change is as invisible to CI as it was before. Landing it wants
+a fixture format that carries positions (the `*.tsv` corpus compares the AST,
+which has none) or a per-runtime tree-dump golden file.
