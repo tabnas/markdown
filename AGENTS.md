@@ -63,7 +63,8 @@ extensions", and name them. Do not write "CommonMark/GFM", which implies
 footnotes too.
 
 `test/spec/*.tsv` pins `listItem.checked`, which both runtimes now
-project. If you ever see those five parity rows fail again, the fixtures
+project. If you ever see those eight parity rows fail again (six in
+`list.tsv`, one each in `blockquote.tsv` and `mixed.tsv`), the fixtures
 are right and the runtime is wrong — do not "fix" it by editing them.
 
 Where each extension lives is deliberate, and the two runtimes keep the
@@ -142,7 +143,7 @@ There are three public outputs, in both runtimes:
 |---|---|---|
 | mdast-adjacent JSON AST (**primary**) | `parseDocument(src, opts)` | `ParseDocument(src, opts)` |
 | CommonMark-conformant HTML (opt-in) | `toHtml(src, opts)` | `ToHTML(src, opts)` |
-| Native CommonMark node tree | `parseTree(src, opts)` / `renderHTML(tree)` | `ParseTree(src, opts)` / `RenderHTML(tree)` |
+| Native CommonMark node tree | `parseTree(src, opts)` / `renderHTML(tree)` | `ParseTree(src, opts)` / `RenderHTML(tree, opts)` |
 
 The AST is what the plugin's `.parse()` / `.Parse()` returns, and asking
 for it runs no renderer. The HTML emitter is not incidental: the spec
@@ -169,7 +170,7 @@ There are two implementations that must behave identically — TypeScript
 |---|---|
 | [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/markdown` package. Depends on `@tabnas/parser` only, and only in `src/markdown.ts`. |
 | [`go/`](go/) | Go port — `github.com/tabnas/markdown/go`, package `tabnasmarkdown`. |
-| [`test/spec/`](test/spec/) | 39 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) in `*.tsv`, auto-discovered and run by both runtimes. The TS/Go parity contract. See `test/AGENTS.md`. |
+| [`test/spec/`](test/spec/) | 75 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) across 10 `*.tsv` files, auto-discovered and run by both runtimes. The TS/Go parity contract. See `test/AGENTS.md`. |
 | [`test/commonmark/spec.json`](test/commonmark/) | Vendored CommonMark 0.31.2 suite, 652 examples of Markdown → expected **HTML**. The conformance contract for both runtimes. See `test/AGENTS.md`. |
 | [`test/gfm/spec.json`](test/gfm/) | Vendored GFM extension corpus, 24 examples of Markdown → expected **HTML**, run with `gfm:true`. The extension contract for both runtimes. See `test/AGENTS.md`. |
 | [`markdown-grammar.jsonic`](markdown-grammar.jsonic) | The engine entry rule. **Inert** — see "The grammar is inert" below. |

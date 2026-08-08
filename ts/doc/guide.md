@@ -459,7 +459,7 @@ go test -run TestCommonMarkSpec -v ./...
 go test -run TestGFMSpec -v ./...
 ```
 
-The 39 shared AST fixtures in `test/spec/*.tsv` are asserted by both runtimes —
+The 75 shared AST fixtures in `test/spec/*.tsv` are asserted by both runtimes —
 `npm test` (after `npm run build`) on the TypeScript side, `go test ./...` on
 the Go side. They pin the AST through the plugin path; they are a regression
 net, not a proof that the runtimes agree.

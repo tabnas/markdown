@@ -5,7 +5,7 @@ change belongs in before you add to any of them.
 
 | Directory | Contents | Compares | Canonical for | Add to it? |
 |---|---|---|---|---|
-| [`spec/`](spec/) | 39 hand-written cases across 8 `*.tsv` files | the **JSON AST**, through the engine | TS ↔ Go parity, and the shape of the public AST | **yes** — this is where cases of our own go |
+| [`spec/`](spec/) | 75 hand-written cases across 10 `*.tsv` files | the **JSON AST**, through the engine | TS ↔ Go parity, and the shape of the public AST | **yes** — this is where cases of our own go |
 | [`commonmark/`](commonmark/) | the vendored CommonMark 0.31.2 suite, 652 examples in `spec.json` | the **HTML** output, byte for byte | spec conformance | no — upstream data |
 | [`gfm/`](gfm/) | the extension sections of the GFM spec, 24 examples in `spec.json` | the **HTML** output, byte for byte | the GFM extensions | no — upstream data |
 
@@ -31,17 +31,19 @@ job: they score HTML, and the AST is a lossy projection of the tree the
 renderer walks, so a projection change can leave 652/652 and 24/24 both
 untouched.
 
-39 cases in 8 files, one construct each: `blockquote.tsv` (2),
-`code.tsv` (4), `heading.tsv` (7), `inline.tsv` (13), `list.tsv` (3),
-`mixed.tsv` (1), `paragraph.tsv` (4), `thematic.tsv` (5). Five of those
-rows carry `listItem.checked`, which is the task-list extension's AST
-surface; if they fail, the fixtures are right and the runtime is wrong.
+75 cases in 10 files, one construct each: `autolink.tsv` (23),
+`blockquote.tsv` (2), `code.tsv` (4), `heading.tsv` (7), `inline.tsv`
+(13), `list.tsv` (6), `mixed.tsv` (1), `paragraph.tsv` (4), `table.tsv`
+(10), `thematic.tsv` (5). Eight of those rows carry `listItem.checked`
+(six in `list.tsv`, one each in `blockquote.tsv` and `mixed.tsv`), which
+is the task-list extension's AST surface; if they fail, the fixtures are
+right and the runtime is wrong.
 
-What this corpus does **not** yet pin: the table node types — `table`
-(with `align`), `tableRow` and `tableCell`. They are asserted per runtime
-instead, in `ts/test/commonmark.test.ts` and `go/gfm_test.go`, which are
-mirrored by hand rather than shared. A fixture here would be the stronger
-place for them.
+The table node types — `table` (with `align`), `tableRow` and
+`tableCell` — are pinned here too, by `table.tsv`: delimiter-row forms,
+alignment, escaped pipes, and row padding and truncation. The HTML side
+of tables is still asserted per runtime, in `ts/test/commonmark.test.ts`
+and `go/gfm_test.go`, which are mirrored by hand rather than shared.
 
 ## Format
 
