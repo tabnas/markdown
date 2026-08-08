@@ -164,7 +164,7 @@ const Markdown: Plugin = (tn: Tabnas, options?: MarkdownOptions) => {
 
 Markdown.defaults = { gfm: true, breaks: false } as MarkdownOptions
 
-export { Markdown, grammarText }
+export { VERSION, Markdown, grammarText }
 
 export type {
   DocumentNode,
@@ -199,3 +199,8 @@ export type { ParserOptions } from './options.ts'
 // tree you built or mutated yourself meant a deep import of `commonmark.ts`,
 // and the two runtimes' public surfaces did not match.
 export { renderHTML } from './html.ts'
+
+// VERSION is this package's version. It MUST equal package.json "version":
+// the release orchestrator rewrites both, and the version test fails the
+// build if they drift. Mirrors `const VERSION` in go/markdown.go.
+const VERSION = '0.5.1'

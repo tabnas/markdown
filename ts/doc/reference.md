@@ -61,7 +61,7 @@ npm install @tabnas/markdown @tabnas/parser
 | | |
 |---|---|
 | Package | `@tabnas/markdown` |
-| Version | 0.5.0 |
+| Version | 0.5.1 |
 | Module type | CommonJS (`main: dist/markdown.js`, `types: dist/markdown.d.ts`) |
 | Peer dependencies | `@tabnas/parser` (`>=0`) |
 | Runtime dependencies | none |
@@ -86,7 +86,7 @@ therefore all engine-free.
 ## Exports of `@tabnas/markdown`
 
 ```ts
-import { Markdown, parseDocument, parseInline, toHtml, parseTree, MdNode, grammarText } from '@tabnas/markdown'
+import { Markdown, parseDocument, parseInline, toHtml, parseTree, MdNode, grammarText, VERSION } from '@tabnas/markdown'
 import type { MarkdownOptions, ParserOptions, DocumentNode, Block, Inline } from '@tabnas/markdown'
 ```
 
@@ -100,6 +100,7 @@ import type { MarkdownOptions, ParserOptions, DocumentNode, Block, Inline } from
 | `parseTree` | function | `(src: string, opts?: MarkdownOptions \| ParserOptions) => MdNode` |
 | `MdNode` | class | Re-export of `src/node.ts`. The native tree node. |
 | `grammarText` | `string` | The embedded text of `markdown-grammar.jsonic`. |
+| `VERSION` | `string` | This package's version, kept equal to `package.json` "version" by `test/version.test.ts`. Mirrors `VERSION` in `go/markdown.go`. |
 | `MarkdownOptions` | type | See [Options](#options). |
 | `ParserOptions` | type | Re-export of `src/options.ts`. See [Options](#options). |
 | `DocumentNode`, `Block`, `HeadingNode`, `ParagraphNode`, `BlockquoteNode`, `ListNode`, `ListItemNode`, `CodeNode`, `HtmlNode`, `ThematicBreakNode`, `TableNode`, `TableRowNode`, `TableCellNode` | types | See [Block nodes](#block-nodes) and [Table nodes](#table-nodes). |

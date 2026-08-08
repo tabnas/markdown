@@ -66,7 +66,7 @@ import tabnasmarkdown "github.com/tabnas/markdown/go"
 |---|---|
 | Module | `github.com/tabnas/markdown/go` |
 | Package | `tabnasmarkdown` |
-| `Version` | `"0.5.0"` |
+| `VERSION` | `"0.5.1"` |
 | `go` directive | `1.24.7` |
 | Requirements | `github.com/tabnas/parser/go v0.6.0` — the bare engine — and nothing else |
 | Indirect requirements | none |
@@ -86,7 +86,7 @@ require github.com/tabnas/parser/go v0.6.0
 
 | File | Contents | Engine |
 |---|---|---|
-| `markdown.go` | Plugin wiring, `Make`, `Defaults`, `Version`, the public parse entry points, the embedded grammar text. | Imports `github.com/tabnas/parser/go`. |
+| `markdown.go` | Plugin wiring, `Make`, `Defaults`, `VERSION`, the public parse entry points, the embedded grammar text. | Imports `github.com/tabnas/parser/go`. |
 | `commonmark.go` | `Parse` — both phases. | None. |
 | `block.go` | Phase 1: block structure. | None. |
 | `inline.go` | Phase 2: inline structure. | None. |
@@ -109,7 +109,7 @@ the `Parse`, `ParseDocument`, `ParseInline`, `ToHTML`, `ParseTree`, `ToAST` or
 | `Markdown` | func | `func(j *parser.Tabnas, options map[string]any) error` — satisfies `parser.Plugin` |
 | `Make` | func | `func(options ...map[string]any) *parser.Tabnas` |
 | `Defaults` | var | `map[string]any{"gfm": true, "breaks": false}` |
-| `Version` | const | `"0.5.0"` — untyped string |
+| `VERSION` | const | `"0.5.1"` — untyped string |
 | `Options` | type | `struct{ GFM bool; Breaks bool }` |
 | `DefaultOptions` | var | `Options{GFM: true, Breaks: false}` |
 | `ResolveOptions` | func | `func(opts map[string]any) Options` |
