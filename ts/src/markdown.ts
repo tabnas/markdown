@@ -203,4 +203,4 @@ export { renderHTML } from './html.ts'
 // VERSION is this package's version. It MUST equal package.json "version":
 // the release orchestrator rewrites both, and the version test fails the
 // build if they drift. Mirrors `const VERSION` in go/markdown.go.
-const VERSION = '0.6.0'
+const VERSION = '0.6.1'
