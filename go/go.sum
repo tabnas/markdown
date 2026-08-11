@@ -1,2 +1,4 @@
 github.com/tabnas/parser/go v0.8.1 h1:cceJrsDycMX+HfmxuleCGi/rKIA+dH+/7rkAz8LN70A=
 github.com/tabnas/parser/go v0.8.1/go.mod h1:WrlfEVyZ1QjEIowWiyEu3K1iHj7wxuPut5zoH9Trehk=
+github.com/tabnas/support/go v0.2.0 h1:7rsIJsbOhmA5au1KTA+2Io7xPimhEd0bdLPZmDooujg=
+github.com/tabnas/support/go v0.2.0/go.mod h1:q+EGPO8fRFQAYDwRHFH4lafD5l5W/NCdY8vhN9IJOkY=
