@@ -1,0 +1,20 @@
+{
+  "$schema": "https://tabnas.dev/schema/plugin.schema.json",
+  "name": "@tabnas/markdown",
+  "go": "github.com/tabnas/markdown/go",
+  "description": "CommonMark and GFM Markdown parsing for the tabnas engine.",
+  "engine": "@tabnas/parser",
+  "grammar": "markdown-grammar.jsonic",
+  "extensions": [
+    ".md",
+    ".markdown"
+  ],
+  "mediaTypes": [
+    "text/markdown"
+  ],
+  "specDir": "test/spec",
+  "errorCodes": [],
+  "docs": "https://tabnas.dev/docs/packages",
+  "repository": "https://github.com/tabnas/markdown",
+  "versionSource": "ts/package.json"
+}
