@@ -867,7 +867,10 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("H~2~O\n", tabnasmarkdown.Options{GFM: 
 The grammar is registered in code, not loaded from a file. The plugin instance
 carries the `markdown` rule (pushes `line`; closes on `#ZZ`, where the finish
 action projects the AST) and the `line` rule (one `#LB` token per physical
-line, tail-recursing; a G-"gfm"-tagged arming alt ahead of the base one).
+line, tail-recursing; a G-"gfm"-tagged arming alt ahead of the base one). The
+`#LB` token's `Use["md"]` carries an exported `*LineInfo` — `Text`, `Blank`,
+`TblArm` — so downstream alt conditions can read the line without private
+access.
 The nested inline instance carries the `inline` rule over a twelve-token
 alphabet produced by its matcher set (`engineinline.go`). The railroad
 diagrams `ts/doc/grammar.svg` and `ts/doc/grammar-inline.svg` are generated

@@ -153,8 +153,8 @@ func Markdown(j *parser.Tabnas, options map[string]any) error {
 			&parser.AltSpec{
 				S: [][]parser.Tin{{lbTin}},
 				C: func(_ *parser.Rule, ctx *parser.Context) bool {
-					info, ok := ctx.T0.Use["md"].(*lineInfo)
-					return ok && info.tblArm
+					info, ok := ctx.T0.Use["md"].(*LineInfo)
+					return ok && info.TblArm
 				},
 				R: "line",
 				A: mdLineGfmAction,

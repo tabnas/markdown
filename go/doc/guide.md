@@ -693,8 +693,8 @@ j.Rule("line", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
 	rs.AddOpen(&tabnas.AltSpec{
 		S: [][]tabnas.Tin{{lbTin}},
 		C: func(_ *tabnas.Rule, ctx *tabnas.Context) bool {
-			info := ctx.T0.Use["md"].(*lineInfo)
-			return myConstructCouldStartHere(info.text)
+			info := ctx.T0.Use["md"].(*tabnasmarkdown.LineInfo)
+			return myConstructCouldStartHere(info.Text)
 		},
 		R: "line",
 		A: myArmingAction,

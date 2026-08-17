@@ -20,15 +20,18 @@ import (
 	parser "github.com/tabnas/parser/go"
 )
 
-// lineInfo is the `#LB` token's payload: one physical line, pre-classified.
+// LineInfo is the `#LB` token's payload: one physical line, pre-classified.
+// Exported so a downstream dialect's alt conditions can read it (see the
+// extension recipe in doc/guide.md); the TypeScript side exports the
+// equivalent type from engine-block.ts.
 // One pointer under a single Use key rather than three map entries, so a
 // token costs one allocation of payload, not four.
-type lineInfo struct {
-	// text is the line's text, terminator excluded, NULs already replaced.
-	text string
-	// blank is true when the line holds nothing but spaces and tabs.
-	blank bool
-	// tblArm is the GFM table arming bit: true when the line contains a `|`
+type LineInfo struct {
+	// Text is the line's text, terminator excluded, NULs already replaced.
+	Text string
+	// Blank is true when the line holds nothing but spaces and tabs.
+	Blank bool
+	// TblArm is the GFM table arming bit: true when the line contains a `|`
 	// or a `-` anywhere. A deliberate, *provable* superset of "could be a
 	// delimiter row": every delimiter cell requires at least one `-` (`:-:`
 	// rows open pipe-less single-column tables), and multi-column rows
@@ -36,7 +39,7 @@ type lineInfo struct {
 	// the block algorithm knows, so the gfm-tagged alt reading this bit
 	// only *arms* the probe, and tryOpenTable re-verifies (see
 	// test/spec/mixed.tsv).
-	tblArm bool
+	TblArm bool
 }
 
 // mdParseState is the per-parse state carried on ctx.U["md"] — seeded by the
@@ -48,7 +51,7 @@ type mdParseState struct {
 
 // makeMdLineMatcher builds the `mdLine` matcher: each invocation consumes
 // one physical line — terminator included — and emits a single `#LB` token
-// carrying the line as a lineInfo. The matcher owns the engine's point: SI
+// carrying the line as a LineInfo. The matcher owns the engine's point: SI
 // advances past the terminator, RI counts rows, and CI resets per line (the
 // engine's column is not used for indentation — the shared blockParser
 // computes spec §2.2 tab-expanded columns itself).
@@ -63,10 +66,10 @@ func makeMdLineMatcher(lbTin parser.Tin) parser.MakeLexMatcher {
 			}
 
 			tkn := lex.Token("#LB", lbTin, text, lex.Src[pnt.SI:next])
-			tkn.Use = map[string]any{"md": &lineInfo{
-				text:   text,
-				blank:  isBlank(text),
-				tblArm: strings.IndexByte(text, '|') >= 0 || strings.IndexByte(text, '-') >= 0,
+			tkn.Use = map[string]any{"md": &LineInfo{
+				Text:   text,
+				Blank:  isBlank(text),
+				TblArm: strings.IndexByte(text, '|') >= 0 || strings.IndexByte(text, '-') >= 0,
 			}}
 
 			// Row/column bookkeeping is observability data (#ZZ position,
@@ -101,9 +104,9 @@ func mdPrepare(opts Options) func(ctx *parser.Context) {
 // the tagged alt, and tryOpenTable is closed by the option anyway).
 func mdLineAction(r *parser.Rule, ctx *parser.Context) {
 	state := ctx.U["md"].(*mdParseState)
-	info := r.O0.Use["md"].(*lineInfo)
+	info := r.O0.Use["md"].(*LineInfo)
 	state.bp.tableArmed = false
-	state.bp.incorporateLine(info.text)
+	state.bp.incorporateLine(info.Text)
 }
 
 // mdLineGfmAction is the `line` GFM open alt's action (tagged G "gfm",
@@ -113,9 +116,9 @@ func mdLineAction(r *parser.Rule, ctx *parser.Context) {
 // gated on a group tag so gfm:false can subtract it wholesale.
 func mdLineGfmAction(r *parser.Rule, ctx *parser.Context) {
 	state := ctx.U["md"].(*mdParseState)
-	info := r.O0.Use["md"].(*lineInfo)
+	info := r.O0.Use["md"].(*LineInfo)
 	state.bp.tableArmed = true
-	state.bp.incorporateLine(info.text)
+	state.bp.incorporateLine(info.Text)
 }
 
 // mdFinishAction is the `markdown` close alt's action on `#ZZ`: finalize
