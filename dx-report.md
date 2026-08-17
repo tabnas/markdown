@@ -1161,3 +1161,36 @@ trailing space before a line ending) plus a differential harness comparing
 the public engine-free path against the plugin path over the corpora and
 seeded random documents — that gate must precede any engine-driven stage;
 then the engine block driver; then the engine inline phase.
+
+## 43. 2026-08-17 — the blind-spot fixtures and the differential gate
+
+The gate §42 named as "must precede any engine-driven stage" is landed, in
+both runtimes, before any engine code exists — so every later stage
+inherits it from its first commit.
+
+* `test/spec/mixed.tsv` (the cross-construct fixture file) gains the
+  corpus-blind behaviours as ordinary shared fixtures, with their native
+  trees in `test/spec/tree/mixed.json`: a
+  backtick inside a *successful* link destination or title followed by a
+  code span (`` [a](b`c) `d` `` — the case a flat pre-lex of the inline
+  phase gets wrong), the failing-tail
+  precedence case, a table nested under a block quote (delimiter row at a
+  container-adjusted offset) with its `gfm:false` byte-identity twin, a
+  single trailing space before a soft break, and a mid-paragraph hard
+  break. None of these appears in the 652+24 corpus examples or the
+  previous 75 fixtures; all were verified against the current parser
+  before being pinned.
+* `ts/test/differential.test.ts` / `go/differential_test.go` require the
+  plugin path (`new Tabnas().use(Markdown, opts).parse(src)` /
+  `Make(opts).Parse(src)`) to produce the same AST as the engine-free
+  path, JSON-flattened, over: all 652 CommonMark examples, all 24 GFM
+  examples, every shared fixture, and 200 seeded pseudo-random documents —
+  each under `{}` and `{gfm:false}`. The document generator is
+  byte-identical across the runtimes (same fragment pool, same xorshift32;
+  verified by hashing all 200 documents in both), so a failure reproduces
+  by seed number in either runtime.
+
+Today the two paths share every line of code and the gate is trivially
+green — that is the point. The moment the plugin path stops sharing the
+drivers, "all suites green" stops being sufficient, and this is the check
+that knows.
