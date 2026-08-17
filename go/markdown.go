@@ -163,11 +163,20 @@ func Markdown(j *parser.Tabnas, options map[string]any) error {
 	// embeds it verbatim into both runtimes (see AGENTS.md).
 	_ = grammarText
 
+	// The inline phase's own engine instance — nested parsing. Built per
+	// parse (inside the finish action) rather than per install: a plugin
+	// instance may serve concurrent Parse calls from many goroutines, and
+	// the engine's concurrency guarantee covers construction, not shared
+	// parsing. See engineinline.go.
+	runInlines := func(doc *MdNode, refmap RefMap) {
+		parseInlinesEngine(makeInlineTn(opts), doc, refmap, opts)
+	}
+
 	j.Rule("markdown", func(rs *parser.RuleSpec, _ *parser.Parser) {
 		rs.Clear()
 		rs.AddOpen(&parser.AltSpec{P: "line"})
 		rs.AddClose(
-			&parser.AltSpec{S: [][]parser.Tin{{parser.TinZZ}}, A: mdFinishAction(opts)},
+			&parser.AltSpec{S: [][]parser.Tin{{parser.TinZZ}}, A: mdFinishAction(opts, runInlines)},
 			&parser.AltSpec{})
 	})
 

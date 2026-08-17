@@ -20,6 +20,7 @@
 import type { Tabnas, Plugin } from '@tabnas/parser'
 
 import { makeMdActions, makeMdLineMatcher } from './engine-block.ts'
+import { makeInlineTn, parseInlinesEngine } from './engine-inline.ts'
 import { parse } from './commonmark.ts'
 import { toAst } from './ast.ts'
 import { renderHTML } from './html.ts'
@@ -128,7 +129,14 @@ export function parseTree(src: string, opts?: MarkdownOptions | ParserOptions): 
 
 const Markdown: Plugin = (tn: Tabnas, options?: MarkdownOptions) => {
   const opts = resolveOptions(options)
-  const actions = makeMdActions(opts)
+
+  // The inline phase's own engine instance — nested parsing, one instance
+  // per plugin install, reused across every parse and every leaf block (see
+  // engine-inline.ts).
+  const inlineTn = makeInlineTn(opts)
+  const actions = makeMdActions(opts, (doc, refmap) =>
+    parseInlinesEngine(inlineTn, doc, refmap, opts),
+  )
 
   tn.options({ rule: { start: 'markdown' } })
 

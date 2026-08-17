@@ -101,15 +101,16 @@ func mdLineAction(r *parser.Rule, ctx *parser.Context) {
 }
 
 // mdFinishAction is the `markdown` close alt's action on `#ZZ`: finalize
-// blocks, run the shared inline phase, and project the public AST into the
-// rule's node. When the caller passed meta["md"]["keepTree"], the native
-// tree is handed back on the meta map — the engine-path conformance harness
-// renders it.
-func mdFinishAction(opts Options) parser.AltAction {
+// blocks, run the phase-2 driver, and project the public AST into the
+// rule's node. runInlines is the engine inline path from engineinline.go,
+// injected so this file stays a block-phase concern. When the caller passed
+// meta["md"]["keepTree"], the native tree is handed back on the meta map —
+// the engine-path conformance harness renders it.
+func mdFinishAction(opts Options, runInlines func(doc *MdNode, refmap RefMap)) parser.AltAction {
 	return func(r *parser.Rule, ctx *parser.Context) {
 		state := ctx.U["md"].(*mdParseState)
 		doc, refmap := state.bp.finish()
-		parseInlines(doc, refmap, opts)
+		runInlines(doc, refmap)
 
 		if md, ok := state.meta["md"].(map[string]any); ok {
 			if keep, _ := md["keepTree"].(bool); keep {

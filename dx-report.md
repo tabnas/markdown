@@ -1252,3 +1252,54 @@ forbidden by the embed contract.
 
 Next: the engine inline phase (nested instance, sequential lexing, the
 cursor-owning bracket matcher), then the GFM extension seam.
+
+## 45. 2026-08-17 — the engine inline phase: context-sensitive lexing at full stretch
+
+Stage 4 of §42's plan, the one every design review ranked highest-risk —
+landed with the differential gate and both engine-path conformance suites
+green on the first run, in both runtimes.
+
+The inline phase now runs on a second, package-private engine instance
+(`ts/src/engine-inline.ts`, `go/engineinline.go`) whose lexer IS the
+inline scanner. Twelve custom matchers — break, escape, code span,
+delimiter run, `[`/`![`/`]`, autolink, raw HTML, entity, text run, and a
+single-character literal fallback — are thin adapters over the SAME
+`InlineParser` scanner methods the engine-free path runs, reached through
+`lex.ctx.u.inl`. Recognition, node building, the delimiter stack and the
+bracket stack still exist exactly once, in `inline.ts` (which gained
+behaviour-identical `beginBlock`/`finishBlock`/`parseLiteralChar` splits
+and a shared `forEachInlineBlock` walk so both drivers hand blocks to the
+phase identically).
+
+Two design decisions carry it:
+
+* **The `]` matcher owns the cursor.** `parseCloseBracket` consumes a
+  successful inline link tail directly from the subject at *lex* time, so
+  the engine's point advances past the tail and everything after it is
+  lexed fresh. The corpus-blind straddle cases pinned in §43 (a backtick
+  inside a successful destination or title, then a code span) are correct
+  by construction — no token is ever cut across a tail boundary, and no
+  resynchronization machinery exists at all. This was the decisive
+  argument against the flat pre-lex-and-replay alternative, whose
+  verifier showed exactly that class of divergence.
+* **One-token effects are applied at lex time.** The engine's rule loop
+  reads lookahead tokens before earlier alts' actions run, so any state a
+  matcher consults — the tree for §6.7's trailing-space trim, the bracket
+  stack for `]` — must be current when the LEXER reaches it. The `inline`
+  rule therefore carries no per-token actions; the tokens are the
+  observable record of the scan, and a new pin
+  (`ts/test/engine-inline.test.ts`) asserts every inline alt declares at
+  most one token of lookahead, so the invariant that makes this sound
+  cannot erode silently.
+
+Runtime split, deliberate and documented in the sources: the TS inline
+instance is built once per plugin install (single-threaded); the Go one is
+built per parse in the finish action, because a plugin instance may serve
+concurrent `Parse` calls and the engine's concurrency guarantee covers
+construction, not shared parsing.
+
+The doc-example stand-in generalized again — it now interprets whatever
+matchers and rules a plugin registers rather than hard-coding a grammar,
+so it serves both instances; 53/53 doc assertions still run engine-free.
+
+Next: the GFM extension seam, then grammar truth and the docs pass.

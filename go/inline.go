@@ -1322,31 +1322,53 @@ func (p *inlineParser) parseInline(block *MdNode) bool {
 	}
 
 	if !res {
-		// Nothing claimed it: the character is literal text. Only `<` and `&`
-		// reach here, so the byte at pos is a whole character — TS's
-		// String.fromCharCode(c) with the same effect and no mojibake risk.
-		startpos := p.pos
-		p.pos++
-		block.AppendChild(textNode(p.subject[startpos:p.pos]))
+		p.parseLiteralChar(block)
 	}
 
 	return true
 }
 
-// parse turns one paragraph's or heading's raw content into inline children.
-func (p *inlineParser) parse(block *MdNode) {
-	// Trimming is what stops trailing spaces at the end of a block from
-	// making a hard break, and drops the leading indentation of the first line.
+// parseLiteralChar handles a character nothing claimed: consume it as
+// literal text. Only `<` and `&` reach here from the dispatch, so the byte
+// at pos is a whole character — TS's String.fromCharCode(c) with the same
+// effect and no mojibake risk.
+func (p *inlineParser) parseLiteralChar(block *MdNode) bool {
+	if p.pos >= len(p.subject) {
+		return false
+	}
+	startpos := p.pos
+	p.pos++
+	block.AppendChild(textNode(p.subject[startpos:p.pos]))
+	return true
+}
+
+// beginBlock resets for one block's raw content; false when the trimmed
+// subject is empty. Trimming is what stops trailing spaces at the end of a
+// block from making a hard break, and drops the leading indentation of the
+// first line.
+func (p *inlineParser) beginBlock(block *MdNode) bool {
 	p.subject = jsTrim(string(block.StringContent))
 	p.pos = 0
 	p.delimiters = nil
 	p.brackets = nil
+	return "" != p.subject
+}
+
+// finishBlock is the tail of a block's inline parse: clear the raw content,
+// resolve emphasis over the whole delimiter stack.
+func (p *inlineParser) finishBlock(block *MdNode) {
+	block.StringContent = nil
+	p.processEmphasis(nil)
+}
+
+// parse turns one paragraph's or heading's raw content into inline children.
+func (p *inlineParser) parse(block *MdNode) {
+	p.beginBlock(block)
 
 	for p.parseInline(block) {
 	}
 
-	block.StringContent = nil
-	p.processEmphasis(nil)
+	p.finishBlock(block)
 }
 
 // parseReference implements §4.7: consume leading link reference definitions.
@@ -1930,12 +1952,22 @@ var inlineContentBlocks = map[NodeType]bool{
 // children.
 func parseInlines(doc *MdNode, refmap RefMap, opts Options) {
 	parser := &inlineParser{refmap: refmap, options: opts}
+	forEachInlineBlock(doc, opts, func(node *MdNode) { parser.parse(node) })
+}
+
+// forEachInlineBlock walks the finished block tree, handing every inline
+// content block (paragraphs, headings, table cells) to fn and running the
+// GFM autolink-literal post-pass after it. This is the one iteration both
+// inline drivers share — the hand scanner above and the engine path — so
+// which blocks get inline parsing, and when linkify runs, is decided
+// exactly once. Mirrors ts/src/inline.ts forEachInlineBlock.
+func forEachInlineBlock(doc *MdNode, opts Options, fn func(*MdNode)) {
 	walker := doc.Walker()
 
 	for ev := walker.Next(); ev != nil; ev = walker.Next() {
 		node := ev.Node
 		if !ev.Entering && inlineContentBlocks[node.Type] {
-			parser.parse(node)
+			fn(node)
 			if opts.GFM {
 				linkifyAutolinks(node)
 			}

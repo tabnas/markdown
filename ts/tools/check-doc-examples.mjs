@@ -10,14 +10,14 @@
 // substitutes a small stand-in for the engine, and evaluates each documented
 // example so a wrong `// =>` value cannot be committed.
 //
-// The stand-in implements only what the plugin actually touches: `options`
-// merging (the `mdLine` matcher registration, `parse.prepare`,
-// `lex.emptyResult`), the `rule` chain, and a `parse` that drives the
-// plugin's own matcher and alt actions the way the engine's lexer and rule
-// loop would (see the wiring at the bottom of markdown.ts). An example that
-// passes here exercises the same shared parser core the engine path calls.
-// It does NOT check engine-level behaviour — real token consumption, rule
-// dispatch order, error handling — which remains the CI harness's job.
+// The stand-in implements only what the plugin actually touches — see the
+// comment at the top of `__engine.ts` below. It drives the registered
+// matchers and alt actions generically, so it serves both the block
+// instance and the nested inline instance without hard-coding either
+// grammar. An example that passes here exercises the same shared parser
+// core the engine path calls. It does NOT check engine-level behaviour —
+// real token consumption, rule dispatch order, error handling — which
+// remains the CI harness's job.
 
 import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { join, dirname, relative } from 'node:path'
@@ -89,16 +89,22 @@ try {
   writeFileSync(
     join(stage, '__engine.ts'),
     `// Stand-in for @tabnas/parser: only what the Markdown plugin touches —
-// options merging (matcher registration, parse.prepare, lex.emptyResult),
-// the rule() chain, and a parse() that drives the plugin's own mdLine
-// matcher and alt actions the way the engine's lexer and rule loop would.
+// options merging (matcher registration, parse.prepare, lex.emptyResult,
+// rule.start), token minting, the rule() chain, and a parse() that drives
+// the registered matchers and alt actions generically, the way the engine's
+// lexer and rule loop would. The SAME stand-in serves both the block
+// instance (mdLine matcher + line-rule action) and the nested inline
+// instance (the inline matcher set, effects applied at lex time), because
+// it interprets whatever matchers and rules a plugin registered rather
+// than hard-coding either grammar.
 export type Plugin = any
 export type Rule = any
 export type Context = any
 export type MakeLexMatcher = any
 export class Tabnas {
-  _opts: any = { lex: { match: {} }, parse: { prepare: {} } }
+  _opts: any = { lex: { match: {} }, parse: { prepare: {} }, rule: {} }
   _rules: any = {}
+  token(name: string) { return name }
   options(o: any) {
     for (const k of Object.keys(o)) {
       if ('lex' === k) {
@@ -106,6 +112,8 @@ export class Tabnas {
         if ('emptyResult' in o.lex) this._opts.lex.emptyResult = o.lex.emptyResult
       } else if ('parse' === k) {
         Object.assign(this._opts.parse.prepare, o.parse.prepare ?? {})
+      } else if ('rule' === k) {
+        Object.assign(this._opts.rule, o.rule)
       } else {
         this._opts[k] = o[k]
       }
@@ -132,24 +140,45 @@ export class Tabnas {
     }
     if ('' === src) return this._opts.lex.emptyResult
 
-    const matcher = this._opts.lex.match.mdLine.make(null, null)
+    const matchers = Object.entries(this._opts.lex.match)
+      .sort((a: any, b: any) => a[1].order - b[1].order)
+      .map((e: any) => e[1].make(null, null))
     const pnt = { sI: 0, rI: 1, cI: 1 }
     const lex = {
       src,
       pnt,
+      ctx,
       token: (name: string, val: any, tsrc: any, _p: any, use?: any) =>
         ({ name, val, src: tsrc, use }),
     }
 
-    const lineAlt = this._rules.line.open[0]
-    let tkn: any
-    while (undefined !== (tkn = matcher(lex, null))) {
-      lineAlt.a({ o0: tkn }, ctx)
+    // Token-name -> open-alt action, from every rule (the line rule's
+    // incorporateLine feed; the inline rule registers none).
+    const acts: any = {}
+    for (const rn of Object.keys(this._rules)) {
+      for (const alt of this._rules[rn].open) {
+        if (!alt || !alt.a || undefined === alt.s) continue
+        const pos0 = Array.isArray(alt.s) ? alt.s[0] : alt.s
+        for (const n of Array.isArray(pos0) ? pos0 : [pos0]) acts[n] = alt.a
+      }
     }
 
-    const finishAlt = this._rules.markdown.close[0]
+    while (pnt.sI < src.length) {
+      let tkn: any = undefined
+      for (const m of matchers) {
+        tkn = m(lex, null)
+        if (undefined !== tkn && null !== tkn) break
+      }
+      if (undefined === tkn || null === tkn) {
+        throw new Error('doc stand-in: no matcher claimed input at ' + pnt.sI)
+      }
+      const act = acts[tkn.name]
+      if (act) act({ o0: tkn }, ctx)
+    }
+
+    const closeAlt = this._rules[this._opts.rule.start].close[0]
     const r: any = { node: undefined }
-    finishAlt.a(r, ctx)
+    if (closeAlt && closeAlt.a) closeAlt.a(r, ctx)
     return r.node
   }
 }
