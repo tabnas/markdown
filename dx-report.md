@@ -1107,3 +1107,57 @@ committed check.** The run lived in a scratch module outside the repo, so the
 next positional change is as invisible to CI as it was before. Landing it wants
 a fixture format that carries positions (the `*.tsv` corpus compares the AST,
 which has none) or a per-runtime tree-dump golden file.
+
+## 42. 2026-08-17 — recognizers split from drivers; the native-tree comparison is a committed check
+
+First stage of a staged refactor whose goal is recorded here before any
+engine code lands: making the plugin path *genuinely* use the tabnas engine
+(the grammar is inert — §2.1, §8 — and the package is meant to be a
+demonstrator), without giving up the engine-free core. The engine-free
+parser stays canonical for algorithm semantics and remains the public API's
+fast path; a later stage adds an engine-driven plugin path over shared
+code, and CI will compare the two byte-for-byte. The rule that makes two
+paths affordable is **anti-drift**: recognition logic exists once, as pure
+functions; drivers — the hand loop today, engine lexer adapters later —
+delegate to them and never reimplement them.
+
+This entry lands that rule, with zero behaviour change (652/652, 24/24, the
+75 shared fixtures, and the doc examples all green in both runtimes):
+
+* `block.ts` now exports `segmentNextLine` — the single home of line
+  cutting and §2.3 NUL replacement, which `BlockParser.parse` and any
+  future line lexer share — plus the line recognizers the block starts
+  already used inline: `isThematicBreakLine`, `matchAtxHeading`,
+  `stripAtxClosing`, `matchCodeFence`, `matchClosingCodeFence`,
+  `setextHeadingLevel`, `htmlBlockOpenKind`, `htmlBlockCloses`,
+  `matchBulletListMarker`, `matchOrderedListMarker`, `matchTaskListMarker`,
+  `isBlank`, `splitTableRow`, `parseDelimiterRow`. The starts and handlers
+  now call these instead of owning regexes.
+* `inline.ts` now exports pure `(subject, pos)` recognizers —
+  `scanCodeSpan`, `scanEscape`, `scanAngleAutolink`, `scanHtmlTag`,
+  `scanEntity`, `scanDelimiterRun`, `classifyBreak`, `scanLinkTitle`,
+  `scanLinkDestination`, `scanLinkLabel`, `scanInlineLinkTail`, and the
+  position helpers — with the `InlineParser` methods reduced to wrappers
+  that apply the scan result to the tree and the stacks.
+* `go/block.go` / `go/inline.go` mirror the split name-for-name where Go
+  did not already have the function form (Go's hand-coded recognizers
+  predate this; they are unexported, which same-package drivers can reach).
+* `ts/test/recognizer.test.ts` and `go/recognizer_test.go` pin the result
+  shapes in both runtimes.
+
+And it closes §41's one open follow-up. The native-tree comparison is now
+a **committed check**, not an ad-hoc scratch run: `test/spec/tree/*.json`
+holds a canonical serialisation of `parseTree` over every fixture input —
+`type`, `sourcepos`, literals, fence data, `listData`, `tableAlign`,
+`checked`, `gfm` — generated from the canonical TypeScript
+(`MD_TREE_GOLDEN=write npm test` after a build) and asserted by BOTH
+runtimes (`ts/test/tree-golden.test.ts`, `go/tree_golden_test.go`) against
+the same files. A positional divergence between the runtimes is no longer
+invisible to CI.
+
+Follow-ups, in landing order: fixtures for the corpus-blind cases (link
+tails containing backticks, tables nested under block quotes, a single
+trailing space before a line ending) plus a differential harness comparing
+the public engine-free path against the plugin path over the corpora and
+seeded random documents — that gate must precede any engine-driven stage;
+then the engine block driver; then the engine inline phase.

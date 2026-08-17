@@ -208,7 +208,318 @@ type Bracket = {
   bracketAfter: boolean
 }
 
-type DelimScan = { numdelims: number; canOpen: boolean; canClose: boolean }
+export type DelimScan = { numdelims: number; canOpen: boolean; canClose: boolean }
+
+// --- pure recognizers -------------------------------------------------------
+//
+// Recognition split from node building: each function inspects `subject` at
+// `pos` and reports what it found, moving nothing and touching no tree. The
+// scanner methods below delegate to them, and they are exported so any other
+// driver over the same syntax shares this exact recognition logic instead of
+// reimplementing it.
+
+/** Match a sticky regex at `pos`; the match text, or null. */
+function stickyAt(re: RegExp, subject: string, pos: number): string | null {
+  re.lastIndex = pos
+  const m = re.exec(subject)
+  return null === m ? null : m[0]
+}
+
+/**
+ * The whole code point ending at `end`, so an astral character is classified
+ * as one character by the flanking rules rather than as a lone surrogate.
+ * Start of subject counts as a line ending (§6.4).
+ */
+export function codePointBefore(subject: string, end: number): string {
+  if (end <= 0) return '\n'
+  const lo = subject.charCodeAt(end - 1)
+  if (lo >= 0xdc00 && lo <= 0xdfff && end >= 2) {
+    const hi = subject.charCodeAt(end - 2)
+    if (hi >= 0xd800 && hi <= 0xdbff) return subject.slice(end - 2, end)
+  }
+  return subject.charAt(end - 1)
+}
+
+/** The whole code point at `i`; end of subject counts as a line ending. */
+export function codePointAt(subject: string, i: number): string {
+  if (i >= subject.length) return '\n'
+  const cp = subject.codePointAt(i)
+  return undefined === cp ? '\n' : String.fromCodePoint(cp)
+}
+
+/** End of the run of spaces starting at `pos`. */
+export function skipInitialSpaces(subject: string, pos: number): number {
+  reInitialSpace.lastIndex = pos
+  reInitialSpace.exec(subject)
+  return reInitialSpace.lastIndex
+}
+
+/** End of "spaces, and at most one line ending" starting at `pos` (§6.3). */
+export function matchSpnl(subject: string, pos: number): number {
+  reSpnl.lastIndex = pos
+  reSpnl.exec(subject)
+  return reSpnl.lastIndex
+}
+
+export type CodeSpanScan =
+  | { closed: true; end: number; literal: string }
+  | { closed: false; end: number; ticks: string }
+
+/**
+ * §6.3: a code span runs from a backtick string to the next backtick string
+ * of *exactly* the same length. `closed: false` reports an unmatched opener,
+ * which is literal text; null means no backtick run starts at `pos`.
+ */
+export function scanCodeSpan(subject: string, pos: number): CodeSpanScan | null {
+  const ticks = stickyAt(reTicksHere, subject, pos)
+  if (null === ticks) return null
+
+  const afterOpenTicks = pos + ticks.length
+  reTicks.lastIndex = afterOpenTicks
+  let m: RegExpExecArray | null
+
+  while (null !== (m = reTicks.exec(subject))) {
+    if (m[0] === ticks) {
+      const end = reTicks.lastIndex
+      // Line endings become spaces; then one leading and one trailing space
+      // are stripped together, but only if the content is not all spaces
+      // (which is what lets a code span hold backticks).
+      const contents = subject.slice(afterOpenTicks, end - ticks.length).replace(/\n/g, ' ')
+      const literal =
+        contents.length > 2 &&
+        ' ' === contents[0] &&
+        ' ' === contents[contents.length - 1] &&
+        null !== /[^ ]/.exec(contents)
+          ? contents.slice(1, contents.length - 1)
+          : contents
+      return { closed: true, end, literal }
+    }
+  }
+
+  return { closed: false, end: afterOpenTicks, ticks }
+}
+
+export type EscapeScan = {
+  kind: 'linebreak' | 'char' | 'literal'
+  literal: string
+  end: number
+}
+
+/**
+ * §6.1/§6.7: a backslash escape, with `pos` at the backslash. Always
+ * succeeds: a backslash before anything unescapable is a literal backslash.
+ * The `linebreak` form consumes the following line's leading spaces.
+ */
+export function scanEscape(subject: string, pos: number): EscapeScan {
+  const next = pos + 1
+  if (next < subject.length && C_NEWLINE === subject.charCodeAt(next)) {
+    return { kind: 'linebreak', literal: '', end: skipInitialSpaces(subject, next + 1) }
+  }
+  const ch = subject.charAt(next)
+  if (reEscapable.test(ch)) return { kind: 'char', literal: ch, end: next + 1 }
+  return { kind: 'literal', literal: '\\', end: next }
+}
+
+export type AngleAutolinkScan = { dest: string; label: string; end: number }
+
+/** §6.5: an email or URI autolink in angle brackets. */
+export function scanAngleAutolink(subject: string, pos: number): AngleAutolinkScan | null {
+  let m = stickyAt(reEmailAutolink, subject, pos)
+  if (null !== m) {
+    const dest = m.slice(1, m.length - 1)
+    return { dest: 'mailto:' + dest, label: dest, end: pos + m.length }
+  }
+  m = stickyAt(reAutolink, subject, pos)
+  if (null !== m) {
+    const dest = m.slice(1, m.length - 1)
+    return { dest, label: dest, end: pos + m.length }
+  }
+  return null
+}
+
+/** §6.6: a raw HTML tag (open, close, comment, PI, declaration or CDATA). */
+export function scanHtmlTag(subject: string, pos: number): { raw: string; end: number } | null {
+  const m = stickyAt(reHtmlTag, subject, pos)
+  return null === m ? null : { raw: m, end: pos + m.length }
+}
+
+/** §6.2: an entity or numeric character reference, decoded. */
+export function scanEntity(subject: string, pos: number): { literal: string; end: number } | null {
+  const m = stickyAt(reEntityHere, subject, pos)
+  return null === m ? null : { literal: decodeEntity(m), end: pos + m.length }
+}
+
+/**
+ * §6.4: classify the run of `cc` starting at `pos` without consuming it.
+ *
+ * A run is left-flanking iff it is not followed by Unicode whitespace and
+ * either not followed by Unicode punctuation or else preceded by whitespace
+ * or punctuation; right-flanking is the mirror image. `_` additionally may
+ * not open inside a word (rules 2, 4, 6, 8), which is what keeps
+ * `snake_case_words` intact; `*` has no such restriction.
+ */
+export function scanDelimiterRun(subject: string, pos: number, cc: number): DelimScan | null {
+  let numdelims = 0
+  let p = pos
+  while (p < subject.length && cc === subject.charCodeAt(p)) {
+    numdelims += 1
+    p += 1
+  }
+  if (0 === numdelims) return null
+
+  const charBefore = codePointBefore(subject, pos)
+  const charAfter = codePointAt(subject, p)
+
+  const afterIsWhitespace = isUnicodeWhitespace(charAfter)
+  const afterIsPunctuation = isPunctuation(charAfter)
+  const beforeIsWhitespace = isUnicodeWhitespace(charBefore)
+  const beforeIsPunctuation = isPunctuation(charBefore)
+
+  const leftFlanking =
+    !afterIsWhitespace &&
+    (!afterIsPunctuation || beforeIsWhitespace || beforeIsPunctuation)
+  const rightFlanking =
+    !beforeIsWhitespace &&
+    (!beforeIsPunctuation || afterIsWhitespace || afterIsPunctuation)
+
+  let canOpen: boolean
+  let canClose: boolean
+  if (C_UNDERSCORE === cc) {
+    canOpen = leftFlanking && (!rightFlanking || beforeIsPunctuation)
+    canClose = rightFlanking && (!leftFlanking || afterIsPunctuation)
+  } else {
+    canOpen = leftFlanking
+    canClose = rightFlanking
+  }
+
+  return { numdelims, canOpen, canClose }
+}
+
+/**
+ * §6.7/§6.8: how a line ending resolves, given the literal of the text node
+ * immediately before it. Two or more trailing spaces make a hard break;
+ * `trim` says the trailing spaces must be dropped from that node either way.
+ */
+export function classifyBreak(prevTextLiteral: string | null): { hard: boolean; trim: boolean } {
+  if (
+    null === prevTextLiteral ||
+    ' ' !== prevTextLiteral.charAt(prevTextLiteral.length - 1)
+  ) {
+    return { hard: false, trim: false }
+  }
+  return { hard: ' ' === prevTextLiteral.charAt(prevTextLiteral.length - 2), trim: true }
+}
+
+/** §6.3: a link title at `pos`, without its delimiters, unescaped. */
+export function scanLinkTitle(subject: string, pos: number): { title: string; end: number } | null {
+  const m = stickyAt(reLinkTitle, subject, pos)
+  if (null === m) return null
+  return { title: unescapeString(m.slice(1, m.length - 1)), end: pos + m.length }
+}
+
+/**
+ * §6.3: a link destination at `pos` — either `<...>`, or a bare run with
+ * balanced unescaped parentheses and no ASCII control characters or spaces.
+ *
+ * The destination is backslash-unescaped and entity-decoded, but **not**
+ * percent-encoded: `[l](/ä)` yields `/ä`, not `/%C3%A4`. Encoding is a
+ * rendering concern and `html.ts` applies `normalizeURI` when it writes the
+ * attribute; the public AST promises the decoded form.
+ */
+export function scanLinkDestination(
+  subject: string,
+  pos: number,
+): { dest: string; end: number } | null {
+  const braced = stickyAt(reLinkDestinationBraces, subject, pos)
+  if (null !== braced) {
+    return { dest: unescapeString(braced.slice(1, braced.length - 1)), end: pos + braced.length }
+  }
+  if (pos < subject.length && C_LESSTHAN === subject.charCodeAt(pos)) return null
+
+  let p = pos
+  let openparens = 0
+  let c = p < subject.length ? subject.charCodeAt(p) : -1
+
+  while (-1 !== c) {
+    if (C_BACKSLASH === c && reEscapable.test(subject.charAt(p + 1))) {
+      p += 1
+      if (p < subject.length) p += 1
+    } else if (C_OPEN_PAREN === c) {
+      // Bail rather than scan on once nesting passes the limit. Without
+      // this, input like `[a](b` repeated makes every `]` scan to end of
+      // input looking for parens that never balance, which is quadratic in
+      // the document size. cmark caps nesting at the same depth, and no
+      // spec example nests more than two deep.
+      if (MAX_LINK_PAREN_NESTING <= openparens) return null
+      p += 1
+      openparens += 1
+    } else if (C_CLOSE_PAREN === c) {
+      if (openparens < 1) break
+      p += 1
+      openparens -= 1
+    } else if (c <= C_SPACE || C_DEL === c) {
+      // Spaces and ASCII control characters end the bare form.
+      break
+    } else {
+      p += 1
+    }
+    c = p < subject.length ? subject.charCodeAt(p) : -1
+  }
+
+  // An empty destination is only legal immediately before the closing
+  // paren of an inline link, as in `[link]()`.
+  if (p === pos && C_CLOSE_PAREN !== c) return null
+  if (0 !== openparens) return null
+
+  return { dest: unescapeString(subject.slice(pos, p)), end: p }
+}
+
+/**
+ * §4.7/§6.3: a link label at `pos`, including brackets. `rawLength` is what
+ * was consumed; `length` is 0 when the label is too long to be valid (§4.7:
+ * at most 999 characters between the brackets).
+ */
+export function scanLinkLabel(
+  subject: string,
+  pos: number,
+): { rawLength: number; length: number } | null {
+  const m = stickyAt(reLinkLabel, subject, pos)
+  if (null === m) return null
+  return { rawLength: m.length, length: m.length > 1001 ? 0 : m.length }
+}
+
+export type LinkTailScan = { dest: string; title: string | null; end: number }
+
+/**
+ * §6.3: the `(destination "title")` tail of an inline link, with `pos` just
+ * after the `]`. Null unless the whole tail — through the closing paren —
+ * is present.
+ */
+export function scanInlineLinkTail(subject: string, pos: number): LinkTailScan | null {
+  if (pos >= subject.length || C_OPEN_PAREN !== subject.charCodeAt(pos)) return null
+
+  let p = matchSpnl(subject, pos + 1)
+  const d = scanLinkDestination(subject, p)
+  if (null === d) return null
+
+  p = matchSpnl(subject, d.end)
+  let title: string | null = null
+  // A title has to be separated from the destination by whitespace, so
+  // `[a](/url"t")` is not a titled link.
+  if (reWhitespaceChar.test(subject.charAt(p - 1))) {
+    const t = scanLinkTitle(subject, p)
+    if (null !== t) {
+      title = t.title
+      p = t.end
+    }
+  }
+  p = matchSpnl(subject, p)
+
+  if (p < subject.length && C_CLOSE_PAREN === subject.charCodeAt(p)) {
+    return { dest: d.dest, title, end: p + 1 }
+  }
+  return null
+}
 
 class InlineParser {
   subject = ''
@@ -250,20 +561,12 @@ class InlineParser {
    * surrogate. Start of subject counts as a line ending (§6.4).
    */
   charBefore(end: number): string {
-    if (end <= 0) return '\n'
-    const lo = this.subject.charCodeAt(end - 1)
-    if (lo >= 0xdc00 && lo <= 0xdfff && end >= 2) {
-      const hi = this.subject.charCodeAt(end - 2)
-      if (hi >= 0xd800 && hi <= 0xdbff) return this.subject.slice(end - 2, end)
-    }
-    return this.subject.charAt(end - 1)
+    return codePointBefore(this.subject, end)
   }
 
   /** The whole code point at `i`; end of subject counts as a line ending. */
   charAtPos(i: number): string {
-    if (i >= this.subject.length) return '\n'
-    const cp = this.subject.codePointAt(i)
-    return undefined === cp ? '\n' : String.fromCodePoint(cp)
+    return codePointAt(this.subject, i)
   }
 
   // --- §6.3 code spans ---
@@ -273,54 +576,30 @@ class InlineParser {
    * *exactly* the same length. Unmatched opening backticks are literal text.
    */
   parseBackticks(block: MdNode): boolean {
-    const ticks = this.match(reTicksHere)
-    if (null === ticks) return false
+    const scan = scanCodeSpan(this.subject, this.pos)
+    if (null === scan) return false
 
-    const afterOpenTicks = this.pos
-    reTicks.lastIndex = this.pos
-    let m: RegExpExecArray | null
-
-    while (null !== (m = reTicks.exec(this.subject))) {
-      this.pos = reTicks.lastIndex
-      if (m[0] === ticks) {
-        const node = new MdNode('code')
-        // Line endings become spaces; then one leading and one trailing
-        // space are stripped together, but only if the content is not all
-        // spaces (which is what lets a code span hold backticks).
-        const contents = this.subject
-          .slice(afterOpenTicks, this.pos - ticks.length)
-          .replace(/\n/g, ' ')
-        node.literal =
-          contents.length > 2 &&
-          ' ' === contents[0] &&
-          ' ' === contents[contents.length - 1] &&
-          null !== /[^ ]/.exec(contents)
-            ? contents.slice(1, contents.length - 1)
-            : contents
-        block.appendChild(node)
-        return true
-      }
+    this.pos = scan.end
+    if (scan.closed) {
+      const node = new MdNode('code')
+      node.literal = scan.literal
+      block.appendChild(node)
+    } else {
+      // No closing run of the same length: the opener is literal text.
+      block.appendChild(text(scan.ticks))
     }
-
-    // No closing run of the same length: the opener is literal text.
-    this.pos = afterOpenTicks
-    block.appendChild(text(ticks))
     return true
   }
 
   // --- §6.1 backslash escapes, §6.7 hard line breaks ---
 
   parseBackslash(block: MdNode): boolean {
-    this.pos += 1
-    if (C_NEWLINE === this.peek()) {
-      this.pos += 1
+    const scan = scanEscape(this.subject, this.pos)
+    this.pos = scan.end
+    if ('linebreak' === scan.kind) {
       block.appendChild(new MdNode('linebreak'))
-      this.match(reInitialSpace)
-    } else if (reEscapable.test(this.subject.charAt(this.pos))) {
-      block.appendChild(text(this.subject.charAt(this.pos)))
-      this.pos += 1
     } else {
-      block.appendChild(text('\\'))
+      block.appendChild(text(scan.literal))
     }
     return true
   }
@@ -328,19 +607,11 @@ class InlineParser {
   // --- §6.5 autolinks ---
 
   parseAutolink(block: MdNode): boolean {
-    let m = this.match(reEmailAutolink)
-    if (null !== m) {
-      const dest = m.slice(1, m.length - 1)
-      block.appendChild(this.makeAutolink('mailto:' + dest, dest))
-      return true
-    }
-    m = this.match(reAutolink)
-    if (null !== m) {
-      const dest = m.slice(1, m.length - 1)
-      block.appendChild(this.makeAutolink(dest, dest))
-      return true
-    }
-    return false
+    const scan = scanAngleAutolink(this.subject, this.pos)
+    if (null === scan) return false
+    this.pos = scan.end
+    block.appendChild(this.makeAutolink(scan.dest, scan.label))
+    return true
   }
 
   makeAutolink(destination: string, label: string): MdNode {
@@ -356,63 +627,20 @@ class InlineParser {
   // --- §6.6 raw HTML ---
 
   parseHtmlTag(block: MdNode): boolean {
-    const m = this.match(reHtmlTag)
-    if (null === m) return false
+    const scan = scanHtmlTag(this.subject, this.pos)
+    if (null === scan) return false
+    this.pos = scan.end
     const node = new MdNode('html_inline')
-    node.literal = m
+    node.literal = scan.raw
     block.appendChild(node)
     return true
   }
 
   // --- §6.4 emphasis: delimiter runs and flanking ---
 
-  /**
-   * Classify the run of `cc` starting at `pos` without consuming it.
-   *
-   * §6.4: a run is left-flanking iff it is not followed by Unicode
-   * whitespace and either not followed by Unicode punctuation or else
-   * preceded by whitespace or punctuation; right-flanking is the mirror
-   * image. `_` additionally may not open inside a word (rules 2, 4, 6, 8),
-   * which is what keeps `snake_case_words` intact; `*` has no such
-   * restriction.
-   */
+  /** Classify the run of `cc` starting at `pos` without consuming it. */
   scanDelims(cc: number): DelimScan | null {
-    const startpos = this.pos
-    let numdelims = 0
-
-    while (cc === this.peek()) {
-      numdelims += 1
-      this.pos += 1
-    }
-    if (0 === numdelims) return null
-
-    const charBefore = this.charBefore(startpos)
-    const charAfter = this.charAtPos(this.pos)
-
-    const afterIsWhitespace = isUnicodeWhitespace(charAfter)
-    const afterIsPunctuation = isPunctuation(charAfter)
-    const beforeIsWhitespace = isUnicodeWhitespace(charBefore)
-    const beforeIsPunctuation = isPunctuation(charBefore)
-
-    const leftFlanking =
-      !afterIsWhitespace &&
-      (!afterIsPunctuation || beforeIsWhitespace || beforeIsPunctuation)
-    const rightFlanking =
-      !beforeIsWhitespace &&
-      (!beforeIsPunctuation || afterIsWhitespace || afterIsPunctuation)
-
-    let canOpen: boolean
-    let canClose: boolean
-    if (C_UNDERSCORE === cc) {
-      canOpen = leftFlanking && (!rightFlanking || beforeIsPunctuation)
-      canClose = rightFlanking && (!leftFlanking || afterIsPunctuation)
-    } else {
-      canOpen = leftFlanking
-      canClose = rightFlanking
-    }
-
-    this.pos = startpos
-    return { numdelims, canOpen, canClose }
+    return scanDelimiterRun(this.subject, this.pos, cc)
   }
 
   /** Emit a delimiter run as text and push it on the delimiter stack. */
@@ -594,76 +822,33 @@ class InlineParser {
 
   /** Link title without its delimiters, unescaped; null if none here. */
   parseLinkTitle(): string | null {
-    const title = this.match(reLinkTitle)
-    if (null === title) return null
-    return unescapeString(title.slice(1, title.length - 1))
+    const scan = scanLinkTitle(this.subject, this.pos)
+    if (null === scan) return null
+    this.pos = scan.end
+    return scan.title
   }
 
   /**
    * Link destination: either `<...>`, or a bare run with balanced unescaped
-   * parentheses and no ASCII control characters or spaces.
-   */
-  /**
-   * A destination is backslash-unescaped and entity-decoded, but **not**
-   * percent-encoded: `[l](/ä)` yields `/ä`, not `/%C3%A4`.
-   *
-   * Encoding is a rendering concern and `html.ts` applies `normalizeURI` when
-   * it writes the attribute. Doing it here too would be invisible in the HTML
-   * (`normalizeURI` is idempotent over its own output) but would put the
-   * encoded form in the public AST, where mdast — and every previous release
-   * of this package — promises the decoded one.
+   * parentheses and no ASCII control characters or spaces. See
+   * `scanLinkDestination` for why the value is decoded but not
+   * percent-encoded.
    */
   parseLinkDestination(): string | null {
-    const braced = this.match(reLinkDestinationBraces)
-    if (null !== braced) {
-      return unescapeString(braced.slice(1, braced.length - 1))
-    }
-    if (C_LESSTHAN === this.peek()) return null
-
-    const savepos = this.pos
-    let openparens = 0
-    let c = this.peek()
-
-    while (-1 !== c) {
-      if (C_BACKSLASH === c && reEscapable.test(this.subject.charAt(this.pos + 1))) {
-        this.pos += 1
-        if (-1 !== this.peek()) this.pos += 1
-      } else if (C_OPEN_PAREN === c) {
-        // Bail rather than scan on once nesting passes the limit. Without
-        // this, input like `[a](b` repeated makes every `]` scan to end of
-        // input looking for parens that never balance, which is quadratic in
-        // the document size. cmark caps nesting at the same depth, and no
-        // spec example nests more than two deep.
-        if (MAX_LINK_PAREN_NESTING <= openparens) return null
-        this.pos += 1
-        openparens += 1
-      } else if (C_CLOSE_PAREN === c) {
-        if (openparens < 1) break
-        this.pos += 1
-        openparens -= 1
-      } else if (c <= C_SPACE || C_DEL === c) {
-        // Spaces and ASCII control characters end the bare form.
-        break
-      } else {
-        this.pos += 1
-      }
-      c = this.peek()
-    }
-
-    // An empty destination is only legal immediately before the closing
-    // paren of an inline link, as in `[link]()`.
-    if (this.pos === savepos && C_CLOSE_PAREN !== c) return null
-    if (0 !== openparens) return null
-
-    return unescapeString(this.subject.slice(savepos, this.pos))
+    const scan = scanLinkDestination(this.subject, this.pos)
+    if (null === scan) return null
+    this.pos = scan.end
+    return scan.dest
   }
 
   /** Length of the link label at `pos`, including brackets; 0 if invalid. */
   parseLinkLabel(): number {
-    const m = this.match(reLinkLabel)
-    // §4.7: at most 999 characters between the brackets.
-    if (null === m || m.length > 1001) return 0
-    return m.length
+    const scan = scanLinkLabel(this.subject, this.pos)
+    if (null === scan) return 0
+    // The raw match is consumed even when it is too long to be a valid
+    // label; callers that need the position back reset it themselves.
+    this.pos += scan.rawLength
+    return scan.length
   }
 
   addBracket(node: MdNode, index: number, image: boolean): void {
@@ -737,27 +922,12 @@ class InlineParser {
     const savepos = this.pos
 
     // Inline link: `](` destination title `)`.
-    if (C_OPEN_PAREN === this.peek()) {
-      this.pos += 1
-      this.spnl()
-      const d = this.parseLinkDestination()
-      if (null !== d) {
-        this.spnl()
-        // A title has to be separated from the destination by whitespace,
-        // so `[a](/url"t")` is not a titled link.
-        let t: string | null = null
-        if (reWhitespaceChar.test(this.subject.charAt(this.pos - 1))) {
-          t = this.parseLinkTitle()
-        }
-        this.spnl()
-        if (C_CLOSE_PAREN === this.peek()) {
-          this.pos += 1
-          dest = d
-          title = t
-          matched = true
-        }
-      }
-      if (!matched) this.pos = savepos
+    const tail = scanInlineLinkTail(this.subject, this.pos)
+    if (null !== tail) {
+      this.pos = tail.end
+      dest = tail.dest
+      title = tail.title
+      matched = true
     }
 
     if (!matched) {
@@ -826,9 +996,10 @@ class InlineParser {
   // --- §6.2 entities, §6.8/§6.9 breaks and plain text ---
 
   parseEntity(block: MdNode): boolean {
-    const m = this.match(reEntityHere)
-    if (null === m) return false
-    block.appendChild(text(decodeEntity(m)))
+    const scan = scanEntity(this.subject, this.pos)
+    if (null === scan) return false
+    this.pos = scan.end
+    block.appendChild(text(scan.literal))
     return true
   }
 
@@ -847,19 +1018,16 @@ class InlineParser {
   parseNewline(block: MdNode): boolean {
     this.pos += 1
     const lastc = block.lastChild
-    if (
-      null !== lastc &&
-      'text' === lastc.type &&
-      null !== lastc.literal &&
-      ' ' === lastc.literal.charAt(lastc.literal.length - 1)
-    ) {
-      const hardbreak = ' ' === lastc.literal.charAt(lastc.literal.length - 2)
+    const brk = classifyBreak(
+      null !== lastc && 'text' === lastc.type ? lastc.literal : null,
+    )
+    if (brk.trim && null !== lastc && null !== lastc.literal) {
       lastc.literal = lastc.literal.replace(reFinalSpace, '')
-      block.appendChild(new MdNode(hardbreak ? 'linebreak' : 'softbreak'))
+      block.appendChild(new MdNode(brk.hard ? 'linebreak' : 'softbreak'))
     } else {
       block.appendChild(new MdNode('softbreak'))
     }
-    this.match(reInitialSpace)
+    this.pos = skipInitialSpaces(this.subject, this.pos)
     return true
   }
 

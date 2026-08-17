@@ -63,24 +63,38 @@ const codeIndent = 4
 // the same C_* set from inline.ts into this one shared package scope.
 
 // §2.1: \r\n, \n and a lone \r are all line endings. The TypeScript splits on
-// /\r\n|\n|\r/; splitLines is that split, spelled out.
-func splitLines(s string) []string {
-	lines := make([]string, 0, 1+strings.Count(s, "\n"))
-	start := 0
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '\n':
-			lines = append(lines, s[start:i])
-			start = i + 1
-		case '\r':
-			lines = append(lines, s[start:i])
-			if i+1 < len(s) && s[i+1] == '\n' {
-				i++
-			}
-			start = i + 1
+// /\r\n|\n|\r/; segmentNextLine cuts one such line at a time.
+
+// segmentNextLine cuts the next physical line out of src at pos: up to (not
+// including) the next `\n`, `\r` or `\r\n`, with next past the terminator.
+// ok=false at the end of the source — which is why a final line ending does
+// not introduce a trailing blank line. Insecure NULs are replaced here (§2.3),
+// before anything else looks at the text. Mirrors ts/src/block.ts
+// segmentNextLine.
+func segmentNextLine(src string, pos int) (text string, next int, ok bool) {
+	if pos >= len(src) {
+		return "", pos, false
+	}
+
+	i := pos
+	for i < len(src) && src[i] != '\n' && src[i] != '\r' {
+		i++
+	}
+
+	next = i
+	if next < len(src) {
+		if src[next] == '\r' && next+1 < len(src) && src[next+1] == '\n' {
+			next += 2
+		} else {
+			next += 1
 		}
 	}
-	return append(lines, s[start:])
+
+	text = src[pos:i]
+	if strings.IndexByte(text, 0) >= 0 {
+		text = strings.ReplaceAll(text, "\x00", "\uFFFD")
+	}
+	return text, next, true
 }
 
 // isThematicBreak implements §4.1 and the TypeScript's RE_THEMATIC_BREAK,
@@ -372,6 +386,25 @@ var reHTMLBlockCloseRawText = regexp.MustCompile(`</(?:` + asciiFoldPattern(bloc
 // htmlBlockClose holds the end conditions for types 1–5; types 6 and 7 end at
 // a blank line instead. The TypeScript keeps five regexes; only type 1 is
 // case-insensitive and needs one here, the rest are substring searches.
+// htmlBlockOpenKind reports which of the seven HTML block kinds s opens, or
+// 0. The type-7 paragraph-interrupt restriction is contextual and stays with
+// the caller. Mirrors ts/src/block.ts htmlBlockOpenKind.
+func htmlBlockOpenKind(s string) int {
+	for blockType := 1; blockType <= 7; blockType++ {
+		if reHTMLBlockOpen[blockType].MatchString(s) {
+			return blockType
+		}
+	}
+	return 0
+}
+
+// htmlBlockCloses reports whether s contains the closing condition for HTML
+// block type t (types 1-5; 6 and 7 end at a blank line instead). Mirrors
+// ts/src/block.ts htmlBlockCloses.
+func htmlBlockCloses(s string, t int) bool {
+	return htmlBlockClose[t](s)
+}
+
 var htmlBlockClose = []func(string) bool{
 	nil,
 	func(s string) bool { return reHTMLBlockCloseRawText.MatchString(s) },
@@ -1282,26 +1315,23 @@ var blockStarts = []blockStart{
 			return startNone
 		}
 
-		s := p.currentLine[p.nextNonspace:]
-		for blockType := 1; blockType <= 7; blockType++ {
-			if !reHTMLBlockOpen[blockType].MatchString(s) {
-				continue
-			}
-			// Type 7 may not interrupt a paragraph — including a paragraph we
-			// are only about to continue lazily.
-			if 7 == blockType &&
-				(NodeParagraph == container.Type ||
-					(!p.allClosed && !p.blank && NodeParagraph == p.openTip().Type)) {
-				continue
-			}
-			p.closeUnmatchedBlocks()
-			// The offset is deliberately not advanced: leading spaces are part
-			// of the raw HTML.
-			block := p.addChild(NodeHTMLBlock, p.offset)
-			p.setHtmlBlockType(block, blockType)
-			return startLeaf
+		blockType := htmlBlockOpenKind(p.currentLine[p.nextNonspace:])
+		if 0 == blockType {
+			return startNone
 		}
-		return startNone
+		// Type 7 may not interrupt a paragraph — including a paragraph we
+		// are only about to continue lazily.
+		if 7 == blockType &&
+			(NodeParagraph == container.Type ||
+				(!p.allClosed && !p.blank && NodeParagraph == p.openTip().Type)) {
+			return startNone
+		}
+		p.closeUnmatchedBlocks()
+		// The offset is deliberately not advanced: leading spaces are part
+		// of the raw HTML.
+		block := p.addChild(NodeHTMLBlock, p.offset)
+		p.setHtmlBlockType(block, blockType)
+		return startLeaf
 	},
 
 	// Setext heading underline (§4.3) — converts the whole open paragraph.
@@ -1905,7 +1935,7 @@ func (p *blockParser) incorporateLine(ln string) {
 		if NodeHTMLBlock == t {
 			blockType := p.htmlBlockType(container)
 			if 1 <= blockType && blockType <= 5 &&
-				htmlBlockClose[blockType](p.currentLine[p.offset:]) {
+				htmlBlockCloses(p.currentLine[p.offset:], blockType) {
 				p.lastLineLength = charCount(ln)
 				p.finalize(container, p.lineNumber)
 			}
@@ -1922,21 +1952,24 @@ func (p *blockParser) incorporateLine(ln string) {
 }
 
 func (p *blockParser) parse(input string) (*MdNode, RefMap) {
-	// §2.3: insecure characters are replaced before anything else looks at them.
-	text := input
-	if strings.IndexByte(text, 0) >= 0 {
-		text = strings.ReplaceAll(text, "\x00", "\uFFFD")
-	}
-
-	lines := splitLines(text)
-	length := len(lines)
-	// A final line ending does not introduce a trailing blank line.
-	if 0 < len(text) && "" == lines[length-1] {
-		length -= 1
-	}
-
-	for i := 0; i < length; i++ {
-		p.incorporateLine(lines[i])
+	// An empty document still incorporates one empty line, exactly as the
+	// historical split-based loop did — line count and sourcepos depend on
+	// it. Line cutting and §2.3 NUL replacement both live in segmentNextLine.
+	length := 0
+	if len(input) == 0 {
+		p.incorporateLine("")
+		length = 1
+	} else {
+		pos := 0
+		for {
+			text, next, ok := segmentNextLine(input, pos)
+			if !ok {
+				break
+			}
+			p.incorporateLine(text)
+			pos = next
+			length++
+		}
 	}
 
 	for p.tip != nil {
