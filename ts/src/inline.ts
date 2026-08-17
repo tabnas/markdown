@@ -521,7 +521,7 @@ export function scanInlineLinkTail(subject: string, pos: number): LinkTailScan |
   return null
 }
 
-class InlineParser {
+export class InlineParser {
   subject = ''
   pos = 0
   delimiters: Delimiter | null = null
@@ -1076,28 +1076,48 @@ class InlineParser {
         break
     }
 
-    if (!res) {
-      // Nothing claimed it: the character is literal text.
-      this.pos += 1
-      block.appendChild(text(String.fromCharCode(c)))
-    }
+    if (!res) this.parseLiteralChar(block)
 
     return true
   }
 
-  /** Parse one paragraph or heading's raw content into inline children. */
-  parse(block: MdNode): void {
-    // Trimming is what stops trailing spaces at the end of a block from
-    // making a hard break, and drops the leading indentation of the first line.
+  /** Nothing claimed the character at `pos`: consume it as literal text. */
+  parseLiteralChar(block: MdNode): boolean {
+    const c = this.peek()
+    if (-1 === c) return false
+    this.pos += 1
+    block.appendChild(text(String.fromCharCode(c)))
+    return true
+  }
+
+  /**
+   * Reset for one block's raw content; false when the trimmed subject is
+   * empty. Trimming is what stops trailing spaces at the end of a block
+   * from making a hard break, and drops the leading indentation of the
+   * first line.
+   */
+  beginBlock(block: MdNode): boolean {
     this.subject = block.stringContent.trim()
     this.pos = 0
     this.delimiters = null
     this.brackets = null
+    return '' !== this.subject
+  }
+
+  /** The tail of a block's inline parse: clear the raw content, resolve
+   * emphasis over the whole delimiter stack. */
+  finishBlock(block: MdNode): void {
+    block.stringContent = ''
+    this.processEmphasis(null)
+  }
+
+  /** Parse one paragraph or heading's raw content into inline children. */
+  parse(block: MdNode): void {
+    this.beginBlock(block)
 
     while (this.parseInline(block));
 
-    block.stringContent = ''
-    this.processEmphasis(null)
+    this.finishBlock(block)
   }
 
   /**
@@ -1634,13 +1654,29 @@ const INLINE_CONTENT_BLOCKS: Record<string, true> = {
  */
 export function parseInlines(doc: MdNode, refmap: RefMap, options: ParserOptions): void {
   const parser = new InlineParser(refmap, options)
+  forEachInlineBlock(doc, options, (node) => parser.parse(node))
+}
+
+/**
+ * Walk the finished block tree, handing every inline content block
+ * (paragraphs, headings, table cells) to `fn` and running the GFM
+ * autolink-literal post-pass after it. This is the one iteration both
+ * inline drivers share — the hand scanner above and the engine path — so
+ * which blocks get inline parsing, and when linkify runs, is decided
+ * exactly once.
+ */
+export function forEachInlineBlock(
+  doc: MdNode,
+  options: ParserOptions,
+  fn: (block: MdNode) => void,
+): void {
   const walker = doc.walker()
 
   let ev = walker.next()
   while (null !== ev) {
     const node = ev.node
     if (!ev.entering && true === INLINE_CONTENT_BLOCKS[node.type]) {
-      parser.parse(node)
+      fn(node)
       if (options.gfm) linkifyAutolinks(node)
     }
     ev = walker.next()

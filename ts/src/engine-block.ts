@@ -19,7 +19,6 @@
 import type { Context, MakeLexMatcher, Rule, Tabnas } from '@tabnas/parser'
 
 import { BlockParser, isBlank, segmentNextLine } from './block.ts'
-import { parseInlines } from './inline.ts'
 import { toAst } from './ast.ts'
 import type { MdNode } from './node.ts'
 import type { ParserOptions } from './options.ts'
@@ -90,9 +89,13 @@ export const makeMdLineMatcher: MakeLexMatcher = (_cfg, _opts) => {
 /**
  * The three named actions of the `markdown`/`line` rules. Bound to resolved
  * options at plugin-install time, exactly as the engine-free entry points
- * are.
+ * are. `runInlines` is the phase-2 driver — the engine inline path from
+ * `engine-inline.ts` — injected so this module stays a block-phase concern.
  */
-export function makeMdActions(opts: ParserOptions) {
+export function makeMdActions(
+  opts: ParserOptions,
+  runInlines: (doc: MdNode, refmap: Record<string, any>) => void,
+) {
   return {
     /** `parse.prepare`: fresh block-parser state for every parse. */
     prepare: (_tn: Tabnas, ctx: Context, meta?: any) => {
@@ -115,7 +118,7 @@ export function makeMdActions(opts: ParserOptions) {
     finish: (r: Rule, ctx: Context) => {
       const state: MdParseState = (ctx.u as any).md
       const { doc, refmap } = state.bp.finish()
-      parseInlines(doc, refmap, opts)
+      runInlines(doc, refmap)
 
       const md = state.meta && state.meta.md
       if (md && true === md.keepTree) md.tree = doc as MdNode
