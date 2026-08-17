@@ -136,9 +136,6 @@ the `Parse`, `ParseDocument`, `ParseInline`, `ToHTML`, `ParseTree`, `ToAST` or
 `parser` in the signatures above is `github.com/tabnas/parser/go`, whose package name is
 `tabnas`.
 
-The embedded grammar text is the unexported constant `grammarText`. The TypeScript package
-exports its equivalent; this one does not.
-
 ### `ParseDocument(src, opts)`
 
 Runs both parse phases and projects the result to the map-based AST. Returns
@@ -865,18 +862,19 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("H~2~O\n", tabnasmarkdown.Options{GFM: 
 // "<p>H~2~O</p>\n"
 ```
 
-## Grammar file
+## Grammar
 
-`markdown-grammar.jsonic` at the repository root is embedded verbatim into `go/markdown.go`
-(as the unexported `grammarText`) and `ts/src/markdown.ts` by `ts/embed-grammar.js`,
-between `BEGIN EMBEDDED` / `END EMBEDDED` markers.
-
-It is inert. It declares one rule, `markdown`, with `open` and `close` alts of
-`[{ s: '#ZZ' }]`. Block structure is decided by the line algorithm in `block.go`, not by
-these alts. `grammarText` is a string constant that no code path parses — `markdown.go`
-contains a `_ = grammarText` statement and nothing else reads it. The file is kept because
-`embed-grammar.js` embeds it. The railroad diagram generated from it
-(`ts/doc/grammar.svg`) is empty: a bare track with no boxes on it.
+The grammar is registered in code, not loaded from a file. The plugin instance
+carries the `markdown` rule (pushes `line`; closes on `#ZZ`, where the finish
+action projects the AST) and the `line` rule (one `#LB` token per physical
+line, tail-recursing; a G-"gfm"-tagged arming alt ahead of the base one). The
+`#LB` token's `Use["md"]` carries an exported `*LineInfo` — `Text`, `Blank`,
+`TblArm` — so downstream alt conditions can read the line without private
+access.
+The nested inline instance carries the `inline` rule over a twelve-token
+alphabet produced by its matcher set (`engineinline.go`). The railroad
+diagrams `ts/doc/grammar.svg` and `ts/doc/grammar-inline.svg` are generated
+from live instances by `ts/tools/gen-railroad.mjs`.
 
 ## Errors
 

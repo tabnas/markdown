@@ -1,7 +1,19 @@
 markdown:
-│
-│
-│
+    │
+┌───┴──┐
+│ line │
+└───┬──┘
+    │
+
+line:
+    │
+╭───┴──╮
+│ "LB" │
+╰───┬──╯
+    │
+
+Tokens:
+  LB = one physical line (text, blank and table-arming bits in use)
 
 Ignored tokens:
   CM = comment

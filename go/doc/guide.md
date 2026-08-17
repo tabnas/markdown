@@ -678,3 +678,43 @@ combinations — 2608 records — with both the AST and the HTML compared on eac
 and 0 differences in either; extending the same run to the 24 GFM examples makes
 it 2704 records, again with none. Neither check covers `SourcePos`, which the AST
 drops and the HTML does not encode.
+## How do I extend the grammar the way GFM does?
+
+The GFM dialect reaches this plugin's grammar through public engine seams,
+and a downstream dialect extends it the same three ways:
+
+* **Inject a group-tagged alt.** The `line` rule's table-arming alt is
+  prepended ahead of the base alt, tagged `G: "gfm"`, and gated by a
+  condition on the `#LB` token's `use` payload. Your own block construct
+  follows the pattern:
+
+```go ignore
+j.Rule("line", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+	rs.AddOpen(&tabnas.AltSpec{
+		S: [][]tabnas.Tin{{lbTin}},
+		C: func(_ *tabnas.Rule, ctx *tabnas.Context) bool {
+			info := ctx.T0.Use["md"].(*tabnasmarkdown.LineInfo)
+			return myConstructCouldStartHere(info.Text)
+		},
+		R: "line",
+		A: myArmingAction,
+		G: "mydialect",
+	})
+})
+```
+
+* **Subtract by group.** `gfm:false` applies `Rule: &RuleOptions{Exclude: "gfm"}`,
+  so the tagged alts do not exist in a base-dialect instance — inspect it
+  with `debug.model()` and count the alts. Your dialect gets the same
+  off-switch for free by tagging its alts.
+
+* **Reshape the matcher set through options.** Strikethrough is a separate
+  `inlTilde` matcher registered only when `gfm` is on: the base dialect's
+  inline lexer simply has no tilde matcher. An option that adds (or
+  removes) a matcher changes the lexical alphabet itself, which the
+  railroad legend (`ts/doc/grammar-inline.txt`) then documents.
+
+The parts that stay out of reach are deliberate: block continuation, lazy
+continuation, and the delimiter/bracket resolution live in the shared
+engine-free core, and extensions arm or configure them rather than
+re-implement them — see `concepts.md` for why.

@@ -1337,3 +1337,40 @@ downstream dialect would, and `gfm:false` is a *subtraction*, visible in
 All gates green in both runtimes on the option matrix, including the new
 pipe-less-table fixture. The extension tutorial for README/guide lands
 with the docs pass in the final stage.
+
+## 47. 2026-08-17 — grammar truth: the inert file is gone, the diagrams have boxes
+
+The final stage of §42's plan. §2.1's 2026 choice — "make the engine
+*host* a JS block parser" — is fully unwound: the engine parse has been
+the parse since §44, and this entry deletes the machinery that existed to
+apologize for the old bypass.
+
+* **`markdown-grammar.jsonic` and `ts/embed-grammar.js` are deleted**,
+  with the embedded blocks in both runtimes and the `grammarText` export
+  (and its `_ = grammarText` keep-alive in Go). `npm run build` is plain
+  `tsc` again; `tabnas.plugin.json` no longer names a grammar file. The
+  grammar is the code the engine parses with, registered the way any
+  tabnas grammar plugin registers one.
+* **The railroad diagrams are drawn from LIVE instances** by the new
+  `ts/tools/gen-railroad.mjs`: `ts/doc/grammar.{svg,txt}` shows the block
+  instance (`markdown` pushing `line`, `line` looping one `#LB` per
+  physical line) and `ts/doc/grammar-inline.{svg,txt}` the inline
+  instance's twelve-token alphabet. §8's standing embarrassment — an
+  empty diagram presented as documentation — is resolved by derivation:
+  there is no file to fall out of step with the code.
+* **Token legends via `config.modify` tokenDesc** (the csv idiom), so the
+  diagrams' legends say "one physical line" and "closer ] (with any
+  consumed inline link tail)" instead of restating token names.
+* **The docs stop describing the bypass.** AGENTS.md's "grammar is inert"
+  section is now "the grammar is live"; concepts.md in both runtimes
+  replaces the leftover-with-a-build-step essay with the real division of
+  labor (and keeps the honest boundary: lazy continuation, lookback
+  surgery and the rule of three remain algorithms — that is why the spec
+  is an algorithm); reference.md documents the rules instead of the file;
+  guide.md in both runtimes gains "How do I extend the grammar the way
+  GFM does?", the downstream-dialect recipe over the §46 seams.
+
+What §2.1 wanted from the old arrangement — one grammar to maintain,
+diff-friendly, checkable before run — the live arrangement now provides
+strictly better: the grammar is checked by every parse, serialized by
+`debug.model()`, and drawn by the diagrams, none of which can lie.

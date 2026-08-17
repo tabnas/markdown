@@ -470,3 +470,43 @@ records — with both the AST and the HTML compared on each, and 0 differences i
 either; extending the same run to the 24 GFM examples makes it 676 inputs and
 2704 records, again with none. Neither check covers `sourcepos`, which the AST
 drops and the HTML does not encode.
+## How do I extend the grammar the way GFM does?
+
+The GFM dialect reaches this plugin's grammar through public engine seams,
+and a downstream dialect extends it the same three ways:
+
+* **Inject a group-tagged alt.** The `line` rule's table-arming alt is
+  prepended ahead of the base alt, tagged `g: 'gfm'`, and gated by a
+  condition on the `#LB` token's `use` payload. Your own block construct
+  follows the pattern:
+
+```js ignore
+tn.rule('line', (rs) =>
+  rs.open(
+    [{
+      s: '#LB',
+      c: (_r, ctx) => myConstructCouldStartHere(ctx.t0.use.text),
+      r: 'line',
+      a: myArmingAction,
+      g: 'mydialect',
+    }],
+    { prepend: true },
+  ),
+)
+```
+
+* **Subtract by group.** `gfm: false` applies `rule: { exclude: 'gfm' }`,
+  so the tagged alts do not exist in a base-dialect instance — inspect it
+  with `debug.model()` and count the alts. Your dialect gets the same
+  off-switch for free by tagging its alts.
+
+* **Reshape the matcher set through options.** Strikethrough is a separate
+  `inlTilde` matcher registered only when `gfm` is on: the base dialect's
+  inline lexer simply has no tilde matcher. An option that adds (or
+  removes) a matcher changes the lexical alphabet itself, which the
+  railroad legend (`doc/grammar-inline.txt`) then documents.
+
+The parts that stay out of reach are deliberate: block continuation, lazy
+continuation, and the delimiter/bracket resolution live in the shared
+engine-free core, and extensions arm or configure them rather than
+re-implement them — see `concepts.md` for why.
