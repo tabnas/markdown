@@ -67,9 +67,17 @@ func makeMdLineMatcher(lbTin parser.Tin) parser.MakeLexMatcher {
 				tblArm: strings.IndexByte(text, '|') >= 0,
 			}}
 
+			// Row/column bookkeeping is observability data (#ZZ position,
+			// traces): a consumed terminator starts a new row; an
+			// unterminated final line just widens the current one.
+			terminated := next > pnt.SI+len(text)
 			pnt.SI = next
-			pnt.RI++
-			pnt.CI = 1
+			if terminated {
+				pnt.RI++
+				pnt.CI = 1
+			} else {
+				pnt.CI += len(text)
+			}
 
 			return tkn
 		}

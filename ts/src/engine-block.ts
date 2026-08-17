@@ -71,9 +71,17 @@ export const makeMdLineMatcher: MakeLexMatcher = (_cfg, _opts) => {
 
     const tkn = lex.token('#LB', seg.text, src.slice(pnt.sI, seg.next), pnt, info)
 
+    // Row/column bookkeeping is observability data (#ZZ position, traces):
+    // a consumed terminator starts a new row; an unterminated final line
+    // just widens the current one.
+    const terminated = seg.next > pnt.sI + seg.text.length
     pnt.sI = seg.next
-    pnt.rI += 1
-    pnt.cI = 1
+    if (terminated) {
+      pnt.rI += 1
+      pnt.cI = 1
+    } else {
+      pnt.cI += seg.text.length
+    }
 
     return tkn
   }

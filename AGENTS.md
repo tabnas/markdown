@@ -193,7 +193,8 @@ Source files, mirrored name for name across the two runtimes:
 | `ts/src/inline.ts` | `go/inline.go` | Phase 2 — inlines, delimiter stack, bracket stack. |
 | `ts/src/ast.ts` | `go/ast.go` | Projection from the native tree to the public JSON AST. |
 | `ts/src/html.ts` | `go/html.go` | HTML renderer over the native tree. |
-| `ts/src/markdown.ts` | `go/markdown.go` | Plugin wiring and the public surface. **The only file that imports the engine.** |
+| `ts/src/markdown.ts` | `go/markdown.go` | Plugin wiring and the public surface. With the drivers below, one of the only files that import the engine. |
+| `ts/src/engine-block.ts` | `go/engineblock.go` | The engine-facing block driver: the `mdLine` matcher and the rule actions (see "Architecture notes"). Engine-facing modules (`markdown.*`, `engine-*`) are the ONLY files that may import the engine; nothing reachable from `commonmark.ts` / `commonmark.go` does, which is what keeps the conformance suite runnable engine-free. |
 | `ts/src/entities.ts` | — | Generated HTML5 named character references (2125 semicolon-terminated entries). Go uses the standard library's table instead, gated to reject the legacy semicolon-less forms §6.2 does not allow. |
 
 There is **no CLI** (`package.json` has no `bin`). There is no
