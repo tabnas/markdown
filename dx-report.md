@@ -1303,3 +1303,37 @@ matchers and rules a plugin registers rather than hard-coding a grammar,
 so it serves both instances; 53/53 doc assertions still run engine-free.
 
 Next: the GFM extension seam, then grammar truth and the docs pass.
+
+## 46. 2026-08-17 — GFM as a genuine, subtractable extension seam
+
+Stage 5 of §42's plan. The GFM dialect now reaches the grammar the way a
+downstream dialect would, and `gfm:false` is a *subtraction*, visible in
+`debug.model()`, not a branch:
+
+* **Tables: a group-tagged arming alt.** The `line` rule gains a prepended
+  alt tagged `g:'gfm'`, gated on the `#LB` token's `tblArm` bit, whose
+  action arms the shared table probe for that line; the base alt disarms
+  it. `tblArm` widened from "contains `|`" to "contains `|` or `-`" — a
+  *provable* superset of "could be a delimiter row", because every
+  delimiter cell requires at least one `-` (`:-:` opens a pipe-less
+  single-column table, now pinned in `mixed.tsv`) and multi-column rows
+  carry `|`. `tryOpenTable` still makes every real decision at the
+  container-adjusted offset; `BlockParser.tableArmed` defaults true so the
+  batch driver is untouched.
+* **`gfm:false` applies `rule.exclude: 'gfm'`.** The tagged alt does not
+  exist in a base-dialect instance — `debug.model()` shows two open alts
+  on `line` instead of three, asserted in `debug-model.test.ts`. The 652
+  CommonMark examples continue to run `gfm:false` through the engine path
+  byte-for-byte.
+* **Strikethrough: the option reshapes the matcher set.** `~` handling
+  moved out of the shared delimiter matcher into a separate `inlTilde`
+  matcher registered only under `gfm:true` — the base dialect's lexer
+  simply has no tilde matcher, rather than a disabled branch inside one
+  (the csv idiom, at the matcher-set level).
+* Task-list marking and autolink literals were already options-driven
+  post-passes in shared code; they are the seam's third form —
+  option-gated phases — and stay put.
+
+All gates green in both runtimes on the option matrix, including the new
+pipe-less-table fixture. The extension tutorial for README/guide lands
+with the docs pass in the final stage.

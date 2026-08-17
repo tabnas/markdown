@@ -7,3 +7,4 @@ input	expected	opts
 > a | b\n> --- | ---	{"type":"document","children":[{"type":"blockquote","children":[{"type":"paragraph","children":[{"type":"text","value":"a | b --- | ---"}]}]}]}	{"gfm":false}
 foo \nbar	{"type":"document","children":[{"type":"paragraph","children":[{"type":"text","value":"foo bar"}]}]}	
 a\nb  \nc	{"type":"document","children":[{"type":"paragraph","children":[{"type":"text","value":"a b"},{"type":"break"},{"type":"text","value":"c"}]}]}	
+col\n:-:\nval	{"type":"document","children":[{"type":"table","align":["center"],"children":[{"type":"tableRow","children":[{"type":"tableCell","children":[{"type":"text","value":"col"}]}]},{"type":"tableRow","children":[{"type":"tableCell","children":[{"type":"text","value":"val"}]}]}]}]}	

@@ -73,6 +73,20 @@ describe('compose: markdown + @tabnas/debug', () => {
     const line = m.rules.find((r: any) => r.name === 'line')
     assert.ok(line, 'line rule should exist')
     assert.ok(Array.isArray(line.open), 'line.open should exist')
+    // Three open alts under GFM: the g:'gfm'-tagged arming alt, the base
+    // alt, and the fall-through.
+    assert.equal(line.open.length, 3)
+  })
+
+  test('gfm:false subtracts the tagged alts from the grammar', { skip }, () => {
+    // The GFM dialect is a group-tagged extension, removed by rule.exclude —
+    // the base grammar visibly has one alt fewer, not a disabled branch.
+    const tn = new Tabnas().use(Markdown, { gfm: false })
+    tn.use(Debug, { print: false, trace: false })
+    const m = tn.debug.model()
+    const line = m.rules.find((r: any) => r.name === 'line')
+    assert.ok(line, 'line rule should exist')
+    assert.equal(line.open.length, 2)
 
     // JSON round-trip
     const grammar = {

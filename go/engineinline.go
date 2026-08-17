@@ -139,6 +139,83 @@ func makeInlineTn(opts Options) *parser.Tabnas {
 		}
 	}
 
+	matchSet := map[string]*parser.MatchSpec{
+		"inlBreak": spec(100000,
+			func(c byte, _ Options) bool { return c == '\n' },
+			func(p *inlineParser, b *MdNode) bool { return p.parseNewline(b) },
+			fixedName("#IBK")),
+		"inlEscape": spec(100100,
+			func(c byte, _ Options) bool { return c == '\\' },
+			func(p *inlineParser, b *MdNode) bool { return p.parseBackslash(b) },
+			fixedName("#IES")),
+		"inlCode": spec(100200,
+			func(c byte, _ Options) bool { return c == '`' },
+			func(p *inlineParser, b *MdNode) bool { return p.parseBackticks(b) },
+			fixedName("#ICS")),
+		"inlDelim": spec(100300,
+			func(c byte, _ Options) bool { return c == '*' || c == '_' },
+			func(p *inlineParser, b *MdNode) bool {
+				return p.handleDelim(p.subject[p.pos], b)
+			},
+			fixedName("#IDL")),
+		"inlOpenBracket": spec(100400,
+			func(c byte, _ Options) bool { return c == '[' },
+			func(p *inlineParser, b *MdNode) bool { return p.parseOpenBracket(b) },
+			fixedName("#IOB")),
+		// `!` introduces an image only before `[`; otherwise a literal.
+		"inlBang": spec(100500,
+			func(c byte, _ Options) bool { return c == '!' },
+			func(p *inlineParser, b *MdNode) bool { return p.parseBang(b) },
+			func(p *inlineParser, start int) string {
+				if 2 == p.pos-start {
+					return "#IBG"
+				}
+				return "#ILI"
+			}),
+		// The cursor owner: on a successful inline link tail,
+		// parseCloseBracket has already consumed it when this token is
+		// emitted.
+		"inlCloseBracket": spec(100600,
+			func(c byte, _ Options) bool { return c == ']' },
+			func(p *inlineParser, b *MdNode) bool { return p.parseCloseBracket(b) },
+			fixedName("#ICB")),
+		// At `<`: autolink first, raw HTML second — matcher order is
+		// precedence.
+		"inlAutolink": spec(100700,
+			func(c byte, _ Options) bool { return c == '<' },
+			func(p *inlineParser, b *MdNode) bool { return p.parseAutolink(b) },
+			fixedName("#IAL")),
+		"inlHtmlTag": spec(100800,
+			func(c byte, _ Options) bool { return c == '<' },
+			func(p *inlineParser, b *MdNode) bool { return p.parseHtmlTag(b) },
+			fixedName("#IHT")),
+		"inlEntity": spec(100900,
+			func(c byte, _ Options) bool { return c == '&' },
+			func(p *inlineParser, b *MdNode) bool { return p.parseEntity(b) },
+			fixedName("#IEN")),
+		"inlText": spec(101000,
+			func(_ byte, _ Options) bool { return true },
+			func(p *inlineParser, b *MdNode) bool { return p.parseString(b) },
+			fixedName("#ITX")),
+		// Nothing claimed the character: one literal char, same as the
+		// hand scanner's dispatch fallback.
+		"inlLiteral": spec(101100,
+			func(_ byte, _ Options) bool { return true },
+			func(p *inlineParser, b *MdNode) bool { return p.parseLiteralChar(b) },
+			fixedName("#ILI")),
+	}
+
+	// GFM strikethrough is a separate matcher registered only when the
+	// option is on — the option reshapes the registered matcher set itself,
+	// so the base dialect's lexer simply has no tilde matcher rather than a
+	// disabled branch inside one.
+	if opts.GFM {
+		matchSet["inlTilde"] = spec(100350,
+			func(c byte, _ Options) bool { return c == '~' },
+			func(p *inlineParser, b *MdNode) bool { return p.handleDelim('~', b) },
+			fixedName("#IDL"))
+	}
+
 	j.SetOptions(parser.Options{
 		Fixed:   &parser.FixedOptions{Lex: boolPtr(false)},
 		Space:   &parser.SpaceOptions{Lex: boolPtr(false)},
@@ -148,75 +225,7 @@ func makeInlineTn(opts Options) *parser.Tabnas {
 		Comment: &parser.CommentOptions{Lex: boolPtr(false)},
 		Number:  &parser.NumberOptions{Lex: boolPtr(false)},
 		Value:   &parser.ValueOptions{Lex: boolPtr(false)},
-		Lex: &parser.LexOptions{
-			Match: map[string]*parser.MatchSpec{
-				"inlBreak": spec(100000,
-					func(c byte, _ Options) bool { return c == '\n' },
-					func(p *inlineParser, b *MdNode) bool { return p.parseNewline(b) },
-					fixedName("#IBK")),
-				"inlEscape": spec(100100,
-					func(c byte, _ Options) bool { return c == '\\' },
-					func(p *inlineParser, b *MdNode) bool { return p.parseBackslash(b) },
-					fixedName("#IES")),
-				"inlCode": spec(100200,
-					func(c byte, _ Options) bool { return c == '`' },
-					func(p *inlineParser, b *MdNode) bool { return p.parseBackticks(b) },
-					fixedName("#ICS")),
-				"inlDelim": spec(100300,
-					func(c byte, o Options) bool {
-						return c == '*' || c == '_' || (o.GFM && c == '~')
-					},
-					func(p *inlineParser, b *MdNode) bool {
-						return p.handleDelim(p.subject[p.pos], b)
-					},
-					fixedName("#IDL")),
-				"inlOpenBracket": spec(100400,
-					func(c byte, _ Options) bool { return c == '[' },
-					func(p *inlineParser, b *MdNode) bool { return p.parseOpenBracket(b) },
-					fixedName("#IOB")),
-				// `!` introduces an image only before `[`; otherwise a literal.
-				"inlBang": spec(100500,
-					func(c byte, _ Options) bool { return c == '!' },
-					func(p *inlineParser, b *MdNode) bool { return p.parseBang(b) },
-					func(p *inlineParser, start int) string {
-						if 2 == p.pos-start {
-							return "#IBG"
-						}
-						return "#ILI"
-					}),
-				// The cursor owner: on a successful inline link tail,
-				// parseCloseBracket has already consumed it when this token is
-				// emitted.
-				"inlCloseBracket": spec(100600,
-					func(c byte, _ Options) bool { return c == ']' },
-					func(p *inlineParser, b *MdNode) bool { return p.parseCloseBracket(b) },
-					fixedName("#ICB")),
-				// At `<`: autolink first, raw HTML second — matcher order is
-				// precedence.
-				"inlAutolink": spec(100700,
-					func(c byte, _ Options) bool { return c == '<' },
-					func(p *inlineParser, b *MdNode) bool { return p.parseAutolink(b) },
-					fixedName("#IAL")),
-				"inlHtmlTag": spec(100800,
-					func(c byte, _ Options) bool { return c == '<' },
-					func(p *inlineParser, b *MdNode) bool { return p.parseHtmlTag(b) },
-					fixedName("#IHT")),
-				"inlEntity": spec(100900,
-					func(c byte, _ Options) bool { return c == '&' },
-					func(p *inlineParser, b *MdNode) bool { return p.parseEntity(b) },
-					fixedName("#IEN")),
-				"inlText": spec(101000,
-					func(_ byte, _ Options) bool { return true },
-					func(p *inlineParser, b *MdNode) bool { return p.parseString(b) },
-					fixedName("#ITX")),
-				// Nothing claimed the character: one literal char, same as the
-				// hand scanner's dispatch fallback.
-				"inlLiteral": spec(101100,
-					func(_ byte, _ Options) bool { return true },
-					func(p *inlineParser, b *MdNode) bool { return p.parseLiteralChar(b) },
-					fixedName("#ILI")),
-			},
-		},
+		Lex:     &parser.LexOptions{Match: matchSet},
 		Parse: &parser.ParseOptions{
 			Prepare: map[string]func(*parser.Context){
 				"inl-reset": func(ctx *parser.Context) {

@@ -171,12 +171,35 @@ const Markdown: Plugin = (tn: Tabnas, options?: MarkdownOptions) => {
   // One `#LB` consumed per iteration, tail-recursing via `r:` until only
   // `#ZZ` remains; the empty alts are the fall-through that hands control
   // back to `markdown`'s close.
+  //
+  // The first alt is the GFM extension seam: tagged `g: 'gfm'`, gated on
+  // the token's `tblArm` bit, arming the shared table probe for this line.
+  // It is injected exactly the way a downstream dialect would extend this
+  // grammar — an alt ahead of the base one, subtractable by its group tag —
+  // and `gfm: false` removes it below via `rule.exclude`, so the base
+  // dialect is the grammar minus the tagged alts, visibly (`debug.model()`).
   tn.rule('line', (rs) => {
     return rs
       .clear()
-      .open([{ s: '#LB', r: 'line', a: actions.line }, {}])
+      .open([
+        {
+          s: '#LB',
+          c: (_r: any, ctx: any) => true === ctx.t0.use.tblArm,
+          r: 'line',
+          a: actions.lineGfm,
+          g: 'gfm',
+        },
+        { s: '#LB', r: 'line', a: actions.line },
+        {},
+      ])
       .close([{}])
   })
+
+  // The GFM dialect is subtracted, not branched around: without the option,
+  // the tagged alts above simply do not exist in this instance's grammar.
+  if (true !== opts.gfm) {
+    tn.options({ rule: { exclude: 'gfm' } })
+  }
 
   // Not part of the tabnas contract, but useful for tests, docs and callers
   // that want HTML or the native tree without a second import.

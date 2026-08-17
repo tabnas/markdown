@@ -30,12 +30,14 @@ export type LineInfo = {
   /** True when the line holds nothing but spaces and tabs. */
   blank: boolean
   /**
-   * GFM table arming: true when the line contains a `|` anywhere. A
-   * deliberate superset of "is a delimiter row" — the delimiter row of a
-   * table nested in a block quote only matches at the container-adjusted
-   * offset, which only the block algorithm knows. `tryOpenTable`
-   * re-verifies; this bit exists so a `gfm`-gated alt has something honest
-   * to read (see test/spec/mixed.tsv).
+   * GFM table arming: true when the line contains a `|` or a `-` anywhere.
+   * A deliberate, *provable* superset of "could be a delimiter row": every
+   * delimiter cell requires at least one `-` (`:-:` rows open pipe-less
+   * single-column tables), and multi-column rows carry `|`. The real
+   * decision needs the container-adjusted offset only the block algorithm
+   * knows — a delimiter row nested in a block quote matches after the `>`
+   * marker — so the `gfm`-tagged alt reading this bit only *arms* the
+   * probe, and `tryOpenTable` re-verifies (see test/spec/mixed.tsv).
    */
   tblArm: boolean
 }
@@ -65,7 +67,7 @@ export const makeMdLineMatcher: MakeLexMatcher = (_cfg, _opts) => {
     const info: LineInfo = {
       text: seg.text,
       blank: isBlank(seg.text),
-      tblArm: -1 !== seg.text.indexOf('|'),
+      tblArm: -1 !== seg.text.indexOf('|') || -1 !== seg.text.indexOf('-'),
     }
 
     const tkn = lex.token('#LB', seg.text, src.slice(pnt.sI, seg.next), pnt, info)
@@ -103,9 +105,29 @@ export function makeMdActions(
       ;(ctx.u as any).md = state
     },
 
-    /** `line` open alt: feed the matched `#LB` line to the shared algorithm. */
+    /**
+     * `line` base open alt: disarm the table probe and feed the matched
+     * `#LB` line to the shared algorithm. Reaching this alt means the
+     * `gfm`-tagged alt above it did not match — the line cannot contain a
+     * delimiter row — or GFM is off entirely (`rule.exclude` removed the
+     * tagged alt, and `tryOpenTable` is closed by the option anyway).
+     */
     line: (r: Rule, ctx: Context) => {
       const state: MdParseState = (ctx.u as any).md
+      state.bp.tableArmed = false
+      state.bp.incorporateLine((r.o0 as any).use.text)
+    },
+
+    /**
+     * `line` GFM open alt (tagged `g: 'gfm'`, condition on the token's
+     * `tblArm` bit): arm the table probe for this line, then feed it to the
+     * same shared algorithm. This is the extension seam a downstream
+     * dialect would use — an alt injected ahead of the base one, gated on
+     * a group tag so `gfm: false` can subtract it wholesale.
+     */
+    lineGfm: (r: Rule, ctx: Context) => {
+      const state: MdParseState = (ctx.u as any).md
+      state.bp.tableArmed = true
       state.bp.incorporateLine((r.o0 as any).use.text)
     },
 

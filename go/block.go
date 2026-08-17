@@ -1453,6 +1453,14 @@ type blockParser struct {
 	lineNumber     int
 	lastLineLength int
 
+	// tableArmed is the GFM table probe gate. True by default — the batch
+	// driver probes every candidate line, as it always has. The engine
+	// driver sets it per line from the #LB token's tblArm bit (a provable
+	// superset of "could be a delimiter row"; see engineblock.go), which is
+	// what lets the GFM alt be a genuine, subtractable extension seam
+	// without moving any table decision out of this file.
+	tableArmed bool
+
 	// prevLineLength is the length of the line before the one lastLineLength
 	// measures.
 	//
@@ -1534,6 +1542,7 @@ func newBlockParser(options Options) *blockParser {
 		fastReject = maybeSpecialGFM
 	}
 	return &blockParser{
+		tableArmed:           true,
 		options:              options,
 		refmap:               RefMap{},
 		doc:                  doc,
@@ -1693,6 +1702,9 @@ func (p *blockParser) addChild(tag NodeType, offset int) *MdNode {
 // skipped again by finalizeTable; keeping it costs nothing and makes the
 // table's accumulated lines line up one-for-one with the source lines.
 func (p *blockParser) tryOpenTable(container *MdNode) bool {
+	if !p.tableArmed {
+		return false
+	}
 	if !p.options.GFM || p.indented || NodeParagraph != container.Type {
 		return false
 	}
