@@ -64,6 +64,10 @@ const c = @cImport(@cInclude("tabnas.h"));
 // c.tabnas_free.
 ```
 
+## Format notes
+
+Parses CommonMark 0.31.2 with the five GFM extensions (tables, task items, autolink literals, tagfilter, strikethrough); options are reserved, so extensions cannot be disabled through this ABI. CommonMark assigns a parse to EVERY input — `accept:false` never occurs, so `accept:true` is NOT a validation signal for markdown.
+
 ## Layout
 
 - `core.go` — the behaviour, in plain Go (testable).
