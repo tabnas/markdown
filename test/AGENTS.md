@@ -5,7 +5,7 @@ change belongs in before you add to any of them.
 
 | Directory | Contents | Compares | Canonical for | Add to it? |
 |---|---|---|---|---|
-| [`spec/`](spec/) | 82 hand-written cases across 10 `*.tsv` files | the **JSON AST**, through the engine | TS ↔ Go parity, and the shape of the public AST | **yes** — this is where cases of our own go |
+| [`spec/`](spec/) | 83 hand-written cases across 10 `*.tsv` files | the **JSON AST**, through the engine | TS ↔ Go parity, and the shape of the public AST | **yes** — this is where cases of our own go |
 | [`commonmark/`](commonmark/) | the vendored CommonMark 0.31.2 suite, 652 examples in `spec.json` | the **HTML** output, byte for byte | spec conformance | no — upstream data |
 | [`gfm/`](gfm/) | the extension sections of the GFM spec, 24 examples in `spec.json` | the **HTML** output, byte for byte | the GFM extensions | no — upstream data |
 
@@ -31,10 +31,10 @@ job: they score HTML, and the AST is a lossy projection of the tree the
 renderer walks, so a projection change can leave 652/652 and 24/24 both
 untouched.
 
-82 cases in 10 files, one construct each — except `mixed.tsv`, which owns
+83 cases in 10 files, one construct each — except `mixed.tsv`, which owns
 the cross-construct cases: `autolink.tsv` (23), `blockquote.tsv` (2),
 `code.tsv` (4), `heading.tsv` (7), `inline.tsv` (13), `list.tsv` (6),
-`mixed.tsv` (8), `paragraph.tsv` (4), `table.tsv` (10), `thematic.tsv`
+`mixed.tsv` (8), `paragraph.tsv` (4), `table.tsv` (11), `thematic.tsv`
 (5). Seven of `mixed.tsv`'s rows are the corpus-blind interaction cases
 (dx-report §43): link tails holding backticks against code spans, tables
 nested under block quotes (with a `gfm:false` twin), and trailing-space
