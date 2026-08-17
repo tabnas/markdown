@@ -100,8 +100,26 @@ function adapt(
     p.pos = start
     if (!run(p, st.block)) return undefined
 
-    const tkn = lex.token(name(p, start), undefined, src.slice(start, p.pos), pnt)
-    pnt.cI += p.pos - start
+    const consumed = src.slice(start, p.pos)
+    const tkn = lex.token(name(p, start), undefined, consumed, pnt)
+
+    // Row/column bookkeeping is observability data: a matcher that consumed
+    // line endings (soft breaks, multiline code spans or titles) moved the
+    // scan onto a later row, and later tokens must say so.
+    let newlines = 0
+    let lastNl = -1
+    for (let i = 0; i < consumed.length; i++) {
+      if (10 === consumed.charCodeAt(i)) {
+        newlines += 1
+        lastNl = i
+      }
+    }
+    if (0 < newlines) {
+      pnt.rI += newlines
+      pnt.cI = consumed.length - lastNl
+    } else {
+      pnt.cI += consumed.length
+    }
     pnt.sI = p.pos
     return tkn
   }

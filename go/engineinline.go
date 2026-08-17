@@ -86,8 +86,27 @@ func inlineAdapter(
 		}
 
 		n := name(p, start)
-		tkn := lex.Token(n, tins[n], nil, src[start:p.pos])
-		pnt.CI += p.pos - start
+		consumed := src[start:p.pos]
+		tkn := lex.Token(n, tins[n], nil, consumed)
+
+		// Row/column bookkeeping is observability data: a matcher that
+		// consumed line endings (soft breaks, multiline code spans or
+		// titles) moved the scan onto a later row, and later tokens must
+		// say so.
+		newlines := 0
+		lastNl := -1
+		for i := 0; i < len(consumed); i++ {
+			if consumed[i] == '\n' {
+				newlines++
+				lastNl = i
+			}
+		}
+		if newlines > 0 {
+			pnt.RI += newlines
+			pnt.CI = len(consumed) - lastNl
+		} else {
+			pnt.CI += len(consumed)
+		}
 		pnt.SI = p.pos
 		return tkn
 	}
