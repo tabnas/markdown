@@ -11,7 +11,7 @@ package tabnasmarkdown
 // suite is trivially green — that is the point. It exists so the
 // engine-substrate stages (dx-report §42) cannot land a divergence silently:
 // the conformance corpora are blind to several legal-input behaviors (see
-// test/spec/edge.tsv), so "all suites green" is necessary but not sufficient
+// test/spec/mixed.tsv), so "all suites green" is necessary but not sufficient
 // once the plugin path stops sharing the drivers.
 //
 // The seeded document generator is identical to the one in
@@ -32,6 +32,8 @@ import (
 var differentialOptionSets = []map[string]any{
 	{},
 	{"gfm": false},
+	{"breaks": true},
+	{"gfm": false, "breaks": true},
 }
 
 // diffRigs builds one engine instance per option set, reused across every
@@ -76,6 +78,12 @@ func TestDifferentialGFM(t *testing.T) {
 	for _, c := range loadGFMCases(t) {
 		checkDifferential(t, rigs, c.Markdown, "gfm example "+strconv.Itoa(c.Example))
 	}
+}
+
+func TestDifferentialEmpty(t *testing.T) {
+	// The engine short-circuits "" through lex.EmptyResult before the rule
+	// loop, a path no corpus example or fixture reaches.
+	checkDifferential(t, diffRigs(), "", "empty input")
 }
 
 func TestDifferentialFixtures(t *testing.T) {

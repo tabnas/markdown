@@ -1168,8 +1168,9 @@ The gate §42 named as "must precede any engine-driven stage" is landed, in
 both runtimes, before any engine code exists — so every later stage
 inherits it from its first commit.
 
-* `test/spec/edge.tsv` pins the corpus-blind behaviours as ordinary shared
-  fixtures, with their native trees in `test/spec/tree/edge.json`: a
+* `test/spec/mixed.tsv` (the cross-construct fixture file) gains the
+  corpus-blind behaviours as ordinary shared fixtures, with their native
+  trees in `test/spec/tree/mixed.json`: a
   backtick inside a *successful* link destination or title followed by a
   code span (`` [a](b`c) `d` `` — the case a flat pre-lex of the inline
   phase gets wrong), the failing-tail

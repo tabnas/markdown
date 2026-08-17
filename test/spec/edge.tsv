@@ -1,8 +1,0 @@
-input	expected	opts
-[a](b`c) `d`	{"type":"document","children":[{"type":"paragraph","children":[{"type":"link","url":"b`c","title":null,"children":[{"type":"text","value":"a"}]},{"type":"text","value":" "},{"type":"inlineCode","value":"d"}]}]}	
-[x](/u "a`b") `c`	{"type":"document","children":[{"type":"paragraph","children":[{"type":"link","url":"/u","title":"a`b","children":[{"type":"text","value":"x"}]},{"type":"text","value":" "},{"type":"inlineCode","value":"c"}]}]}	
-[not a `link](/foo`)	{"type":"document","children":[{"type":"paragraph","children":[{"type":"text","value":"[not a "},{"type":"inlineCode","value":"link](/foo"},{"type":"text","value":")"}]}]}	
-> a | b\n> --- | ---	{"type":"document","children":[{"type":"blockquote","children":[{"type":"table","align":[null,null],"children":[{"type":"tableRow","children":[{"type":"tableCell","children":[{"type":"text","value":"a"}]},{"type":"tableCell","children":[{"type":"text","value":"b"}]}]}]}]}]}	
-> a | b\n> --- | ---	{"type":"document","children":[{"type":"blockquote","children":[{"type":"paragraph","children":[{"type":"text","value":"a | b --- | ---"}]}]}]}	{"gfm":false}
-foo \nbar	{"type":"document","children":[{"type":"paragraph","children":[{"type":"text","value":"foo bar"}]}]}	
-a\nb  \nc	{"type":"document","children":[{"type":"paragraph","children":[{"type":"text","value":"a b"},{"type":"break"},{"type":"text","value":"c"}]}]}	

@@ -8,7 +8,7 @@
 // share every line of code, so this suite is trivially green — that is the
 // point. It exists so the engine-substrate stages (dx-report §42) cannot
 // land a divergence silently: the conformance corpora are blind to several
-// legal-input behaviors (see test/spec/edge.tsv), so "all suites green" is
+// legal-input behaviors (see test/spec/mixed.tsv), so "all suites green" is
 // necessary but not sufficient once the plugin path stops sharing the
 // drivers.
 //
@@ -36,7 +36,12 @@ const specDir = findSpecDir(__dirname)
 // One engine instance per option set, reused across every parse — the
 // supported pattern (see perf.test.ts); a fresh instance per input would
 // time out the suite for no extra coverage.
-const OPTION_SETS: Array<Record<string, unknown>> = [{}, { gfm: false }]
+const OPTION_SETS: Array<Record<string, unknown>> = [
+  {},
+  { gfm: false },
+  { breaks: true },
+  { gfm: false, breaks: true },
+]
 const instances = OPTION_SETS.map((opts) => new Tabnas().use(Markdown, opts))
 
 function flatten(v: unknown): unknown {
@@ -67,6 +72,12 @@ test('differential: GFM corpus', () => {
     fs.readFileSync(path.join(specDir, '..', 'gfm', 'spec.json'), 'utf8'),
   )
   for (const c of cases) checkInput(c.markdown, 'gfm example ' + c.example)
+})
+
+test('differential: empty input', () => {
+  // The engine short-circuits '' through lex.emptyResult before the rule
+  // loop, a path no corpus example or fixture reaches.
+  checkInput('', 'empty input')
 })
 
 test('differential: shared fixtures', () => {
