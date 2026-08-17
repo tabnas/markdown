@@ -444,13 +444,20 @@ node's text as hostile.
   tag, `cr()` is a no-op at line start, and no block emits a newline on
   behalf of a neighbour or child. Changing that breaks conformance
   examples.
-* **Plugin wiring** (`markdown.ts` / `markdown.go`): entry rule is
-  `markdown`; the `bo` action reads the whole source via `ctx.src()` and
-  hands it to the parser. Lex is disabled for `string`/`comment`/
-  `number`/`value` so backticks, `# headings` and `1. lists` are not
-  mis-lexed first. `lex.emptyResult` returns an empty document for `""`.
-  `rule.clear()` is required before defining `markdown`, or inherited
-  `val` alts try to match a leading `#`.
+* **Plugin wiring** (`markdown.ts` / `markdown.go`, with the driver in
+  `engine-block.ts` / `engineblock.go`): the engine parse IS the parse.
+  A custom `mdLine` lexer matcher (registered ahead of every built-in;
+  all built-ins disabled) emits one `#LB` token per physical line via the
+  shared `segmentNextLine`; `parse.prepare` seeds a fresh `BlockParser`
+  on `ctx.u.md`; the `line` rule consumes one `#LB` per iteration,
+  feeding the shared `incorporateLine`; the `markdown` rule's close
+  action on `#ZZ` finalizes, runs the shared inline phase, and projects
+  the AST into the rule's node. No block decision happens engine-side —
+  recognition and algorithm stay in the engine-free core (the anti-drift
+  rule, dx-report §42), asserted byte-for-byte by the differential gate
+  and the engine-path conformance suites. `lex.emptyResult` returns an
+  empty document for `""`. `rule.clear()` is required before defining
+  `markdown`, or inherited `val` alts try to match a leading `#`.
 * **Options**: `gfm` (default `true`; gates all five GFM extensions at
   once) and `breaks` (default `false`). `Markdown.defaults` / `Defaults`
   carry the same pair. `gfm` is the only option besides `breaks` that the

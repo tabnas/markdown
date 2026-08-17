@@ -114,20 +114,45 @@ func ParseTree(src string, opts Options) *MdNode {
 func boolPtr(b bool) *bool { return &b }
 
 // Markdown installs the parser on a tabnas engine instance.
+//
+// The engine parse IS the parse: the mdLine custom matcher (engineblock.go)
+// lexes one `#LB` token per physical line, parse.prepare seeds a fresh
+// blockParser on ctx.U["md"], the `line` rule feeds each matched line to the
+// shared incorporateLine, and the `markdown` rule's close action on `#ZZ`
+// finalizes, runs the shared inline phase, and projects the public AST into
+// the rule's node. No recognition or block decision happens here — the
+// engine owns tokenization, dispatch and state carriage; the algorithm stays
+// in the engine-free core (the anti-drift rule, dx-report §42), which is
+// what keeps this path byte-identical to ParseDocument (asserted by the
+// differential gate and the engine-path conformance harness).
 func Markdown(j *parser.Tabnas, options map[string]any) error {
 	opts := ResolveOptions(options)
 
-	// The parser reads ctx.Src directly rather than the token stream, so
-	// disable the lexers that would corrupt Markdown syntax before it gets
-	// there: backtick code spans lex as unterminated strings, `# heading` as a
-	// comment, and `1. list` as a number.
+	lbTin := j.Token("#LB")
+
+	// Every built-in matcher is off — deliberate configuration, not defense.
+	// Markdown's block alphabet is *lines*, so the one registered matcher is
+	// the complete lexical description of this phase: mdLine, at an order
+	// ahead of every built-in, consuming each physical line whole. (The
+	// built-ins would misread the syntax anyway: backtick code spans lex as
+	// unterminated strings, `# heading` as a comment, `1. list` as a number.)
 	j.SetOptions(parser.Options{
+		Fixed:   &parser.FixedOptions{Lex: boolPtr(false)},
+		Space:   &parser.SpaceOptions{Lex: boolPtr(false)},
+		Line:    &parser.LineOptions{Lex: boolPtr(false)},
+		Text:    &parser.TextOptions{Lex: boolPtr(false)},
 		String:  &parser.StringOptions{Lex: boolPtr(false)},
 		Comment: &parser.CommentOptions{Lex: boolPtr(false)},
 		Number:  &parser.NumberOptions{Lex: boolPtr(false)},
 		Value:   &parser.ValueOptions{Lex: boolPtr(false)},
 		Lex: &parser.LexOptions{
 			EmptyResult: map[string]any{"type": "document", "children": []any{}},
+			Match: map[string]*parser.MatchSpec{
+				"mdLine": {Order: 100000, Make: makeMdLineMatcher(lbTin)},
+			},
+		},
+		Parse: &parser.ParseOptions{
+			Prepare: map[string]func(*parser.Context){"md-reset": mdPrepare(opts)},
 		},
 		Rule: &parser.RuleOptions{Start: "markdown"},
 	})
@@ -140,11 +165,21 @@ func Markdown(j *parser.Tabnas, options map[string]any) error {
 
 	j.Rule("markdown", func(rs *parser.RuleSpec, _ *parser.Parser) {
 		rs.Clear()
-		rs.AddBO(func(r *parser.Rule, ctx *parser.Context) {
-			r.Node = ParseDocument(ctx.Src, opts)
-		})
-		rs.AddOpen(&parser.AltSpec{S: [][]parser.Tin{{parser.TinAA}}, R: "markdown"}, &parser.AltSpec{})
-		rs.AddClose(&parser.AltSpec{S: [][]parser.Tin{{parser.TinZZ}}}, &parser.AltSpec{})
+		rs.AddOpen(&parser.AltSpec{P: "line"})
+		rs.AddClose(
+			&parser.AltSpec{S: [][]parser.Tin{{parser.TinZZ}}, A: mdFinishAction(opts)},
+			&parser.AltSpec{})
+	})
+
+	// One `#LB` consumed per iteration, tail-recursing via R until only `#ZZ`
+	// remains; the empty alts are the fall-through that hands control back to
+	// markdown's close.
+	j.Rule("line", func(rs *parser.RuleSpec, _ *parser.Parser) {
+		rs.Clear()
+		rs.AddOpen(
+			&parser.AltSpec{S: [][]parser.Tin{{lbTin}}, R: "line", A: mdLineAction},
+			&parser.AltSpec{})
+		rs.AddClose(&parser.AltSpec{})
 	})
 
 	return nil

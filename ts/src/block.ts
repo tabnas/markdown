@@ -1106,7 +1106,7 @@ const BLOCK_STARTS: BlockStart[] = [
 
 // --- the parser -------------------------------------------------------------
 
-class BlockParser {
+export class BlockParser {
   options: ParserOptions
   refmap: RefMap = {}
 
@@ -1609,8 +1609,19 @@ class BlockParser {
       }
     }
 
+    return this.finish()
+  }
+
+  /**
+   * Close every still-open block, stamp the parse-time `gfm` flag, and run
+   * the task-list post-pass. `lineNumber` is the count of incorporated
+   * lines, so an incremental driver — one that feeds `incorporateLine`
+   * itself instead of calling `parse` — finishes with exactly the same
+   * finalization the batch loop above gets.
+   */
+  finish(): { doc: MdNode; refmap: RefMap } {
     while (this.tip) {
-      this.finalize(this.tip, len)
+      this.finalize(this.tip, this.lineNumber)
     }
 
     this.doc.gfm = this.options.gfm

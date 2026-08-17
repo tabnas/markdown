@@ -1194,3 +1194,61 @@ Today the two paths share every line of code and the gate is trivially
 green — that is the point. The moment the plugin path stops sharing the
 drivers, "all suites green" stops being sufficient, and this is the check
 that knows.
+
+## 44. 2026-08-17 — the engine block driver: the plugin path stops being a bypass
+
+Stage 3 of §42's plan. The plugin's parse is now genuinely engine-driven,
+in both runtimes, with every contract green on both legs of the dual-path
+CI — including the engine-path conformance suites added here
+(`ts/test/engine-conformance.test.ts`, `go/engine_conformance_test.go`:
+all 652 CommonMark examples and all 24 GFM examples through
+`tn.parse(...)`, HTML byte-compared via a `meta.md.keepTree` handshake and
+AST-compared against the engine-free path).
+
+What the engine now owns on the plugin path:
+
+* **Tokenization.** A custom `mdLine` matcher (`ts/src/engine-block.ts`,
+  `go/engineblock.go`) registered at order 1e5 — ahead of every built-in,
+  with all built-ins disabled as deliberate configuration — emits one
+  `#LB` token per physical line, cut by the shared `segmentNextLine`. The
+  token's `use` payload is deliberately small: `{text, blank, tblArm}`,
+  where `tblArm` (line contains `|` anywhere) is an honest superset of
+  "delimiter row" for a later `gfm`-gated alt: the real decision needs
+  the container-adjusted offset only the block algorithm knows.
+* **Per-parse state.** `parse.prepare` — the first plugin use of that
+  hook — seeds a fresh `BlockParser` on `ctx.u.md`; `block.ts` grew a
+  behaviour-identical `finish()` split out of `parse()` so an incremental
+  driver finalizes exactly as the batch loop does.
+* **Dispatch.** Real rules: `markdown` pushes `line`; `line` consumes one
+  `#LB` per iteration via `r:` tail-recursion, its action feeding the
+  shared `incorporateLine`; `markdown`'s close action on `#ZZ` finalizes,
+  runs the shared inline phase, and projects the AST into `rule.node`.
+  `debug.model()` now shows a two-rule grammar and the old
+  token-draining formality is gone.
+
+Nothing engine-side recognizes or decides anything — the anti-drift rule
+holds, which is why the differential gate stayed green on the first run.
+
+Two side findings worth recording:
+
+* **The old wiring was quadratic on the plugin path.** The `bo` action ran
+  the whole engine-free parse once per rule instance in the `#AA` token
+  drain — one full parse per lexed token. The Go differential suite
+  dropped from ~60s to ~0.5s when the driver landed. The new
+  `TestEngineBlockLinearity` ratio test (and a real markdown source in
+  `go/perf_test.go`, retiring the `"a,b,c\n1,2,3"` CSV leftover) pins the
+  linearity so it cannot regress silently.
+* **`check-doc-examples.mjs`'s engine stand-in is contract-coupled.** It
+  emulated the old `bo`+`ctx.src()` contract and broke the moment the
+  plugin stopped using it; it now drives the plugin's own matcher and alt
+  actions the way the engine's lexer and rule loop would. The stand-in is
+  part of the plugin's contact surface and moves with it.
+
+Interim inconsistency, stated: the embedded `markdown-grammar.jsonic` text
+still documents the old single-rule shape. It is inert (§8) and is deleted
+outright in the final stage, when `debug.model()`/railroad become the
+grammar's source of truth; hand-editing the embedded block mid-stream is
+forbidden by the embed contract.
+
+Next: the engine inline phase (nested instance, sequential lexing, the
+cursor-owning bracket matcher), then the GFM extension seam.
