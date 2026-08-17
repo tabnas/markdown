@@ -42,49 +42,16 @@ export type MarkdownOptions = {
 }
 
 // ---------------------------------------------------------------------------
-// Grammar source.
+// Grammar.
 //
-// The prose grammar is intentionally trivial: block structure is decided by
-// the line-oriented algorithm in `block.ts`, not by declarative alts, so the
-// `markdown` rule exists only to consume the token stream. The file is kept
-// because `ts/embed-grammar.js` embeds it verbatim into both runtimes; see
-// AGENTS.md. It is documentation of the entry rule, not a source of behaviour.
-
-// --- BEGIN EMBEDDED markdown-grammar.jsonic ---
-const grammarText = `
-# Markdown entry rule — CommonMark 0.31.2
-#
-# This grammar is deliberately trivial, and it is NOT where the parser
-# lives. Block structure is decided by the two-phase line algorithm of
-# spec Appendix A, implemented in block.ts / block.go, and inline
-# structure by the delimiter and bracket stacks in inline.ts / inline.go.
-# None of that is expressible as declarative alts, which is why none of
-# it is here.
-#
-# The markdown rule exists only to give the engine an entry point and to
-# consume the token stream so its trailing-content check passes. The bo
-# action reads the whole source via ctx.src() and hands it to the parser.
-# Everything the rule does is in those two lines below.
-#
-# Consequences worth knowing rather than discovering:
-#   - The railroad diagram generated from this file is empty: a bare
-#     track with no boxes on it. That is accurate, not a rendering fault.
-#   - Editing this file changes documentation, not behaviour. The one
-#     exception is the open/close alts, which really are the rule.
-#
-# The file is kept because ts/embed-grammar.js embeds it verbatim into
-# both runtimes as grammarText (see AGENTS.md). It may not contain
-# backticks: the Go copy is a raw string literal.
-{
-  rule: markdown: open: [
-    { s: '#ZZ' }
-  ]
-  rule: markdown: close: [
-    { s: '#ZZ' }
-  ]
-}
-`
-// --- END EMBEDDED markdown-grammar.jsonic ---
+// The grammar is LIVE and lives in code: the `markdown`/`line` rules below,
+// the `mdLine` matcher (engine-block.ts) and the inline instance's rule and
+// matcher set (engine-inline.ts). `debug.model()` serializes it and
+// `ts/tools/gen-railroad.mjs` draws ts/doc/grammar.{svg,txt} from a live
+// instance, so the documentation is derived from the rules the engine
+// actually parses with. The historical `markdown-grammar.jsonic` file and
+// its embed step are gone: they documented an inert single-rule bypass that
+// no longer exists (dx-report §47).
 
 // ---------------------------------------------------------------------------
 // Public parse API (engine-free)
@@ -129,6 +96,20 @@ export function parseTree(src: string, opts?: MarkdownOptions | ParserOptions): 
 
 const Markdown: Plugin = (tn: Tabnas, options?: MarkdownOptions) => {
   const opts = resolveOptions(options)
+
+  // Human descriptions for the block token, surfaced in railroad diagram
+  // legends (read off the live config by @tabnas/railroad).
+  tn.options({
+    config: {
+      modify: {
+        'md-tokendesc': (cfg: any) => {
+          cfg.tokenDesc = Object.assign(cfg.tokenDesc || {}, {
+            '#LB': 'one physical line (text, blank and table-arming bits in use)',
+          })
+        },
+      },
+    },
+  })
 
   // The inline phase's own engine instance — nested parsing, one instance
   // per plugin install, reused across every parse and every leaf block (see
@@ -213,7 +194,7 @@ const Markdown: Plugin = (tn: Tabnas, options?: MarkdownOptions) => {
 
 Markdown.defaults = { gfm: true, breaks: false } as MarkdownOptions
 
-export { VERSION, Markdown, grammarText }
+export { VERSION, Markdown }
 
 export type {
   DocumentNode,

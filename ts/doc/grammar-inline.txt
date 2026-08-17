@@ -1,0 +1,27 @@
+inline:
+                                                                      │
+    ┌───────────┬───────────┬───────────┬───────────┬───────────┬─────┴─────┬───────────┬───────────┬───────────┬───────────┬───────────┐
+╭───┴───╮   ╭───┴───╮   ╭───┴───╮   ╭───┴───╮   ╭───┴───╮   ╭───┴───╮   ╭───┴───╮   ╭───┴───╮   ╭───┴───╮   ╭───┴───╮   ╭───┴───╮   ╭───┴───╮
+│ "IBK" │   │ "IES" │   │ "ICS" │   │ "IDL" │   │ "IOB" │   │ "IBG" │   │ "ICB" │   │ "IAL" │   │ "IHT" │   │ "IEN" │   │ "ITX" │   │ "ILI" │
+╰───┬───╯   ╰───┬───╯   ╰───┬───╯   ╰───┬───╯   ╰───┬───╯   ╰───┬───╯   ╰───┬───╯   ╰───┬───╯   ╰───┬───╯   ╰───┬───╯   ╰───┬───╯   ╰───┬───╯
+    └───────────┴───────────┴───────────┴───────────┴───────────┴─────┬─────┴───────────┴───────────┴───────────┴───────────┴───────────┘
+                                                                      │
+
+Tokens:
+  IAL = angle autolink
+  IBG = image opener ![
+  IBK = line break (soft or hard)
+  ICB = closer ] (with any consumed inline link tail)
+  ICS = code span
+  IDL = emphasis/strikethrough delimiter run
+  IEN = entity reference
+  IES = backslash escape
+  IHT = raw HTML tag
+  ILI = literal character
+  IOB = link opener [
+  ITX = text run
+
+Ignored tokens:
+  CM = comment
+  LN = newline (line break)
+  SP = whitespace (spaces or tabs)

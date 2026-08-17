@@ -25,43 +25,6 @@ import (
 // TestVersionMatchesPackageJSON fails the build if they drift.
 const VERSION = "0.6.2"
 
-// --- BEGIN EMBEDDED markdown-grammar.jsonic ---
-const grammarText = `
-# Markdown entry rule — CommonMark 0.31.2
-#
-# This grammar is deliberately trivial, and it is NOT where the parser
-# lives. Block structure is decided by the two-phase line algorithm of
-# spec Appendix A, implemented in block.ts / block.go, and inline
-# structure by the delimiter and bracket stacks in inline.ts / inline.go.
-# None of that is expressible as declarative alts, which is why none of
-# it is here.
-#
-# The markdown rule exists only to give the engine an entry point and to
-# consume the token stream so its trailing-content check passes. The bo
-# action reads the whole source via ctx.src() and hands it to the parser.
-# Everything the rule does is in those two lines below.
-#
-# Consequences worth knowing rather than discovering:
-#   - The railroad diagram generated from this file is empty: a bare
-#     track with no boxes on it. That is accurate, not a rendering fault.
-#   - Editing this file changes documentation, not behaviour. The one
-#     exception is the open/close alts, which really are the rule.
-#
-# The file is kept because ts/embed-grammar.js embeds it verbatim into
-# both runtimes as grammarText (see AGENTS.md). It may not contain
-# backticks: the Go copy is a raw string literal.
-{
-  rule: markdown: open: [
-    { s: '#ZZ' }
-  ]
-  rule: markdown: close: [
-    { s: '#ZZ' }
-  ]
-}
-`
-
-// --- END EMBEDDED markdown-grammar.jsonic ---
-
 // Defaults mirrors ts/src/markdown.ts Markdown.defaults.
 var Defaults = map[string]any{
 	"gfm":    true,
@@ -156,12 +119,6 @@ func Markdown(j *parser.Tabnas, options map[string]any) error {
 		},
 		Rule: &parser.RuleOptions{Start: "markdown"},
 	})
-
-	// The embedded grammar is documentation of the entry rule, not a source of
-	// behaviour: block structure is decided by the line-oriented algorithm in
-	// block.go, not by declarative alts. It is kept because ts/embed-grammar.js
-	// embeds it verbatim into both runtimes (see AGENTS.md).
-	_ = grammarText
 
 	// The inline phase's own engine instance — nested parsing. Built per
 	// parse (inside the finish action) rather than per install: a plugin

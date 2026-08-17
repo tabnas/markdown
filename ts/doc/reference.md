@@ -86,7 +86,7 @@ therefore all engine-free.
 ## Exports of `@tabnas/markdown`
 
 ```ts
-import { Markdown, parseDocument, parseInline, toHtml, parseTree, MdNode, grammarText, VERSION } from '@tabnas/markdown'
+import { Markdown, parseDocument, parseInline, toHtml, parseTree, MdNode, VERSION } from '@tabnas/markdown'
 import type { MarkdownOptions, ParserOptions, DocumentNode, Block, Inline } from '@tabnas/markdown'
 ```
 
@@ -99,7 +99,6 @@ import type { MarkdownOptions, ParserOptions, DocumentNode, Block, Inline } from
 | `toHtml` | function | `(src: string, opts?: MarkdownOptions \| ParserOptions) => string` |
 | `parseTree` | function | `(src: string, opts?: MarkdownOptions \| ParserOptions) => MdNode` |
 | `MdNode` | class | Re-export of `src/node.ts`. The native tree node. |
-| `grammarText` | `string` | The embedded text of `markdown-grammar.jsonic`. |
 | `VERSION` | `string` | This package's version, kept equal to `package.json` "version" by `test/version.test.ts`. Mirrors `VERSION` in `go/markdown.go`. |
 | `MarkdownOptions` | type | See [Options](#options). |
 | `ParserOptions` | type | Re-export of `src/options.ts`. See [Options](#options). |
@@ -769,17 +768,16 @@ toHtml('H~2~O\n', { gfm: false }) // => '<p>H~2~O</p>\n'
 matter, definition lists, heading attributes, admonitions, wiki links, emoji shortcodes,
 highlight, sub/superscript. Each would need its own opt-in option.
 
-## Grammar file
+## Grammar
 
-`markdown-grammar.jsonic` at the repository root is embedded verbatim into
-`ts/src/markdown.ts` (as `grammarText`) and `go/markdown.go` by `ts/embed-grammar.js`,
-between `BEGIN EMBEDDED` / `END EMBEDDED` markers.
-
-It is inert. It declares one rule, `markdown`, with `open` and `close` alts of
-`[{ s: '#ZZ' }]`. Block structure is decided by the line algorithm in `block.ts`, not by
-these alts. `grammarText` is a string constant that no code path parses; the file is kept
-because `embed-grammar.js` embeds it. The railroad diagram generated from it
-(`ts/doc/grammar.svg`) is empty: a bare track with no boxes on it.
+The grammar is registered in code, not loaded from a file. The plugin instance
+carries the `markdown` rule (pushes `line`; closes on `#ZZ`, where the finish
+action projects the AST) and the `line` rule (one `#LB` token per physical
+line, tail-recursing; a `g:'gfm'`-tagged arming alt ahead of the base one).
+The nested inline instance carries the `inline` rule over a twelve-token
+alphabet produced by its matcher set (`engine-inline.ts`). The railroad
+diagrams `ts/doc/grammar.svg` and `ts/doc/grammar-inline.svg` are generated
+from live instances by `ts/tools/gen-railroad.mjs`.
 
 ## Errors
 

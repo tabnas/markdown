@@ -191,6 +191,31 @@ export function makeInlineTn(opts: ParserOptions): Tabnas {
   const tn = new Tabnas()
 
   tn.options({ rule: { start: 'inline' } })
+
+  // Human descriptions for the inline alphabet, surfaced in railroad
+  // diagram legends (read off the live config by @tabnas/railroad).
+  tn.options({
+    config: {
+      modify: {
+        'inl-tokendesc': (cfg: any) => {
+          cfg.tokenDesc = Object.assign(cfg.tokenDesc || {}, {
+            '#IBK': 'line break (soft or hard)',
+            '#IES': 'backslash escape',
+            '#ICS': 'code span',
+            '#IDL': 'emphasis/strikethrough delimiter run',
+            '#IOB': 'link opener [',
+            '#IBG': 'image opener ![',
+            '#ICB': 'closer ] (with any consumed inline link tail)',
+            '#IAL': 'angle autolink',
+            '#IHT': 'raw HTML tag',
+            '#IEN': 'entity reference',
+            '#ITX': 'text run',
+            '#ILI': 'literal character',
+          })
+        },
+      },
+    },
+  })
   tn.options({
     space: { lex: false },
     line: { lex: false },

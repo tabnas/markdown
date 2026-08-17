@@ -243,7 +243,7 @@ Per-language hubs: [ts/README.md](ts/README.md) · [go/README.md](go/README.md).
 | [`test/spec/`](test/spec/) | 83 shared AST fixtures, run by both runtimes. |
 | [`test/commonmark/`](test/commonmark/) | Vendored CommonMark 0.31.2 spec suite (652 examples). |
 | [`test/gfm/`](test/gfm/) | Vendored GFM extension corpus (24 examples), run by both runtimes. |
-| [`markdown-grammar.jsonic`](markdown-grammar.jsonic) | The engine entry rule, embedded into both runtimes by [`ts/embed-grammar.js`](ts/embed-grammar.js). It is inert: block structure is decided by the line algorithm, not by declarative alts. Kept because the embedder embeds it. |
+| [`ts/doc/grammar.svg`](ts/doc/grammar.svg), [`ts/doc/grammar-inline.svg`](ts/doc/grammar-inline.svg) | Railroad diagrams of the LIVE grammar — the block instance's `markdown`/`line` rules and the inline instance's twelve-token alphabet — drawn from real plugin instances by [`ts/tools/gen-railroad.mjs`](ts/tools/gen-railroad.mjs). |
 
 > **Rescope note:** this package was previously a CSV-family record parser (copied from
 > `@tabnas/csv`). It now parses prose Markdown; record parsing is available via

@@ -402,27 +402,36 @@ consumer handle a ragged table, the block phase pads short rows and truncates lo
 that a row's cell count always equals the column count. `align[i]` is then the alignment of
 cell `i` of every row, with no bounds checking anywhere.
 
-## The grammar file is inert
+## The grammar is live
 
-`markdown-grammar.jsonic` at the repository root, and the `grammarText` constant embedded
-from it into both runtimes, do nothing.
+There is no grammar file. The grammar is the code the engine parses with,
+and the plugin registers it the way any tabnas grammar plugin does: the
+`markdown`/`line` rules and the `mdLine` line matcher on the plugin
+instance, and the `inline` rule with its twelve-matcher token alphabet on
+the nested inline instance. `debug.model()` serializes it, and the
+railroad diagrams in `ts/doc/grammar.svg` and `ts/doc/grammar-inline.svg`
+are drawn from live instances by `tools/gen-railroad.mjs`, so they are
+honest by derivation — regenerate them after a rule or matcher change
+rather than editing them.
 
-They are not a simplified grammar, or a grammar that handles the easy cases with JavaScript
-handling the rest. Block structure is decided entirely by the line algorithm in `block.ts`.
-The file declares one rule with alts that consume the token stream so the engine's
-trailing-content check passes, and that is its entire contribution. The railroad diagram
-generated from it is empty — a bare track with no boxes on it.
+An earlier revision shipped an inert `markdown-grammar.jsonic` file whose
+single rule merely drained the token stream while a `bo` action bypassed
+the engine entirely; its railroad diagram was famously a bare track with
+no boxes. That file, its embed step, and the bypass are gone — the engine
+parse is the parse, over one `#LB` token per physical line and one inline
+token per construct — and the division of labor is deliberate: the engine
+owns tokenization, dispatch, state carriage and observability, while the
+spec's Appendix A algorithms stay in the shared engine-free core that
+both the plugin path and the direct API run.
 
-It is kept because `embed-grammar.js` embeds it into both runtimes, and removing it would
-mean changing the embedding step and the two files that carry the embedded block. That is
-the only reason. It is stated here plainly rather than described as "intentionally trivial"
-or "honest about where the complexity lives", because those phrasings suggest the grammar
-is a deliberate minimal expression of something, and it is not — it is a leftover with a
-build step attached.
-
-Whether a Markdown grammar *could* usefully be expressed in the engine's declarative alts
-is a separate and more interesting question. Block structure probably could, at
-considerable length; inline structure almost certainly could not, since the delimiter and
-bracket stacks are precisely the parts that a single-pass declarative rule machine cannot
-express. That is why the specification describes an algorithm rather than a grammar, and
-why every conformant implementation is an algorithm too.
+Whether the Markdown *algorithms* could usefully be expressed as declarative alts
+remains the more interesting question, and the answer is still no — deliberately. Lazy
+continuation is a cross-step commit protocol, setext promotion and the table split are
+lookback tree surgery, and the emphasis rule of three needs backward search over
+unmatched delimiter runs; a first-match-wins alternation cannot express any of them,
+which is why the specification describes an algorithm rather than a grammar, and why
+every conformant implementation is an algorithm too. What the engine *does* own here —
+line and inline tokenization through custom matchers (including the context-sensitive
+`]` matcher that consumes a link tail at lex time), rule dispatch, per-parse state via
+`parse.prepare` and `ctx.u`, the group-tagged GFM extension seam, and the observability
+surface — is the part of a parser an engine is genuinely for.

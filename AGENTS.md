@@ -173,8 +173,7 @@ There are two implementations that must behave identically — TypeScript
 | [`test/spec/`](test/spec/) | 83 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) across 10 `*.tsv` files, auto-discovered and run by both runtimes. The TS/Go parity contract. See `test/AGENTS.md`. |
 | [`test/commonmark/spec.json`](test/commonmark/) | Vendored CommonMark 0.31.2 suite, 652 examples of Markdown → expected **HTML**. The conformance contract for both runtimes. See `test/AGENTS.md`. |
 | [`test/gfm/spec.json`](test/gfm/) | Vendored GFM extension corpus, 24 examples of Markdown → expected **HTML**, run with `gfm:true`. The extension contract for both runtimes. See `test/AGENTS.md`. |
-| [`markdown-grammar.jsonic`](markdown-grammar.jsonic) | The engine entry rule. **Inert** — see "The grammar is inert" below. |
-| [`ts/embed-grammar.js`](ts/embed-grammar.js) | Embeds `markdown-grammar.jsonic` verbatim into both `ts/src/markdown.ts` and `go/markdown.go` between `BEGIN/END EMBEDDED` markers. |
+| [`ts/tools/gen-railroad.mjs`](ts/tools/gen-railroad.mjs) | Draws `ts/doc/grammar{,-inline}.{svg,txt}` from LIVE plugin instances — see "The grammar is live" below. |
 | [`ts/tools/conformance.mjs`](ts/tools/conformance.mjs) | Runs the 652-example suite straight off `ts/src/*.ts` — no build step, no engine. `npm run conformance`. |
 | [`ts/tools/gfm-conformance.mjs`](ts/tools/gfm-conformance.mjs) | Runs the 24-example GFM corpus the same way, with `gfm:true`. `node tools/gfm-conformance.mjs`. |
 | [`ts/tools/check-doc-examples.mjs`](ts/tools/check-doc-examples.mjs) | Runs the `// =>` assertions in the docs without the engine, using a stand-in for it. The CI equivalent is `ts/test/doc-examples.test.ts`. |
@@ -271,32 +270,25 @@ The AST comparison alone is not a complete parity check: `sourcepos` is
 not projected into the public AST, so a divergence there is invisible to
 it. When you touch anything positional, compare the native trees too.
 
-## The grammar is inert — and never hand-edit the embedded block
+## The grammar is live — and derived documentation stays derived
 
-`markdown-grammar.jsonic` does not drive parsing. Block structure is
-decided by the line algorithm in `block.ts` / `block.go`; the `markdown`
-rule exists only so the engine's token stream is consumed and its
-trailing-content check passes. The railroad diagram it produces
-(`ts/doc/grammar.svg`) is empty — a bare track, no boxes. Say that plainly in docs
-rather than implying the grammar is a source of truth.
-
-The file is kept because `ts/embed-grammar.js` embeds it verbatim into
-**both** `ts/src/markdown.ts` and `go/markdown.go`, between:
-
-```
-// --- BEGIN EMBEDDED markdown-grammar.jsonic ---
-...
-// --- END EMBEDDED markdown-grammar.jsonic ---
-```
-
-Edit the `.jsonic`, then run:
+There is no grammar file. The grammar is the code the engine parses with:
+the `markdown`/`line` rules and the `mdLine` matcher on the plugin
+instance (`markdown.ts` / `markdown.go`, `engine-block.*`), and the
+`inline` rule with its twelve-matcher alphabet on the nested inline
+instance (`engine-inline.*`). `debug.model()` serializes it, and the
+railroad diagrams are drawn from LIVE instances:
 
 ```bash
-cd ts && node embed-grammar.js   # writes into ts/src/markdown.ts AND go/markdown.go
+cd ts && npm run build && node tools/gen-railroad.mjs
+# writes ts/doc/grammar.{svg,txt} (block instance)
+#    and ts/doc/grammar-inline.{svg,txt} (inline instance)
 ```
 
-Never hand-edit the embedded block in either runtime. The grammar may not
-contain backticks (Go raw-string limitation).
+Regenerate after any rule or matcher-set change; never hand-edit the
+generated files. The historical `markdown-grammar.jsonic` + embed-step
+machinery documented an inert single-rule bypass and was deleted with it
+(dx-report §47).
 
 ## Build & test
 
@@ -304,7 +296,7 @@ TypeScript (from `ts/`):
 
 ```bash
 npm install            # resolves file: siblings
-npm run build          # embeds grammar, then tsc --build src test
+npm run build          # tsc --build src test
 npm test               # node --test over dist-test/*.test.js
 npm run conformance    # 652-example suite off src/*.ts — no build, no engine
 node tools/gfm-conformance.mjs             # the 24-example GFM corpus, gfm:true
@@ -366,10 +358,10 @@ What "correct" means here, in order of authority:
    `const VERSION` in `ts/src/markdown.ts`, and `const VERSION` in
    `go/markdown.go`. `ts/test/version.test.ts` and `go/version_test.go` fail
    the build if they drift.
-4. **The embedded grammar matches its source.** If you changed
-   `markdown-grammar.jsonic` (inert, but still embedded in both runtimes),
-   run `npm run embed` from `ts/` or let `npm run build` re-embed it — never
-   hand-edit between the `BEGIN/END EMBEDDED` markers.
+4. **The railroad diagrams match the live grammar.** If you changed any
+   rule or matcher registration, regenerate `ts/doc/grammar{,-inline}.{svg,txt}`
+   with `node ts/tools/gen-railroad.mjs` (after a build) — never hand-edit
+   the generated files.
 
 ## Error codes
 

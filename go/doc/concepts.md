@@ -406,31 +406,34 @@ should not grow into a word meaning "everything": the value of a single switch i
 names a real, published, testable set, and a flag that names a grab-bag can never be
 conformant to anything.
 
-## The grammar file is inert
+## The grammar is live
 
-`markdown-grammar.jsonic` at the repository root, and the `grammarText` constant embedded
-from it into both runtimes, do nothing.
+There is no grammar file. The grammar is the code the engine parses with,
+and the plugin registers it the way any tabnas grammar plugin does: the
+`markdown`/`line` rules and the `mdLine` line matcher on the plugin
+instance (`markdown.go`, `engineblock.go`), and the `inline` rule with its
+twelve-matcher token alphabet on the nested inline instance
+(`engineinline.go`). The railroad diagrams in `ts/doc/grammar.svg` and
+`ts/doc/grammar-inline.svg` are drawn from live TypeScript instances —
+the two runtimes register the same rules, name for name.
 
-They are not a simplified grammar, or a grammar that handles the easy cases with Go
-handling the rest. Block structure is decided entirely by the line algorithm in `block.go`.
-The file declares one rule with alts that consume the token stream so the engine's
-trailing-content check passes, and that is its entire contribution. `markdown.go` contains a
-`_ = grammarText` statement, and that is the only thing in the package that touches the
-constant. The railroad diagram generated from it is empty — a bare track with no boxes on it.
+An earlier revision shipped an inert `markdown-grammar.jsonic` file whose
+single rule merely drained the token stream while a `BO` action bypassed
+the engine entirely. That file, its embed step, and the bypass are gone —
+the engine parse is the parse, over one `#LB` token per physical line and
+one inline token per construct — and the division of labor is deliberate:
+the engine owns tokenization, dispatch, state carriage and observability,
+while the spec's Appendix A algorithms stay in the shared engine-free
+core that both the plugin path and the direct API run.
 
-It is kept because `embed-grammar.js` embeds it into both runtimes, and removing it would
-mean changing the embedding step and the two files that carry the embedded block. That is
-the only reason. It is stated here plainly rather than described as "intentionally trivial"
-or "honest about where the complexity lives", because those phrasings suggest the grammar
-is a deliberate minimal expression of something, and it is not — it is a leftover with a
-build step attached.
-
-Whether a Markdown grammar *could* usefully be expressed in the engine's declarative alts
-is a separate and more interesting question. Block structure probably could, at considerable
-length; inline structure almost certainly could not, since the delimiter and bracket stacks
-are precisely the parts that a single-pass declarative rule machine cannot express. That is
-why the specification describes an algorithm rather than a grammar, and why every conformant
-implementation is an algorithm too.
+Whether the Markdown *algorithms* could usefully be expressed as
+declarative alts remains the more interesting question, and the answer is
+still no — deliberately. Lazy continuation is a cross-step commit
+protocol, setext promotion and the table split are lookback tree surgery,
+and the emphasis rule of three needs backward search over unmatched
+delimiter runs; a first-match-wins alternation cannot express any of
+them, which is why the specification describes an algorithm rather than a
+grammar, and why every conformant implementation is an algorithm too.
 
 ## Differences from the TS version
 
@@ -566,7 +569,6 @@ fixture reaches it.
 | Unicode punctuation | a regexp character class | `unicode.IsPunct \|\| unicode.IsSymbol` |
 | Case-insensitive regexes | the `i` flag | both cases spelled out. Go folds `(?i)[A-Za-z]` over all of Unicode, so it would also match U+017F LONG S and U+212A KELVIN SIGN, and `<ſpan>` would be accepted as a tag |
 | Table alignment | `('left' \| 'right' \| 'center' \| null)[]` on the node | `[]TableAlign` on the node, with `AlignNone` as the empty string; `ast.go` projects it back to an `[]any` with untyped `nil` entries so the JSON matches |
-| `grammarText` | exported | unexported |
 
 ## The parity contract, stated exactly
 
