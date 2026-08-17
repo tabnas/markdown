@@ -229,6 +229,414 @@ type delimScan struct {
 	canClose  bool
 }
 
+// --- pure recognizers -------------------------------------------------------
+//
+// Recognition split from node building: each function inspects `subject` at
+// `pos` and reports what it found, moving nothing and touching no tree. The
+// scanner methods below delegate to them, so any other driver over the same
+// syntax shares this exact recognition logic instead of reimplementing it.
+// Mirrors the exported recognizers in ts/src/inline.ts.
+
+// regexAt applies an `^`-anchored regex at pos; the match text, or ok=false.
+func regexAt(re *regexp.Regexp, subject string, pos int) (string, bool) {
+	loc := re.FindStringIndex(subject[pos:])
+	if loc == nil {
+		return "", false
+	}
+	return subject[pos+loc[0] : pos+loc[1]], true
+}
+
+// codePointBefore returns the whole code point ending at end, so an astral
+// character is classified as one character by the flanking rules rather than
+// as a stray byte. Start of subject counts as a line ending (§6.4).
+func codePointBefore(subject string, end int) rune {
+	if end <= 0 {
+		return '\n'
+	}
+	r, _ := utf8.DecodeLastRuneInString(subject[:end])
+	return r
+}
+
+// codePointAt returns the whole code point at i; end of subject counts as a
+// line ending.
+func codePointAt(subject string, i int) rune {
+	if i >= len(subject) {
+		return '\n'
+	}
+	r, _ := utf8.DecodeRuneInString(subject[i:])
+	return r
+}
+
+// skipInitialSpaces returns the end of the run of spaces starting at pos.
+// TS: reInitialSpace, / */y.
+func skipInitialSpaces(subject string, pos int) int {
+	for pos < len(subject) && subject[pos] == ' ' {
+		pos++
+	}
+	return pos
+}
+
+// matchSpnl returns the end of "spaces, and at most one line ending" starting
+// at pos (§6.3). TS: reSpnl, / *(?:\n *)?/y.
+func matchSpnl(subject string, pos int) int {
+	pos = skipInitialSpaces(subject, pos)
+	if pos < len(subject) && subject[pos] == '\n' {
+		pos = skipInitialSpaces(subject, pos+1)
+	}
+	return pos
+}
+
+// codeSpanScan reports a code span (§6.3). closed=false is an unmatched
+// opener, which is literal text.
+type codeSpanScan struct {
+	closed  bool
+	end     int
+	literal string // closed form only
+	ticks   string // unclosed form only
+}
+
+// scanCodeSpan finds the code span starting at pos: a backtick string to the
+// next backtick string of *exactly* the same length. Nil when no backtick run
+// starts at pos.
+//
+// Hand-coded rather than TS's /`+/y plus a global /`+/g scan, so that no
+// regex is built from an input-derived run length.
+func scanCodeSpan(subject string, pos int) *codeSpanScan {
+	s := subject
+	i := pos
+	for i < len(s) && s[i] == '`' {
+		i++
+	}
+	if i == pos {
+		return nil
+	}
+	tickLen := i - pos
+	afterOpenTicks := i
+
+	for i < len(s) {
+		if s[i] != '`' {
+			i++
+			continue
+		}
+		runStart := i
+		for i < len(s) && s[i] == '`' {
+			i++
+		}
+		if i-runStart == tickLen {
+			// Line endings become spaces; then one leading and one trailing
+			// space are stripped together, but only if the content is not all
+			// spaces (which is what lets a code span hold backticks).
+			contents := strings.ReplaceAll(s[afterOpenTicks:i-tickLen], "\n", " ")
+			hasNonSpace := false
+			for j := 0; j < len(contents); j++ {
+				if contents[j] != ' ' {
+					hasNonSpace = true
+					break
+				}
+			}
+			literal := contents
+			if len(contents) > 2 && contents[0] == ' ' && contents[len(contents)-1] == ' ' && hasNonSpace {
+				literal = contents[1 : len(contents)-1]
+			}
+			return &codeSpanScan{closed: true, end: i, literal: literal}
+		}
+	}
+
+	return &codeSpanScan{closed: false, end: afterOpenTicks, ticks: s[pos:afterOpenTicks]}
+}
+
+// escapeScan classifies a backslash escape (§6.1/§6.7).
+type escapeScan struct {
+	kind    string // "linebreak", "char" or "literal"
+	literal string
+	end     int
+}
+
+// scanEscape reads the backslash escape with pos at the backslash. Always
+// succeeds: a backslash before anything unescapable is a literal backslash.
+// The linebreak form consumes the following line's leading spaces.
+func scanEscape(subject string, pos int) escapeScan {
+	next := pos + 1
+	if next < len(subject) && subject[next] == '\n' {
+		return escapeScan{kind: "linebreak", literal: "", end: skipInitialSpaces(subject, next + 1)}
+	}
+	if next < len(subject) && IsEscapable(subject[next]) {
+		return escapeScan{kind: "char", literal: subject[next : next+1], end: next + 1}
+	}
+	return escapeScan{kind: "literal", literal: `\`, end: next}
+}
+
+// angleAutolinkScan reports an email or URI autolink in angle brackets (§6.5).
+type angleAutolinkScan struct {
+	dest  string
+	label string
+	end   int
+}
+
+func scanAngleAutolink(subject string, pos int) *angleAutolinkScan {
+	if m, ok := regexAt(reEmailAutolink, subject, pos); ok {
+		dest := m[1 : len(m)-1]
+		return &angleAutolinkScan{dest: "mailto:" + dest, label: dest, end: pos + len(m)}
+	}
+	if m, ok := regexAt(reAutolink, subject, pos); ok {
+		dest := m[1 : len(m)-1]
+		return &angleAutolinkScan{dest: dest, label: dest, end: pos + len(m)}
+	}
+	return nil
+}
+
+// scanHtmlTag reads a raw HTML tag (§6.6) at pos: open, close, comment, PI,
+// declaration or CDATA.
+func scanHtmlTag(subject string, pos int) (raw string, end int, ok bool) {
+	m, ok := regexAt(reHtmlTag, subject, pos)
+	if !ok {
+		return "", 0, false
+	}
+	return m, pos + len(m), true
+}
+
+// scanEntity reads an entity or numeric character reference (§6.2), decoded.
+func scanEntity(subject string, pos int) (literal string, end int, ok bool) {
+	m, ok := regexAt(reEntityHere, subject, pos)
+	if !ok {
+		return "", 0, false
+	}
+	return decodeEntity(m), pos + len(m), true
+}
+
+// scanDelimiterRun classifies the run of cc starting at pos without consuming
+// it (§6.4): a run is left-flanking iff it is not followed by Unicode
+// whitespace and either not followed by Unicode punctuation or else preceded
+// by whitespace or punctuation; right-flanking is the mirror image. `_`
+// additionally may not open inside a word (rules 2, 4, 6, 8), which is what
+// keeps snake_case_words intact; `*` has no such restriction.
+//
+// The two neighbouring characters are decoded as runes, not read as bytes:
+// classify `é` or `。` by its first UTF-8 byte and most of §6.4 quietly
+// breaks on non-ASCII input.
+func scanDelimiterRun(subject string, pos int, cc byte) *delimScan {
+	numdelims := 0
+	p := pos
+	for p < len(subject) && subject[p] == cc {
+		numdelims++
+		p++
+	}
+	if numdelims == 0 {
+		return nil
+	}
+
+	charBefore := codePointBefore(subject, pos)
+	charAfter := codePointAt(subject, p)
+
+	afterIsWhitespace := isUnicodeWhitespace(charAfter)
+	// §2.1 punctuation is P* ∪ S*, which isUnicodePunctuation already covers.
+	afterIsPunctuation := isUnicodePunctuation(charAfter)
+	beforeIsWhitespace := isUnicodeWhitespace(charBefore)
+	beforeIsPunctuation := isUnicodePunctuation(charBefore)
+
+	leftFlanking := !afterIsWhitespace &&
+		(!afterIsPunctuation || beforeIsWhitespace || beforeIsPunctuation)
+	rightFlanking := !beforeIsWhitespace &&
+		(!beforeIsPunctuation || afterIsWhitespace || afterIsPunctuation)
+
+	var canOpen, canClose bool
+	if cc == '_' {
+		canOpen = leftFlanking && (!rightFlanking || beforeIsPunctuation)
+		canClose = rightFlanking && (!leftFlanking || afterIsPunctuation)
+	} else {
+		canOpen = leftFlanking
+		canClose = rightFlanking
+	}
+
+	return &delimScan{numdelims: numdelims, canOpen: canOpen, canClose: canClose}
+}
+
+// classifyBreak resolves a line ending (§6.7/§6.8) given the literal of the
+// text node immediately before it (hasPrev=false when that node is absent or
+// not text). Two or more trailing spaces make a hard break; trim says the
+// trailing spaces must be dropped from that node either way.
+func classifyBreak(prevTextLiteral string, hasPrev bool) (hard bool, trim bool) {
+	if !hasPrev || len(prevTextLiteral) == 0 || prevTextLiteral[len(prevTextLiteral)-1] != ' ' {
+		return false, false
+	}
+	return len(prevTextLiteral) > 1 && prevTextLiteral[len(prevTextLiteral)-2] == ' ', true
+}
+
+// scanLinkTitle reads a link title at pos (§6.3), without its delimiters,
+// unescaped.
+func scanLinkTitle(subject string, pos int) (title string, end int, ok bool) {
+	m, ok := regexAt(reLinkTitle, subject, pos)
+	if !ok {
+		return "", 0, false
+	}
+	return unescapeString(m[1 : len(m)-1]), pos + len(m), true
+}
+
+// scanLinkDestination reads a link destination at pos (§6.3) — either
+// `<...>`, or a bare run with balanced unescaped parentheses and no ASCII
+// control characters or spaces. The value is backslash-unescaped and
+// entity-decoded but **not** percent-encoded: [l](/ä) yields /ä. Encoding is
+// a rendering concern and html.go applies normalizeURI when it writes the
+// attribute; the public AST promises the decoded form.
+func scanLinkDestination(subject string, pos int) (dest string, end int, ok bool) {
+	if braced, bOK := regexAt(reLinkDestinationBraces, subject, pos); bOK {
+		return unescapeString(braced[1 : len(braced)-1]), pos + len(braced), true
+	}
+	if pos < len(subject) && subject[pos] == '<' {
+		return "", 0, false
+	}
+
+	p := pos
+	openparens := 0
+
+scan:
+	for p < len(subject) {
+		c := subject[p]
+		switch {
+		case c == '\\' && p+1 < len(subject) && IsEscapable(subject[p+1]):
+			p++
+			if p < len(subject) {
+				p++
+			}
+		case c == '(':
+			// Bail rather than scan on once nesting passes the limit. Without
+			// this, input like `[a](b` repeated makes every `]` scan to end of
+			// input looking for parens that never balance, which is quadratic
+			// in the document size. cmark caps nesting at the same depth, and
+			// no spec example nests more than two deep.
+			if maxLinkParenNesting <= openparens {
+				return "", 0, false
+			}
+			p++
+			openparens++
+		case c == ')':
+			if openparens < 1 {
+				break scan
+			}
+			p++
+			openparens--
+		case c <= ' ' || c == 0x7F:
+			// Spaces and ASCII control characters end the bare form.
+			break scan
+		default:
+			p++
+		}
+	}
+
+	// An empty destination is only legal immediately before the closing paren
+	// of an inline link, as in `[link]()`.
+	if p == pos && !(p < len(subject) && subject[p] == ')') {
+		return "", 0, false
+	}
+	if openparens != 0 {
+		return "", 0, false
+	}
+
+	return unescapeString(subject[pos:p]), p, true
+}
+
+// scanLinkLabel reads a link label at pos (§4.7/§6.3), brackets included.
+// rawLength is what was consumed; length is 0 when the label is too long to
+// be valid (at most 999 characters between the brackets). ok=false when no
+// label is here at all.
+//
+// Hand-coded where TS uses /\[(?:[^\\[\]]|\\.){0,1000}\]/sy: RE2 expands a
+// {0,1000} repeat of an alternation into a thousand copies of it. The scan
+// below accepts the same language. A backtracking engine can never do better
+// than the greedy run, because every alternative of the repeat begins on a
+// character that is not `]`, so shortening the run can only put a non-`]`
+// where the closing bracket must be.
+func scanLinkLabel(subject string, pos int) (rawLength int, length int, ok bool) {
+	s := subject
+	if pos >= len(s) || s[pos] != '[' {
+		return 0, 0, false
+	}
+
+	i := pos + 1
+	iters := 0
+	// Length in UTF-16 code units, which is the unit TS's `m.length > 1001`
+	// test counts in — hence the 2 for an astral character below.
+	units := 1
+
+	for {
+		if i >= len(s) {
+			return 0, 0, false
+		}
+		c := s[i]
+		if c == ']' {
+			i++
+			units++
+			raw := i - pos
+			// §4.7: at most 999 characters between the brackets.
+			if units > 1001 {
+				return raw, 0, true
+			}
+			return raw, raw, true
+		}
+		// An unescaped `[` cannot be consumed by the repeat, and is not the
+		// `]` the pattern then demands. Nor can a 1001st repeat run.
+		if c == '[' || iters == 1000 {
+			return 0, 0, false
+		}
+		if c == '\\' {
+			// `\\.` — with the `s` flag, any character at all, line endings
+			// included.
+			i++
+			units++
+			if i >= len(s) {
+				return 0, 0, false
+			}
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		if r > 0xFFFF {
+			units += 2
+		} else {
+			units++
+		}
+		iters++
+	}
+}
+
+// linkTailScan reports the `(destination "title")` tail of an inline link.
+type linkTailScan struct {
+	dest     string
+	title    string
+	hasTitle bool
+	end      int
+}
+
+// scanInlineLinkTail reads the inline-link tail with pos just after the `]`.
+// Nil unless the whole tail — through the closing paren — is present.
+func scanInlineLinkTail(subject string, pos int) *linkTailScan {
+	if pos >= len(subject) || subject[pos] != '(' {
+		return nil
+	}
+
+	p := matchSpnl(subject, pos+1)
+	dest, dEnd, ok := scanLinkDestination(subject, p)
+	if !ok {
+		return nil
+	}
+
+	p = matchSpnl(subject, dEnd)
+	title, hasTitle := "", false
+	// A title has to be separated from the destination by whitespace, so
+	// `[a](/url"t")` is not a titled link.
+	if p-1 >= 0 && p-1 < len(subject) && isInlineWhitespaceByte(subject[p-1]) {
+		if t, tEnd, tOK := scanLinkTitle(subject, p); tOK {
+			title, hasTitle = t, true
+			p = tEnd
+		}
+	}
+	p = matchSpnl(subject, p)
+
+	if p < len(subject) && subject[p] == ')' {
+		return &linkTailScan{dest: dest, title: title, hasTitle: hasTitle, end: p + 1}
+	}
+	return nil
+}
+
 // openersKey is the openers_bottom map key: TS builds the string
 // `cc:canOpen:origdelims%3`; a struct key is the Go equivalent.
 type openersKey struct {
@@ -273,18 +681,12 @@ func (p *inlineParser) match(re *regexp.Regexp) (string, bool) {
 // spnl consumes spaces, and at most one line ending, between the parts of a
 // link. TS: / *(?:\n *)?/y.
 func (p *inlineParser) spnl() {
-	p.skipSpaces()
-	if p.pos < len(p.subject) && p.subject[p.pos] == '\n' {
-		p.pos++
-		p.skipSpaces()
-	}
+	p.pos = matchSpnl(p.subject, p.pos)
 }
 
 // skipSpaces is TS's reInitialSpace, / */y.
 func (p *inlineParser) skipSpaces() {
-	for p.pos < len(p.subject) && p.subject[p.pos] == ' ' {
-		p.pos++
-	}
+	p.pos = skipInitialSpaces(p.subject, p.pos)
 }
 
 // skipIndent is TS's reIndent, / {0,3}/y.
@@ -318,21 +720,13 @@ func (p *inlineParser) spaceAtEndOfLine() bool {
 // as a lone surrogate (TS) or a stray byte (Go). Start of subject counts as a
 // line ending (§6.4).
 func (p *inlineParser) charBefore(end int) rune {
-	if end <= 0 {
-		return '\n'
-	}
-	r, _ := utf8.DecodeLastRuneInString(p.subject[:end])
-	return r
+	return codePointBefore(p.subject, end)
 }
 
 // charAtPos returns the whole code point at i; end of subject counts as a
 // line ending.
 func (p *inlineParser) charAtPos(i int) rune {
-	if i >= len(p.subject) {
-		return '\n'
-	}
-	r, _ := utf8.DecodeRuneInString(p.subject[i:])
-	return r
+	return codePointAt(p.subject, i)
 }
 
 // --- §6.3 code spans ---
@@ -344,70 +738,31 @@ func (p *inlineParser) charAtPos(i int) rune {
 // Hand-coded rather than TS's /`+/y plus a global /`+/g scan, so that no
 // regex is built from an input-derived run length.
 func (p *inlineParser) parseBackticks(block *MdNode) bool {
-	s := p.subject
-	startpos := p.pos
-	for p.pos < len(s) && s[p.pos] == '`' {
-		p.pos++
-	}
-	if p.pos == startpos {
+	scan := scanCodeSpan(p.subject, p.pos)
+	if scan == nil {
 		return false
 	}
-	tickLen := p.pos - startpos
-
-	afterOpenTicks := p.pos
-
-	for i := afterOpenTicks; i < len(s); {
-		if s[i] != '`' {
-			i++
-			continue
-		}
-		runStart := i
-		for i < len(s) && s[i] == '`' {
-			i++
-		}
-		p.pos = i
-		if i-runStart == tickLen {
-			node := NewNode(NodeCode)
-			// Line endings become spaces; then one leading and one trailing
-			// space are stripped together, but only if the content is not all
-			// spaces (which is what lets a code span hold backticks).
-			contents := strings.ReplaceAll(s[afterOpenTicks:p.pos-tickLen], "\n", " ")
-			hasNonSpace := false
-			for j := 0; j < len(contents); j++ {
-				if contents[j] != ' ' {
-					hasNonSpace = true
-					break
-				}
-			}
-			if len(contents) > 2 && contents[0] == ' ' && contents[len(contents)-1] == ' ' && hasNonSpace {
-				node.Literal = contents[1 : len(contents)-1]
-			} else {
-				node.Literal = contents
-			}
-			block.AppendChild(node)
-			return true
-		}
+	p.pos = scan.end
+	if scan.closed {
+		node := NewNode(NodeCode)
+		node.Literal = scan.literal
+		block.AppendChild(node)
+	} else {
+		// No closing run of the same length: the opener is literal text.
+		block.AppendChild(textNode(scan.ticks))
 	}
-
-	// No closing run of the same length: the opener is literal text.
-	p.pos = afterOpenTicks
-	block.AppendChild(textNode(s[startpos:afterOpenTicks]))
 	return true
 }
 
 // --- §6.1 backslash escapes, §6.7 hard line breaks ---
 
 func (p *inlineParser) parseBackslash(block *MdNode) bool {
-	p.pos++
-	if p.peek() == '\n' {
-		p.pos++
+	scan := scanEscape(p.subject, p.pos)
+	p.pos = scan.end
+	if scan.kind == "linebreak" {
 		block.AppendChild(NewNode(NodeLinebreak))
-		p.skipSpaces()
-	} else if p.pos < len(p.subject) && IsEscapable(p.subject[p.pos]) {
-		block.AppendChild(textNode(p.subject[p.pos : p.pos+1]))
-		p.pos++
 	} else {
-		block.AppendChild(textNode(`\`))
+		block.AppendChild(textNode(scan.literal))
 	}
 	return true
 }
@@ -415,17 +770,13 @@ func (p *inlineParser) parseBackslash(block *MdNode) bool {
 // --- §6.5 autolinks ---
 
 func (p *inlineParser) parseAutolink(block *MdNode) bool {
-	if m, ok := p.match(reEmailAutolink); ok {
-		dest := m[1 : len(m)-1]
-		block.AppendChild(p.makeAutolink("mailto:"+dest, dest))
-		return true
+	scan := scanAngleAutolink(p.subject, p.pos)
+	if scan == nil {
+		return false
 	}
-	if m, ok := p.match(reAutolink); ok {
-		dest := m[1 : len(m)-1]
-		block.AppendChild(p.makeAutolink(dest, dest))
-		return true
-	}
-	return false
+	p.pos = scan.end
+	block.AppendChild(p.makeAutolink(scan.dest, scan.label))
+	return true
 }
 
 func (p *inlineParser) makeAutolink(destination string, label string) *MdNode {
@@ -442,12 +793,13 @@ func (p *inlineParser) makeAutolink(destination string, label string) *MdNode {
 // --- §6.6 raw HTML ---
 
 func (p *inlineParser) parseHtmlTag(block *MdNode) bool {
-	m, ok := p.match(reHtmlTag)
+	raw, end, ok := scanHtmlTag(p.subject, p.pos)
 	if !ok {
 		return false
 	}
+	p.pos = end
 	node := NewNode(NodeHTMLInline)
-	node.Literal = m
+	node.Literal = raw
 	block.AppendChild(node)
 	return true
 }
@@ -466,45 +818,7 @@ func (p *inlineParser) parseHtmlTag(block *MdNode) bool {
 // classify `é` or `。` by its first UTF-8 byte and most of §6.4 quietly
 // breaks on non-ASCII input.
 func (p *inlineParser) scanDelims(cc byte) *delimScan {
-	startpos := p.pos
-	numdelims := 0
-
-	for p.pos < len(p.subject) && p.subject[p.pos] == cc {
-		numdelims++
-		p.pos++
-	}
-	if numdelims == 0 {
-		return nil
-	}
-
-	charBefore := p.charBefore(startpos)
-	charAfter := p.charAtPos(p.pos)
-
-	afterIsWhitespace := isUnicodeWhitespace(charAfter)
-	// §2.1 punctuation is P* ∪ S*, which isUnicodePunctuation already covers.
-	// `*$*alpha.` is the case that needs the symbol half: with `$` counted as
-	// punctuation the closing `*` is not right-flanking, so the line stays
-	// literal text.
-	afterIsPunctuation := isUnicodePunctuation(charAfter)
-	beforeIsWhitespace := isUnicodeWhitespace(charBefore)
-	beforeIsPunctuation := isUnicodePunctuation(charBefore)
-
-	leftFlanking := !afterIsWhitespace &&
-		(!afterIsPunctuation || beforeIsWhitespace || beforeIsPunctuation)
-	rightFlanking := !beforeIsWhitespace &&
-		(!beforeIsPunctuation || afterIsWhitespace || afterIsPunctuation)
-
-	var canOpen, canClose bool
-	if cc == '_' {
-		canOpen = leftFlanking && (!rightFlanking || beforeIsPunctuation)
-		canClose = rightFlanking && (!leftFlanking || afterIsPunctuation)
-	} else {
-		canOpen = leftFlanking
-		canClose = rightFlanking
-	}
-
-	p.pos = startpos
-	return &delimScan{numdelims: numdelims, canOpen: canOpen, canClose: canClose}
+	return scanDelimiterRun(p.subject, p.pos, cc)
 }
 
 // handleDelim emits a delimiter run as text and pushes it on the delimiter
@@ -699,11 +1013,12 @@ func (p *inlineParser) processEmphasis(stackBottom *delimiter) {
 // parseLinkTitle returns the link title without its delimiters, unescaped.
 // The bool is false when there is no title here — TS's `null`.
 func (p *inlineParser) parseLinkTitle() (string, bool) {
-	title, ok := p.match(reLinkTitle)
+	title, end, ok := scanLinkTitle(p.subject, p.pos)
 	if !ok {
 		return "", false
 	}
-	return unescapeString(title[1 : len(title)-1]), true
+	p.pos = end
+	return title, true
 }
 
 // parseLinkDestination returns a destination that is backslash-unescaped and
@@ -718,61 +1033,12 @@ func (p *inlineParser) parseLinkTitle() (string, bool) {
 // unescaped parentheses and no ASCII control characters or spaces. The bool
 // is false when there is no destination here.
 func (p *inlineParser) parseLinkDestination() (string, bool) {
-	if braced, ok := p.match(reLinkDestinationBraces); ok {
-		return unescapeString(braced[1 : len(braced)-1]), true
-	}
-	if p.peek() == '<' {
+	dest, end, ok := scanLinkDestination(p.subject, p.pos)
+	if !ok {
 		return "", false
 	}
-
-	savepos := p.pos
-	openparens := 0
-	c := p.peek()
-
-scan:
-	for c != -1 {
-		switch {
-		case c == '\\' && p.pos+1 < len(p.subject) && IsEscapable(p.subject[p.pos+1]):
-			p.pos++
-			if p.peek() != -1 {
-				p.pos++
-			}
-		case c == '(':
-			// Bail rather than scan on once nesting passes the limit. Without
-			// this, input like `[a](b` repeated makes every `]` scan to end of
-			// input looking for parens that never balance, which is quadratic
-			// in the document size. cmark caps nesting at the same depth, and
-			// no spec example nests more than two deep.
-			if maxLinkParenNesting <= openparens {
-				return "", false
-			}
-			p.pos++
-			openparens++
-		case c == ')':
-			if openparens < 1 {
-				break scan
-			}
-			p.pos++
-			openparens--
-		case c <= ' ' || c == 0x7F:
-			// Spaces and ASCII control characters end the bare form.
-			break scan
-		default:
-			p.pos++
-		}
-		c = p.peek()
-	}
-
-	// An empty destination is only legal immediately before the closing paren
-	// of an inline link, as in `[link]()`.
-	if p.pos == savepos && c != ')' {
-		return "", false
-	}
-	if openparens != 0 {
-		return "", false
-	}
-
-	return unescapeString(p.subject[savepos:p.pos]), true
+	p.pos = end
+	return dest, true
 }
 
 // parseLinkLabel returns the byte length of the link label at pos, brackets
@@ -786,56 +1052,14 @@ scan:
 // character that is not `]`, so shortening the run can only put a non-`]`
 // where the closing bracket must be.
 func (p *inlineParser) parseLinkLabel() int {
-	s := p.subject
-	start := p.pos
-	if start >= len(s) || s[start] != '[' {
+	rawLen, length, ok := scanLinkLabel(p.subject, p.pos)
+	if !ok {
 		return 0
 	}
-
-	i := start + 1
-	iters := 0
-	// Length in UTF-16 code units, which is the unit TS's `m.length > 1001`
-	// test counts in — hence the 2 for an astral character below.
-	units := 1
-
-	for {
-		if i >= len(s) {
-			return 0
-		}
-		c := s[i]
-		if c == ']' {
-			i++
-			units++
-			p.pos = i
-			// §4.7: at most 999 characters between the brackets.
-			if units > 1001 {
-				return 0
-			}
-			return i - start
-		}
-		// An unescaped `[` cannot be consumed by the repeat, and is not the
-		// `]` the pattern then demands. Nor can a 1001st repeat run.
-		if c == '[' || iters == 1000 {
-			return 0
-		}
-		if c == '\\' {
-			// `\\.` — with the `s` flag, any character at all, line endings
-			// included.
-			i++
-			units++
-			if i >= len(s) {
-				return 0
-			}
-		}
-		r, size := utf8.DecodeRuneInString(s[i:])
-		i += size
-		if r > 0xFFFF {
-			units += 2
-		} else {
-			units++
-		}
-		iters++
-	}
+	// The raw match is consumed even when it is too long to be a valid
+	// label; callers that need the position back reset it themselves.
+	p.pos += rawLen
+	return length
 }
 
 func (p *inlineParser) addBracket(node *MdNode, index int, image bool) {
@@ -913,28 +1137,11 @@ func (p *inlineParser) parseCloseBracket(block *MdNode) bool {
 	savepos := p.pos
 
 	// Inline link: `](` destination title `)`.
-	if p.peek() == '(' {
-		p.pos++
-		p.spnl()
-		if d, ok := p.parseLinkDestination(); ok {
-			p.spnl()
-			// A title has to be separated from the destination by whitespace,
-			// so `[a](/url"t")` is not a titled link.
-			t, tOK := "", false
-			if p.pos-1 >= 0 && p.pos-1 < len(p.subject) && isInlineWhitespaceByte(p.subject[p.pos-1]) {
-				t, tOK = p.parseLinkTitle()
-			}
-			p.spnl()
-			if p.peek() == ')' {
-				p.pos++
-				dest = d
-				title, hasTitle = t, tOK
-				matched = true
-			}
-		}
-		if !matched {
-			p.pos = savepos
-		}
+	if tail := scanInlineLinkTail(p.subject, p.pos); tail != nil {
+		p.pos = tail.end
+		dest = tail.dest
+		title, hasTitle = tail.title, tail.hasTitle
+		matched = true
 	}
 
 	if !matched {
@@ -1020,11 +1227,12 @@ func (p *inlineParser) parseCloseBracket(block *MdNode) bool {
 // --- §6.2 entities, §6.8/§6.9 breaks and plain text ---
 
 func (p *inlineParser) parseEntity(block *MdNode) bool {
-	m, ok := p.match(reEntityHere)
+	literal, end, ok := scanEntity(p.subject, p.pos)
 	if !ok {
 		return false
 	}
-	block.AppendChild(textNode(decodeEntity(m)))
+	p.pos = end
+	block.AppendChild(textNode(literal))
 	return true
 }
 
@@ -1052,12 +1260,16 @@ func (p *inlineParser) parseString(block *MdNode) bool {
 func (p *inlineParser) parseNewline(block *MdNode) bool {
 	p.pos++
 	lastc := block.LastChild
-	if lastc != nil && lastc.Type == NodeText &&
-		len(lastc.Literal) > 0 && lastc.Literal[len(lastc.Literal)-1] == ' ' {
-		hardbreak := len(lastc.Literal) > 1 && lastc.Literal[len(lastc.Literal)-2] == ' '
+	isText := lastc != nil && lastc.Type == NodeText
+	prev := ""
+	if isText {
+		prev = lastc.Literal
+	}
+	hard, trim := classifyBreak(prev, isText)
+	if trim {
 		// TS: literal.replace(/ *$/, '').
 		lastc.Literal = strings.TrimRight(lastc.Literal, " ")
-		if hardbreak {
+		if hard {
 			block.AppendChild(NewNode(NodeLinebreak))
 		} else {
 			block.AppendChild(NewNode(NodeSoftbreak))

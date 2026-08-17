@@ -47,9 +47,6 @@ const C_OPEN_BRACKET = 91
 const C_BACKSLASH = 92
 const C_PIPE = 124
 
-/** §2.1: \r\n, \n and a lone \r are all line endings. */
-const RE_LINE_ENDING = /\r\n|\n|\r/
-
 /** §4.1: 3+ matching `*`, `_` or `-`, each optionally followed by spaces/tabs. */
 const RE_THEMATIC_BREAK = /^(?:\*[ \t]*){3,}$|^(?:_[ \t]*){3,}$|^(?:-[ \t]*){3,}$/
 
@@ -216,8 +213,127 @@ function isSpaceOrTab(c: number): boolean {
   return C_SPACE === c || C_TAB === c
 }
 
-function isBlank(s: string): boolean {
+export function isBlank(s: string): boolean {
   return !RE_NON_SPACE.test(s)
+}
+
+// --- line recognizers -------------------------------------------------------
+//
+// Pure functions over one line of text (usually the slice from the first
+// non-space character on). Recognition split from the block starts and
+// handlers that act on it, and exported so any other driver over the same
+// syntax shares this exact recognition logic instead of reimplementing it.
+// Each is the single home of the regex it wraps.
+
+/** One physical line of `src` starting at `pos`, with §2.3's NUL replacement. */
+export type LineSegment = { text: string; next: number }
+
+/**
+ * Cut the next physical line out of `src` at `pos`: up to (not including)
+ * the next `\n`, `\r` or `\r\n`, with `next` past the terminator. Null at
+ * the end of the source — which is why a final line ending does not
+ * introduce a trailing blank line. Insecure NULs are replaced here, before
+ * anything else looks at the text.
+ */
+export function segmentNextLine(src: string, pos: number): LineSegment | null {
+  if (pos >= src.length) return null
+
+  let i = pos
+  while (i < src.length) {
+    const c = src.charCodeAt(i)
+    if (10 === c || 13 === c) break
+    i++
+  }
+
+  let next = i
+  if (next < src.length) {
+    if (
+      13 === src.charCodeAt(next) &&
+      next + 1 < src.length &&
+      10 === src.charCodeAt(next + 1)
+    ) {
+      next += 2
+    } else {
+      next += 1
+    }
+  }
+
+  let text = src.slice(pos, i)
+  if (-1 !== text.indexOf('\u0000')) text = text.replace(/\0/g, '\uFFFD')
+  return { text, next }
+}
+
+/** §4.1: is `rest` a thematic break? */
+export function isThematicBreakLine(rest: string): boolean {
+  return RE_THEMATIC_BREAK.test(rest)
+}
+
+/** §4.2: the ATX marker opening `rest`, with its heading level. */
+export function matchAtxHeading(rest: string): { marker: string; level: number } | null {
+  const m = rest.match(RE_ATX_HEADING_MARKER)
+  if (null === m) return null
+  return { marker: m[0], level: m[0].replace(/[ \t]+$/, '').length }
+}
+
+/**
+ * §4.2: drop an optional closing sequence of `#`s, preceded by spaces or
+ * tabs; a line of nothing but `#`s has empty content.
+ */
+export function stripAtxClosing(content: string): string {
+  return content.replace(/^[ \t]*#+[ \t]*$/, '').replace(/[ \t]+#+[ \t]*$/, '')
+}
+
+/** §4.5: the opening code fence at the start of `rest`, or null. */
+export function matchCodeFence(rest: string): string | null {
+  const m = rest.match(RE_CODE_FENCE)
+  return null === m ? null : m[0]
+}
+
+/**
+ * §4.5: the closing-fence candidate at the start of `rest`, or null. The
+ * caller still checks the fence character and length against the open block.
+ */
+export function matchClosingCodeFence(rest: string): string | null {
+  const m = rest.match(RE_CLOSING_CODE_FENCE)
+  return null === m ? null : m[0]
+}
+
+/** §4.3: setext underline level — 1 for `=`, 2 for `-`, 0 if neither. */
+export function setextHeadingLevel(rest: string): number {
+  const m = rest.match(RE_SETEXT_HEADING_LINE)
+  if (null === m) return 0
+  return '=' === m[0][0] ? 1 : 2
+}
+
+/**
+ * §4.6: which of the seven HTML block kinds `rest` opens, or 0. The type-7
+ * paragraph-interrupt restriction is contextual and stays with the caller.
+ */
+export function htmlBlockOpenKind(rest: string): number {
+  for (let blockType = 1; blockType <= 7; blockType++) {
+    if (RE_HTML_BLOCK_OPEN[blockType].test(rest)) return blockType
+  }
+  return 0
+}
+
+/** §4.6: does `rest` contain the closing condition for HTML block `type`? */
+export function htmlBlockCloses(rest: string, type: number): boolean {
+  return RE_HTML_BLOCK_CLOSE[type].test(rest)
+}
+
+/** §5.2: the bullet list marker opening `rest`, or null. */
+export function matchBulletListMarker(rest: string): { marker: string; char: string } | null {
+  const m = rest.match(RE_BULLET_LIST_MARKER)
+  return null === m ? null : { marker: m[0], char: m[0][0] }
+}
+
+/** §5.2: the ordered list marker opening `rest`, or null. */
+export function matchOrderedListMarker(
+  rest: string,
+): { marker: string; start: number; delimiter: string } | null {
+  const m = rest.match(RE_ORDERED_LIST_MARKER)
+  if (null === m) return null
+  return { marker: m[0], start: parseInt(m[1], 10), delimiter: m[2] }
 }
 
 // --- GFM tables (extension) -------------------------------------------------
@@ -265,7 +381,7 @@ function trimAsciiSpace(s: string): string {
  * candidate that is really empty fails the cell-count test instead of matching
  * a one-column delimiter row.
  */
-function splitTableRow(line: string): string[] {
+export function splitTableRow(line: string): string[] {
   let start = 0
   let end = line.length
   while (start < end && isAsciiSpace(line.charCodeAt(start))) start++
@@ -329,7 +445,7 @@ const RE_TABLE_DELIMITER_CELL = /^(:?)-+(:?)$/
  * Read a line as a table's delimiter row, returning one alignment per column,
  * or null if it is not one.
  */
-function parseDelimiterRow(line: string): TableAlign[] | null {
+export function parseDelimiterRow(line: string): TableAlign[] | null {
   const cells = splitTableRow(line)
   if (0 === cells.length) return null
 
@@ -538,13 +654,12 @@ const BLOCK_HANDLERS: Record<string, BlockHandler> = {
       if (container.isFenced) {
         // §4.5: the closing fence is the same character, at least as long, at
         // most 3 columns indented, and followed only by spaces/tabs.
-        const rest = ln.slice(parser.nextNonspace)
         const match =
           indent <= 3 && ln.charAt(parser.nextNonspace) === container.fenceChar
-            ? rest.match(RE_CLOSING_CODE_FENCE)
+            ? matchClosingCodeFence(ln.slice(parser.nextNonspace))
             : null
-        if (match && match[0].length >= container.fenceLength) {
-          parser.lastLineLength = charCount(ln.slice(0, parser.offset + indent + match[0].length))
+        if (null !== match && match.length >= container.fenceLength) {
+          parser.lastLineLength = charCount(ln.slice(0, parser.offset + indent + match.length))
           parser.finalize(container, parser.lineNumber)
           return 2
         }
@@ -770,35 +885,38 @@ function parseListMarker(parser: BlockParser, container: MdNode): ListData | nul
     markerOffset: parser.indent,
   }
 
-  let match = rest.match(RE_BULLET_LIST_MARKER)
-  if (match) {
+  let marker: string
+  const bullet = matchBulletListMarker(rest)
+  if (null !== bullet) {
+    marker = bullet.marker
     data.type = 'bullet'
-    data.bulletChar = match[0][0]
+    data.bulletChar = bullet.char
   } else {
-    match = rest.match(RE_ORDERED_LIST_MARKER)
+    const ordered = matchOrderedListMarker(rest)
     // §5.2 exception 1(b): an ordered item interrupting a paragraph must start at 1.
-    if (null === match || ('paragraph' === container.type && 1 !== parseInt(match[1], 10))) {
+    if (null === ordered || ('paragraph' === container.type && 1 !== ordered.start)) {
       return null
     }
+    marker = ordered.marker
     data.type = 'ordered'
-    data.start = parseInt(match[1], 10)
-    data.delimiter = match[2]
+    data.start = ordered.start
+    data.delimiter = ordered.delimiter
   }
 
   // At least one space or tab (or the end of the line) must follow the marker.
-  let nextc = peek(parser.currentLine, parser.nextNonspace + match[0].length)
+  let nextc = peek(parser.currentLine, parser.nextNonspace + marker.length)
   if (!(-1 === nextc || C_TAB === nextc || C_SPACE === nextc)) return null
 
   // §5.2 exception 1(a): an item interrupting a paragraph may not start blank.
   if (
     'paragraph' === container.type &&
-    !RE_NON_SPACE.test(parser.currentLine.slice(parser.nextNonspace + match[0].length))
+    !RE_NON_SPACE.test(parser.currentLine.slice(parser.nextNonspace + marker.length))
   ) {
     return null
   }
 
   parser.advanceNextNonspace() // to the marker
-  parser.advanceOffset(match[0].length, true) // past the marker
+  parser.advanceOffset(marker.length, true) // past the marker
 
   const spacesStartCol = parser.column
   const spacesStartOffset = parser.offset
@@ -811,12 +929,12 @@ function parseListMarker(parser: BlockParser, container: MdNode): ListData | nul
   const spacesAfterMarker = parser.column - spacesStartCol
 
   if (spacesAfterMarker >= 5 || spacesAfterMarker < 1 || blankItem) {
-    data.padding = match[0].length + 1
+    data.padding = marker.length + 1
     parser.column = spacesStartCol
     parser.offset = spacesStartOffset
     if (isSpaceOrTab(peek(parser.currentLine, parser.offset))) parser.advanceOffset(1, true)
   } else {
-    data.padding = match[0].length + spacesAfterMarker
+    data.padding = marker.length + spacesAfterMarker
   }
 
   return data
@@ -852,21 +970,16 @@ const BLOCK_STARTS: BlockStart[] = [
   // ATX heading (§4.2).
   (parser) => {
     if (parser.indented) return 0
-    const match = parser.currentLine.slice(parser.nextNonspace).match(RE_ATX_HEADING_MARKER)
+    const match = matchAtxHeading(parser.currentLine.slice(parser.nextNonspace))
     if (null === match) return 0
 
     parser.advanceNextNonspace()
-    parser.advanceOffset(match[0].length, false)
+    parser.advanceOffset(match.marker.length, false)
     parser.closeUnmatchedBlocks()
 
     const container = parser.addChild('heading', parser.nextNonspace)
-    container.level = match[0].replace(/[ \t]+$/, '').length
-    // An optional closing sequence of `#`s, preceded by spaces or tabs, is
-    // dropped; a line of nothing but `#`s has empty content.
-    container.stringContent = parser.currentLine
-      .slice(parser.offset)
-      .replace(/^[ \t]*#+[ \t]*$/, '')
-      .replace(/[ \t]+#+[ \t]*$/, '')
+    container.level = match.level
+    container.stringContent = stripAtxClosing(parser.currentLine.slice(parser.offset))
     parser.advanceOffset(parser.currentLine.length - parser.offset, false)
     return 2
   },
@@ -874,15 +987,15 @@ const BLOCK_STARTS: BlockStart[] = [
   // Fenced code block (§4.5).
   (parser) => {
     if (parser.indented) return 0
-    const match = parser.currentLine.slice(parser.nextNonspace).match(RE_CODE_FENCE)
-    if (null === match) return 0
+    const fence = matchCodeFence(parser.currentLine.slice(parser.nextNonspace))
+    if (null === fence) return 0
 
-    const fenceLength = match[0].length
+    const fenceLength = fence.length
     parser.closeUnmatchedBlocks()
     const container = parser.addChild('code_block', parser.nextNonspace)
     container.isFenced = true
     container.fenceLength = fenceLength
-    container.fenceChar = match[0][0]
+    container.fenceChar = fence[0]
     container.fenceOffset = parser.indent
     parser.advanceNextNonspace()
     parser.advanceOffset(fenceLength, false)
@@ -894,33 +1007,30 @@ const BLOCK_STARTS: BlockStart[] = [
   (parser, container) => {
     if (parser.indented || C_LESSTHAN !== peek(parser.currentLine, parser.nextNonspace)) return 0
 
-    const s = parser.currentLine.slice(parser.nextNonspace)
-    for (let blockType = 1; blockType <= 7; blockType++) {
-      if (!RE_HTML_BLOCK_OPEN[blockType].test(s)) continue
-      // Type 7 may not interrupt a paragraph — including a paragraph we are
-      // only about to continue lazily.
-      if (
-        7 === blockType &&
-        ('paragraph' === container.type ||
-          (!parser.allClosed && !parser.blank && 'paragraph' === parser.openTip.type))
-      ) {
-        continue
-      }
-      parser.closeUnmatchedBlocks()
-      // The offset is deliberately not advanced: leading spaces are part of
-      // the raw HTML.
-      const block = parser.addChild('html_block', parser.offset)
-      parser.setHtmlBlockType(block, blockType)
-      return 2
+    const blockType = htmlBlockOpenKind(parser.currentLine.slice(parser.nextNonspace))
+    if (0 === blockType) return 0
+    // Type 7 may not interrupt a paragraph — including a paragraph we are
+    // only about to continue lazily.
+    if (
+      7 === blockType &&
+      ('paragraph' === container.type ||
+        (!parser.allClosed && !parser.blank && 'paragraph' === parser.openTip.type))
+    ) {
+      return 0
     }
-    return 0
+    parser.closeUnmatchedBlocks()
+    // The offset is deliberately not advanced: leading spaces are part of
+    // the raw HTML.
+    const block = parser.addChild('html_block', parser.offset)
+    parser.setHtmlBlockType(block, blockType)
+    return 2
   },
 
   // Setext heading underline (§4.3) — converts the whole open paragraph.
   (parser, container) => {
     if (parser.indented || 'paragraph' !== container.type) return 0
-    const match = parser.currentLine.slice(parser.nextNonspace).match(RE_SETEXT_HEADING_LINE)
-    if (null === match) return 0
+    const level = setextHeadingLevel(parser.currentLine.slice(parser.nextNonspace))
+    if (0 === level) return 0
 
     parser.closeUnmatchedBlocks()
 
@@ -938,7 +1048,7 @@ const BLOCK_STARTS: BlockStart[] = [
 
     const start = container.sourcepos[0]
     const heading = new MdNode('heading', [[start[0], start[1]], [0, 0]])
-    heading.level = '=' === match[0][0] ? 1 : 2
+    heading.level = level
     heading.stringContent = container.stringContent
     container.insertAfter(heading)
     container.unlink()
@@ -950,7 +1060,7 @@ const BLOCK_STARTS: BlockStart[] = [
   // Thematic break (§4.1).
   (parser) => {
     if (parser.indented) return 0
-    if (!RE_THEMATIC_BREAK.test(parser.currentLine.slice(parser.nextNonspace))) return 0
+    if (!isThematicBreakLine(parser.currentLine.slice(parser.nextNonspace))) return 0
     parser.closeUnmatchedBlocks()
     parser.addChild('thematic_break', parser.nextNonspace)
     parser.advanceOffset(parser.currentLine.length - parser.offset, false)
@@ -1464,7 +1574,7 @@ class BlockParser {
         if (
           1 <= type &&
           type <= 5 &&
-          RE_HTML_BLOCK_CLOSE[type].test(this.currentLine.slice(this.offset))
+          htmlBlockCloses(this.currentLine.slice(this.offset), type)
         ) {
           this.lastLineLength = charCount(ln)
           this.finalize(container, this.lineNumber)
@@ -1482,16 +1592,21 @@ class BlockParser {
   }
 
   parse(input: string): { doc: MdNode; refmap: RefMap } {
-    // §2.3: insecure characters are replaced before anything else looks at them.
-    const text = -1 === input.indexOf('\u0000') ? input : input.replace(/\0/g, '\uFFFD')
-
-    const lines = text.split(RE_LINE_ENDING)
-    let len = lines.length
-    // A final line ending does not introduce a trailing blank line.
-    if (0 < text.length && '' === lines[len - 1]) len -= 1
-
-    for (let i = 0; i < len; i++) {
-      this.incorporateLine(lines[i])
+    // An empty document still incorporates one empty line, exactly as the
+    // historical split-based loop did — line count and sourcepos depend on
+    // it. Line cutting and §2.3 NUL replacement both live in `segmentNextLine`.
+    let len = 0
+    if (0 === input.length) {
+      this.incorporateLine('')
+      len = 1
+    } else {
+      let pos = 0
+      let seg: LineSegment | null
+      while (null !== (seg = segmentNextLine(input, pos))) {
+        this.incorporateLine(seg.text)
+        pos = seg.next
+        len += 1
+      }
     }
 
     while (this.tip) {
@@ -1520,6 +1635,19 @@ class BlockParser {
  * paragraph's first soft break.
  */
 const RE_TASK_LIST_MARKER = /^ *\[([ \tXx])\][ \t]+/
+
+/**
+ * GFM: the task list item marker opening `content`, or null. Whitespace
+ * between the brackets is unchecked; `x`/`X` is checked. `length` is what the
+ * caller strips, trailing whitespace included.
+ */
+export function matchTaskListMarker(
+  content: string,
+): { checked: boolean; length: number } | null {
+  const m = RE_TASK_LIST_MARKER.exec(content)
+  if (null === m) return null
+  return { checked: ' ' !== m[1] && '\t' !== m[1], length: m[0].length }
+}
 
 const TASK_LIST_CONTAINERS: Record<string, true> = {
   document: true,
@@ -1552,11 +1680,10 @@ function markTaskListItems(doc: MdNode): void {
     if ('item' === node.type) {
       const first = node.firstChild
       if (null !== first && 'paragraph' === first.type) {
-        const m = RE_TASK_LIST_MARKER.exec(first.stringContent)
+        const m = matchTaskListMarker(first.stringContent)
         if (null !== m) {
-          // Whitespace between the brackets is unchecked; `x`/`X` is checked.
-          node.checked = ' ' !== m[1] && '\t' !== m[1]
-          first.stringContent = first.stringContent.slice(m[0].length)
+          node.checked = m.checked
+          first.stringContent = first.stringContent.slice(m.length)
         }
       }
     }
