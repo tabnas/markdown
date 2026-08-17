@@ -47,11 +47,12 @@ describe('compose: markdown + @tabnas/debug', () => {
     tn.use(Debug, { print: false, trace: false })
     const m = tn.debug.model()
 
-    // Prose parser is bare-engine: only the `markdown` entry rule is
-    // installed. The old CSV `record`/`list`/`text` rules are gone.
+    // The engine block driver's grammar: `markdown` pushes `line`, and
+    // `line` tail-recurses one `#LB` token per physical line (see
+    // engine-block.ts). The old single token-draining rule is gone.
     assert.deepStrictEqual(
       m.rules.map((r: any) => r.name).sort(),
-      ['markdown'],
+      ['line', 'markdown'],
     )
 
     // Entry rule is `markdown`.
@@ -63,11 +64,15 @@ describe('compose: markdown + @tabnas/debug', () => {
 
     const markdown = m.rules.find((r: any) => r.name === 'markdown')
     assert.ok(markdown, 'markdown rule should exist')
-    // The markdown rule consumes the token stream via #AA repetition
-    // so the engine's trailing-content check passes. The actual block
-    // structure lives in JS (parseDocument), not in declarative alts.
     assert.ok(Array.isArray(markdown.open), 'markdown.open should exist')
     assert.ok(Array.isArray(markdown.close), 'markdown.close should exist')
+
+    // The `line` rule is where the engine genuinely drives the parse: its
+    // open alt consumes `#LB` and recurses. Block *decisions* still live in
+    // the shared engine-free core, by design (dx-report §42).
+    const line = m.rules.find((r: any) => r.name === 'line')
+    assert.ok(line, 'line rule should exist')
+    assert.ok(Array.isArray(line.open), 'line.open should exist')
 
     // JSON round-trip
     const grammar = {

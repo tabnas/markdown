@@ -1972,8 +1972,17 @@ func (p *blockParser) parse(input string) (*MdNode, RefMap) {
 		}
 	}
 
+	return p.finish()
+}
+
+// finish closes every still-open block, stamps the parse-time GFM flag, and
+// runs the task-list post-pass. lineNumber is the count of incorporated
+// lines, so an incremental driver — one that feeds incorporateLine itself
+// instead of calling parse — finishes with exactly the same finalization the
+// batch loop above gets. Mirrors ts/src/block.ts finish.
+func (p *blockParser) finish() (*MdNode, RefMap) {
 	for p.tip != nil {
-		p.finalize(p.tip, length)
+		p.finalize(p.tip, p.lineNumber)
 	}
 
 	p.doc.GFM = p.options.GFM

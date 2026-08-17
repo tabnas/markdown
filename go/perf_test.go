@@ -1,6 +1,7 @@
 package tabnasmarkdown
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ func makeMarkdownParser() *parser.Tabnas {
 // the shape that would catch it rebuilding the grammar per call — see yaml's
 // TestParseReusesInstance / json's sync.Once defaultParser.)
 func TestParseReusesInstance(t *testing.T) {
-	const src = "a,b,c\n1,2,3"
+	const src = "# Title\n\npara with *em* and `code`\n\n- item one\n- item two"
 	const n = 2000
 
 	// Warm both paths so the comparison is steady-state.
@@ -79,4 +80,58 @@ func TestParseReusesInstance(t *testing.T) {
 	}
 	t.Logf("rebuild-per-parse=%v  reuse-one=%v  rebuild/reuse=%.2fx",
 		rebuild, reuse, float64(rebuild)/float64(reuse))
+}
+
+// TestEngineBlockLinearity pins the engine block driver's linearity: the
+// plugin path lexes one #LB token per line and feeds it to the shared
+// incorporateLine, so doubling the document must roughly double the parse
+// time. A regression to per-token re-parsing (the pre-driver wiring ran the
+// whole engine-free parse once per drained token) blows this ratio
+// immediately. Per dx-report §26's lesson the assertion is a same-run ratio,
+// never a wall-clock budget, and the slack is generous: linear is ~2x,
+// quadratic is ~4x on the doubling alone and far worse in practice.
+func TestEngineBlockLinearity(t *testing.T) {
+	j := makeMarkdownParser()
+
+	mk := func(n int) string {
+		var b strings.Builder
+		for i := 0; i < n; i++ {
+			b.WriteString("para *em* `c` line\n\n- item [x] here\n> quote | cell\n\n")
+		}
+		return b.String()
+	}
+	small, large := mk(400), mk(800)
+
+	// Warm both sizes so the comparison is steady-state.
+	for i := 0; i < 3; i++ {
+		if _, err := j.Parse(small); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := j.Parse(large); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const iters = 5
+	t0 := time.Now()
+	for i := 0; i < iters; i++ {
+		if _, err := j.Parse(small); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dSmall := time.Since(t0)
+
+	t1 := time.Now()
+	for i := 0; i < iters; i++ {
+		if _, err := j.Parse(large); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dLarge := time.Since(t1)
+
+	ratio := float64(dLarge) / float64(dSmall)
+	if ratio > 6 {
+		t.Errorf("engine block path is not linear: doubling the document made the parse %.1fx slower (limit 6x)", ratio)
+	}
+	t.Logf("small=%v large=%v large/small=%.2fx", dSmall, dLarge, ratio)
 }

@@ -193,7 +193,8 @@ Source files, mirrored name for name across the two runtimes:
 | `ts/src/inline.ts` | `go/inline.go` | Phase 2 — inlines, delimiter stack, bracket stack. |
 | `ts/src/ast.ts` | `go/ast.go` | Projection from the native tree to the public JSON AST. |
 | `ts/src/html.ts` | `go/html.go` | HTML renderer over the native tree. |
-| `ts/src/markdown.ts` | `go/markdown.go` | Plugin wiring and the public surface. **The only file that imports the engine.** |
+| `ts/src/markdown.ts` | `go/markdown.go` | Plugin wiring and the public surface. With the drivers below, one of the only files that import the engine. |
+| `ts/src/engine-block.ts` | `go/engineblock.go` | The engine-facing block driver: the `mdLine` matcher and the rule actions (see "Architecture notes"). Engine-facing modules (`markdown.*`, `engine-*`) are the ONLY files that may import the engine; nothing reachable from `commonmark.ts` / `commonmark.go` does, which is what keeps the conformance suite runnable engine-free. |
 | `ts/src/entities.ts` | — | Generated HTML5 named character references (2125 semicolon-terminated entries). Go uses the standard library's table instead, gated to reject the legacy semicolon-less forms §6.2 does not allow. |
 
 There is **no CLI** (`package.json` has no `bin`). There is no
@@ -444,13 +445,20 @@ node's text as hostile.
   tag, `cr()` is a no-op at line start, and no block emits a newline on
   behalf of a neighbour or child. Changing that breaks conformance
   examples.
-* **Plugin wiring** (`markdown.ts` / `markdown.go`): entry rule is
-  `markdown`; the `bo` action reads the whole source via `ctx.src()` and
-  hands it to the parser. Lex is disabled for `string`/`comment`/
-  `number`/`value` so backticks, `# headings` and `1. lists` are not
-  mis-lexed first. `lex.emptyResult` returns an empty document for `""`.
-  `rule.clear()` is required before defining `markdown`, or inherited
-  `val` alts try to match a leading `#`.
+* **Plugin wiring** (`markdown.ts` / `markdown.go`, with the driver in
+  `engine-block.ts` / `engineblock.go`): the engine parse IS the parse.
+  A custom `mdLine` lexer matcher (registered ahead of every built-in;
+  all built-ins disabled) emits one `#LB` token per physical line via the
+  shared `segmentNextLine`; `parse.prepare` seeds a fresh `BlockParser`
+  on `ctx.u.md`; the `line` rule consumes one `#LB` per iteration,
+  feeding the shared `incorporateLine`; the `markdown` rule's close
+  action on `#ZZ` finalizes, runs the shared inline phase, and projects
+  the AST into the rule's node. No block decision happens engine-side —
+  recognition and algorithm stay in the engine-free core (the anti-drift
+  rule, dx-report §42), asserted byte-for-byte by the differential gate
+  and the engine-path conformance suites. `lex.emptyResult` returns an
+  empty document for `""`. `rule.clear()` is required before defining
+  `markdown`, or inherited `val` alts try to match a leading `#`.
 * **Options**: `gfm` (default `true`; gates all five GFM extensions at
   once) and `breaks` (default `false`). `Markdown.defaults` / `Defaults`
   carry the same pair. `gfm` is the only option besides `breaks` that the

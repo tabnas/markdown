@@ -17,8 +17,9 @@
 // they are imported as such. Without `import type`, Node's type stripping
 // keeps them in the emitted import and demands runtime exports that do not
 // exist.
-import type { Tabnas, Plugin, Rule, Context } from '@tabnas/parser'
+import type { Tabnas, Plugin } from '@tabnas/parser'
 
+import { makeMdActions, makeMdLineMatcher } from './engine-block.ts'
 import { parse } from './commonmark.ts'
 import { toAst } from './ast.ts'
 import { renderHTML } from './html.ts'
@@ -114,42 +115,59 @@ export function parseTree(src: string, opts?: MarkdownOptions | ParserOptions): 
 // ---------------------------------------------------------------------------
 // Plugin wiring
 //
-// The `markdown` rule's `bo` action reads the whole source via `ctx.src()` and
-// hands it to the parser; the alts then consume the token stream so the
-// engine's trailing-content check (lex must end at #ZZ) passes. `#AA` is the
-// ANY-token wildcard and `r:'markdown'` loops at the same depth, consuming one
-// token per iteration until only #ZZ remains.
+// The engine parse IS the parse: the `mdLine` custom matcher (engine-block.ts)
+// lexes one `#LB` token per physical line, `parse.prepare` seeds a fresh
+// `BlockParser` on `ctx.u.md`, the `line` rule feeds each matched line to the
+// shared `incorporateLine`, and the `markdown` rule's close action on `#ZZ`
+// finalizes, runs the shared inline phase, and projects the public AST into
+// the rule's node. No recognition or block decision happens here — the
+// engine owns tokenization, dispatch and state carriage; the algorithm stays
+// in the engine-free core (the anti-drift rule, dx-report §42), which is
+// what keeps this path byte-identical to `parseDocument` (asserted by the
+// differential gate and the engine-path conformance harness).
 
 const Markdown: Plugin = (tn: Tabnas, options?: MarkdownOptions) => {
   const opts = resolveOptions(options)
+  const actions = makeMdActions(opts)
 
   tn.options({ rule: { start: 'markdown' } })
 
-  // The parser reads `ctx.src()` directly rather than the token stream, so
-  // disable the lexers that would corrupt Markdown syntax before it gets
-  // there: backtick code spans lex as unterminated strings, `# heading` as a
-  // comment, and `1. list` as a number.
+  // Every built-in matcher is off — deliberate configuration, not defense.
+  // Markdown's block alphabet is *lines*, so the one registered matcher is
+  // the complete lexical description of this phase: `mdLine`, at an order
+  // ahead of every built-in, consuming each physical line whole. (The
+  // built-ins would misread the syntax anyway: backtick code spans lex as
+  // unterminated strings, `# heading` as a comment, `1. list` as a number.)
   tn.options({
+    space: { lex: false },
+    line: { lex: false },
     string: { lex: false },
     comment: { lex: false },
     number: { lex: false },
     value: { lex: false },
-    lex: { emptyResult: { type: 'document', children: [] } },
-  })
-
-  const refs: Record<string, any> = {
-    '@markdown-bo': (r: Rule, ctx: Context) => {
-      const src: string = ctx.src()
-      r.node = parseDocument(src, opts)
+    text: { lex: false },
+    lex: {
+      emptyResult: { type: 'document', children: [] },
+      match: { mdLine: { order: 1e5, make: makeMdLineMatcher } },
     },
-  }
+    parse: { prepare: { 'md-reset': actions.prepare } },
+  })
 
   tn.rule('markdown', (rs) => {
     return rs
       .clear()
-      .bo(refs['@markdown-bo'] as any)
-      .open([{ s: '#AA', r: 'markdown' }, {}])
-      .close([{ s: '#ZZ' }, {}])
+      .open([{ p: 'line' }])
+      .close([{ s: '#ZZ', a: actions.finish }, {}])
+  })
+
+  // One `#LB` consumed per iteration, tail-recursing via `r:` until only
+  // `#ZZ` remains; the empty alts are the fall-through that hands control
+  // back to `markdown`'s close.
+  tn.rule('line', (rs) => {
+    return rs
+      .clear()
+      .open([{ s: '#LB', r: 'line', a: actions.line }, {}])
+      .close([{}])
   })
 
   // Not part of the tabnas contract, but useful for tests, docs and callers

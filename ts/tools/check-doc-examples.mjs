@@ -10,13 +10,14 @@
 // substitutes a small stand-in for the engine, and evaluates each documented
 // example so a wrong `// =>` value cannot be committed.
 //
-// The stand-in implements only what the plugin actually touches: `options`,
-// `rule` with the `clear/bo/open/close` chain, and a `parse` that invokes the
-// registered `bo` with a context exposing `src()`. That is the whole of the
-// plugin's contact surface (see the wiring at the bottom of markdown.ts), so
-// an example that passes here exercises the same parser the engine would call.
-// It does NOT check engine-level behaviour — token consumption, error
-// handling, `lex.emptyResult` — which remains the CI harness's job.
+// The stand-in implements only what the plugin actually touches: `options`
+// merging (the `mdLine` matcher registration, `parse.prepare`,
+// `lex.emptyResult`), the `rule` chain, and a `parse` that drives the
+// plugin's own matcher and alt actions the way the engine's lexer and rule
+// loop would (see the wiring at the bottom of markdown.ts). An example that
+// passes here exercises the same shared parser core the engine path calls.
+// It does NOT check engine-level behaviour — real token consumption, rule
+// dispatch order, error handling — which remains the CI harness's job.
 
 import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { join, dirname, relative } from 'node:path'
@@ -87,29 +88,68 @@ try {
 
   writeFileSync(
     join(stage, '__engine.ts'),
-    `// Stand-in for @tabnas/parser: only what the Markdown plugin touches.
+    `// Stand-in for @tabnas/parser: only what the Markdown plugin touches —
+// options merging (matcher registration, parse.prepare, lex.emptyResult),
+// the rule() chain, and a parse() that drives the plugin's own mdLine
+// matcher and alt actions the way the engine's lexer and rule loop would.
 export type Plugin = any
 export type Rule = any
 export type Context = any
+export type MakeLexMatcher = any
 export class Tabnas {
-  _opts: any = {}
-  _bo: any = null
-  options(o: any) { Object.assign(this._opts, o); return this }
-  rule(_name: string, def: any) {
-    const self = this
+  _opts: any = { lex: { match: {} }, parse: { prepare: {} } }
+  _rules: any = {}
+  options(o: any) {
+    for (const k of Object.keys(o)) {
+      if ('lex' === k) {
+        Object.assign(this._opts.lex.match, o.lex.match ?? {})
+        if ('emptyResult' in o.lex) this._opts.lex.emptyResult = o.lex.emptyResult
+      } else if ('parse' === k) {
+        Object.assign(this._opts.parse.prepare, o.parse.prepare ?? {})
+      } else {
+        this._opts[k] = o[k]
+      }
+    }
+    return this
+  }
+  rule(name: string, def: any) {
+    const spec: any = { open: [], close: [] }
     const rs = {
-      clear() { return rs },
-      bo(fn: any) { self._bo = fn; return rs },
-      open() { return rs },
-      close() { return rs },
+      clear() { spec.open = []; spec.close = []; return rs },
+      bo() { return rs },
+      open(alts: any) { spec.open = alts; return rs },
+      close(alts: any) { spec.close = alts; return rs },
     }
     def(rs)
+    this._rules[name] = spec
     return this
   }
   use(plugin: any, opts?: any) { plugin(this, opts); return this }
-  parse(src: string) {
+  parse(src: string, meta?: any) {
+    const ctx: any = { u: {}, meta }
+    for (const name of Object.keys(this._opts.parse.prepare)) {
+      this._opts.parse.prepare[name](this, ctx, meta)
+    }
+    if ('' === src) return this._opts.lex.emptyResult
+
+    const matcher = this._opts.lex.match.mdLine.make(null, null)
+    const pnt = { sI: 0, rI: 1, cI: 1 }
+    const lex = {
+      src,
+      pnt,
+      token: (name: string, val: any, tsrc: any, _p: any, use?: any) =>
+        ({ name, val, src: tsrc, use }),
+    }
+
+    const lineAlt = this._rules.line.open[0]
+    let tkn: any
+    while (undefined !== (tkn = matcher(lex, null))) {
+      lineAlt.a({ o0: tkn }, ctx)
+    }
+
+    const finishAlt = this._rules.markdown.close[0]
     const r: any = { node: undefined }
-    this._bo(r, { src: () => src })
+    finishAlt.a(r, ctx)
     return r.node
   }
 }
