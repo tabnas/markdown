@@ -170,7 +170,7 @@ There are two implementations that must behave identically — TypeScript
 |---|---|
 | [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/markdown` package. Depends on `@tabnas/parser` only, and only in `src/markdown.ts`. |
 | [`go/`](go/) | Go port — `github.com/tabnas/markdown/go`, package `tabnasmarkdown`. |
-| [`test/spec/`](test/spec/) | 82 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) across 10 `*.tsv` files, auto-discovered and run by both runtimes. The TS/Go parity contract. See `test/AGENTS.md`. |
+| [`test/spec/`](test/spec/) | 83 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) across 10 `*.tsv` files, auto-discovered and run by both runtimes. The TS/Go parity contract. See `test/AGENTS.md`. |
 | [`test/commonmark/spec.json`](test/commonmark/) | Vendored CommonMark 0.31.2 suite, 652 examples of Markdown → expected **HTML**. The conformance contract for both runtimes. See `test/AGENTS.md`. |
 | [`test/gfm/spec.json`](test/gfm/) | Vendored GFM extension corpus, 24 examples of Markdown → expected **HTML**, run with `gfm:true`. The extension contract for both runtimes. See `test/AGENTS.md`. |
 | [`markdown-grammar.jsonic`](markdown-grammar.jsonic) | The engine entry rule. **Inert** — see "The grammar is inert" below. |

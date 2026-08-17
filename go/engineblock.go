@@ -29,11 +29,13 @@ type lineInfo struct {
 	// blank is true when the line holds nothing but spaces and tabs.
 	blank bool
 	// tblArm is the GFM table arming bit: true when the line contains a `|`
-	// anywhere. A deliberate superset of "is a delimiter row" — the
-	// delimiter row of a table nested in a block quote only matches at the
-	// container-adjusted offset, which only the block algorithm knows.
-	// tryOpenTable re-verifies; this bit exists so a gfm-gated alt has
-	// something honest to read (see test/spec/mixed.tsv).
+	// or a `-` anywhere. A deliberate, *provable* superset of "could be a
+	// delimiter row": every delimiter cell requires at least one `-` (`:-:`
+	// rows open pipe-less single-column tables), and multi-column rows
+	// carry `|`. The real decision needs the container-adjusted offset only
+	// the block algorithm knows, so the gfm-tagged alt reading this bit
+	// only *arms* the probe, and tryOpenTable re-verifies (see
+	// test/spec/mixed.tsv).
 	tblArm bool
 }
 
@@ -64,7 +66,7 @@ func makeMdLineMatcher(lbTin parser.Tin) parser.MakeLexMatcher {
 			tkn.Use = map[string]any{"md": &lineInfo{
 				text:   text,
 				blank:  isBlank(text),
-				tblArm: strings.IndexByte(text, '|') >= 0,
+				tblArm: strings.IndexByte(text, '|') >= 0 || strings.IndexByte(text, '-') >= 0,
 			}}
 
 			// Row/column bookkeeping is observability data (#ZZ position,
@@ -92,11 +94,27 @@ func mdPrepare(opts Options) func(ctx *parser.Context) {
 	}
 }
 
-// mdLineAction is the `line` open alt's action: feed the matched `#LB` line
-// to the shared algorithm.
+// mdLineAction is the `line` base open alt's action: disarm the table probe
+// and feed the matched `#LB` line to the shared algorithm. Reaching this alt
+// means the gfm-tagged alt ahead of it did not match — the line cannot
+// contain a delimiter row — or GFM is off entirely (rule Exclude removed
+// the tagged alt, and tryOpenTable is closed by the option anyway).
 func mdLineAction(r *parser.Rule, ctx *parser.Context) {
 	state := ctx.U["md"].(*mdParseState)
 	info := r.O0.Use["md"].(*lineInfo)
+	state.bp.tableArmed = false
+	state.bp.incorporateLine(info.text)
+}
+
+// mdLineGfmAction is the `line` GFM open alt's action (tagged G "gfm",
+// condition on the token's tblArm bit): arm the table probe for this line,
+// then feed it to the same shared algorithm. This is the extension seam a
+// downstream dialect would use — an alt injected ahead of the base one,
+// gated on a group tag so gfm:false can subtract it wholesale.
+func mdLineGfmAction(r *parser.Rule, ctx *parser.Context) {
+	state := ctx.U["md"].(*mdParseState)
+	info := r.O0.Use["md"].(*lineInfo)
+	state.bp.tableArmed = true
 	state.bp.incorporateLine(info.text)
 }
 

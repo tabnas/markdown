@@ -240,7 +240,7 @@ Per-language hubs: [ts/README.md](ts/README.md) · [go/README.md](go/README.md).
 |---|---|
 | [`ts/`](ts/) | TypeScript / JavaScript implementation (canonical). |
 | [`go/`](go/) | Go port. |
-| [`test/spec/`](test/spec/) | 75 shared AST fixtures, run by both runtimes. |
+| [`test/spec/`](test/spec/) | 83 shared AST fixtures, run by both runtimes. |
 | [`test/commonmark/`](test/commonmark/) | Vendored CommonMark 0.31.2 spec suite (652 examples). |
 | [`test/gfm/`](test/gfm/) | Vendored GFM extension corpus (24 examples), run by both runtimes. |
 | [`markdown-grammar.jsonic`](markdown-grammar.jsonic) | The engine entry rule, embedded into both runtimes by [`ts/embed-grammar.js`](ts/embed-grammar.js). It is inert: block structure is decided by the line algorithm, not by declarative alts. Kept because the embedder embeds it. |

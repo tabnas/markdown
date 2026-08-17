@@ -1124,6 +1124,16 @@ export class BlockParser {
   lastLineLength = 0
 
   /**
+   * GFM table probe gate. True by default — the batch driver probes every
+   * candidate line, as it always has. The engine driver sets it per line
+   * from the `#LB` token's `tblArm` bit (a provable superset of "could be
+   * a delimiter row"; see engine-block.ts), which is what lets the GFM alt
+   * be a genuine, subtractable extension seam without moving any table
+   * decision out of this file.
+   */
+  tableArmed = true
+
+  /**
    * The length of the line before the one `lastLineLength` measures.
    *
    * `finalize` dates a block's end from `lastLineLength`, which is right for
@@ -1361,6 +1371,7 @@ export class BlockParser {
    * table's accumulated lines line up one-for-one with the source lines.
    */
   tryOpenTable(container: MdNode): boolean {
+    if (!this.tableArmed) return false
     if (!this.options.gfm || this.indented || 'paragraph' !== container.type) return false
 
     const align = parseDelimiterRow(this.currentLine.slice(this.nextNonspace))

@@ -125,7 +125,10 @@ function adapt(
   }
 }
 
-/** Build the inline matcher set for one option set. */
+/** Build the inline matcher set for one option set. GFM strikethrough is a
+ * separate matcher registered only when the option is on — the option
+ * reshapes the registered matcher set itself, so the base dialect's lexer
+ * simply has no tilde matcher rather than a disabled branch inside one. */
 function inlineMatchers(opts: ParserOptions): Record<string, { order: number; make: MakeLexMatcher }> {
   const fixed = (n: string) => () => n
   const m = (
@@ -141,7 +144,7 @@ function inlineMatchers(opts: ParserOptions): Record<string, { order: number; ma
     inlCode: m(1.02e5, (c) => C_BACKTICK === c, (p, b) => p.parseBackticks(b), fixed('#ICS')),
     inlDelim: m(
       1.03e5,
-      (c, o) => C_ASTERISK === c || C_UNDERSCORE === c || (true === o.gfm && C_TILDE === c),
+      (c) => C_ASTERISK === c || C_UNDERSCORE === c,
       (p, b) => p.handleDelim(p.subject.charCodeAt(p.pos), b),
       fixed('#IDL'),
     ),
@@ -164,6 +167,18 @@ function inlineMatchers(opts: ParserOptions): Record<string, { order: number; ma
     // Nothing claimed the character: one literal char, same as the hand
     // scanner's dispatch fallback.
     inlLiteral: m(1.11e5, () => true, (p, b) => p.parseLiteralChar(b), fixed('#ILI')),
+    // GFM strikethrough: `~` runs join the delimiter stack only when the
+    // dialect is on (without it, the text matcher swallows tilde runs).
+    ...(true === opts.gfm
+      ? {
+          inlTilde: m(
+            1.035e5,
+            (c) => C_TILDE === c,
+            (p, b) => p.handleDelim(C_TILDE, b),
+            fixed('#IDL'),
+          ),
+        }
+      : {}),
   }
 }
 

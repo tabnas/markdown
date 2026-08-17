@@ -358,7 +358,7 @@ type escapeScan struct {
 func scanEscape(subject string, pos int) escapeScan {
 	next := pos + 1
 	if next < len(subject) && subject[next] == '\n' {
-		return escapeScan{kind: "linebreak", literal: "", end: skipInitialSpaces(subject, next + 1)}
+		return escapeScan{kind: "linebreak", literal: "", end: skipInitialSpaces(subject, next+1)}
 	}
 	if next < len(subject) && IsEscapable(subject[next]) {
 		return escapeScan{kind: "char", literal: subject[next : next+1], end: next + 1}

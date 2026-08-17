@@ -183,13 +183,37 @@ func Markdown(j *parser.Tabnas, options map[string]any) error {
 	// One `#LB` consumed per iteration, tail-recursing via R until only `#ZZ`
 	// remains; the empty alts are the fall-through that hands control back to
 	// markdown's close.
+	//
+	// The first alt is the GFM extension seam: tagged G "gfm", gated on the
+	// token's tblArm bit, arming the shared table probe for this line. It is
+	// injected exactly the way a downstream dialect would extend this
+	// grammar — an alt ahead of the base one, subtractable by its group
+	// tag — and gfm:false removes it below via rule Exclude, so the base
+	// dialect is the grammar minus the tagged alts, visibly.
 	j.Rule("line", func(rs *parser.RuleSpec, _ *parser.Parser) {
 		rs.Clear()
 		rs.AddOpen(
+			&parser.AltSpec{
+				S: [][]parser.Tin{{lbTin}},
+				C: func(_ *parser.Rule, ctx *parser.Context) bool {
+					info, ok := ctx.T0.Use["md"].(*lineInfo)
+					return ok && info.tblArm
+				},
+				R: "line",
+				A: mdLineGfmAction,
+				G: "gfm",
+			},
 			&parser.AltSpec{S: [][]parser.Tin{{lbTin}}, R: "line", A: mdLineAction},
 			&parser.AltSpec{})
 		rs.AddClose(&parser.AltSpec{})
 	})
+
+	// The GFM dialect is subtracted, not branched around: without the
+	// option, the tagged alts above simply do not exist in this instance's
+	// grammar.
+	if !opts.GFM {
+		j.SetOptions(parser.Options{Rule: &parser.RuleOptions{Exclude: "gfm"}})
+	}
 
 	return nil
 }
