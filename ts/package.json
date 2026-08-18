@@ -1,6 +1,6 @@
 {
   "name": "@tabnas/markdown",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "A Tabnas parser plugin for CommonMark/GFM Markdown — headings, lists, blockquotes, code, emphasis, links and more, into a JSON AST.",
   "main": "dist/markdown.js",
   "type": "commonjs",
