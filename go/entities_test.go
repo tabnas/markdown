@@ -98,8 +98,14 @@ func TestEntityTableMatchesTypeScript(t *testing.T) {
 	}
 }
 
-// TestEntityRendersLikeTypeScript is the same contract one level up, through
-// the public renderer, for the shapes that actually regressed.
+// TestEntityLegacyAliasNotMatchedAsPrefix is the same contract one level
+// up, through the public renderer, for the shapes that actually
+// regressed.
+//
+// The comment opened with a different function name — one this file does
+// not define — so a grep for it returned a reassuring hit above a test
+// that is not it. The description below the name was accurate; only the
+// name was another test's.
 func TestEntityLegacyAliasNotMatchedAsPrefix(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"&ampa;\n", "<p>&amp;ampa;</p>\n"},
