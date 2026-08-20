@@ -98,8 +98,14 @@ func TestEntityTableMatchesTypeScript(t *testing.T) {
 	}
 }
 
-// TestEntityRendersLikeTypeScript is the same contract one level up, through
-// the public renderer, for the shapes that actually regressed.
+// TestEntityLegacyAliasNotMatchedAsPrefix is the same contract one level up,
+// through the public renderer, for the shapes that actually regressed.
+//
+// The name in this comment used to be a different one, which this file has
+// never defined — a doc comment naming the wrong function. `ax-phantom-gates`
+// flags any `Test`-shaped name a comment mentions and nothing defines, which
+// is how it was found; the dead name is not repeated here even to disown it,
+// because the gate cannot tell "this exists" from "this used to".
 func TestEntityLegacyAliasNotMatchedAsPrefix(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"&ampa;\n", "<p>&amp;ampa;</p>\n"},
