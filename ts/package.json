@@ -1,7 +1,7 @@
 {
   "name": "@tabnas/markdown",
   "version": "0.7.2",
-  "description": "A Tabnas parser plugin for CommonMark/GFM Markdown — headings, lists, blockquotes, code, emphasis, links and more, into a JSON AST.",
+  "description": "A Tabnas parser plugin for CommonMark/GFM Markdown \u2014 headings, lists, blockquotes, code, emphasis, links and more, into a JSON AST.",
   "main": "dist/markdown.js",
   "type": "commonjs",
   "types": "dist/markdown.d.ts",
@@ -21,10 +21,13 @@
     "directory": "ts"
   },
   "scripts": {
+    "pretest": "npm run build",
     "test": "node --enable-source-maps --test \"dist-test/*.test.js\"",
     "conformance": "node tools/conformance.mjs",
     "conformance-gfm": "node tools/gfm-conformance.mjs",
+    "pretest-some": "npm run build",
     "test-some": "node --enable-source-maps --test-name-pattern=\"$npm_config_pattern\" --test \"dist-test/*.test.js\"",
+    "pretest-watch": "npm run build",
     "test-watch": "node --test --watch dist-test/markdown.test.js",
     "watch": "tsc --build src test -w",
     "build": "tsc --build src test",
