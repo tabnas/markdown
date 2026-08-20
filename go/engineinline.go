@@ -22,6 +22,8 @@ package tabnasmarkdown
 // microseconds against a whole-document parse.
 
 import (
+	"unicode/utf8"
+
 	parser "github.com/tabnas/parser/go"
 )
 
@@ -101,11 +103,15 @@ func inlineAdapter(
 				lastNl = i
 			}
 		}
+		// CHARACTERS, not bytes. `len(consumed)` and `lastNl` are BYTE
+		// quantities; the TypeScript half writes `consumed.length` and a
+		// UTF-16 `lastNl` in the same two expressions. The same line in
+		// the two languages is a different number.
 		if newlines > 0 {
 			pnt.RI += newlines
-			pnt.CI = len(consumed) - lastNl
+			pnt.CI = utf8.RuneCountInString(consumed[lastNl:])
 		} else {
-			pnt.CI += len(consumed)
+			pnt.CI += utf8.RuneCountInString(consumed)
 		}
 		pnt.SI = p.pos
 		return tkn

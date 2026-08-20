@@ -16,6 +16,7 @@ package tabnasmarkdown
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	parser "github.com/tabnas/parser/go"
 )
@@ -75,13 +76,24 @@ func makeMdLineMatcher(lbTin parser.Tin) parser.MakeLexMatcher {
 			// Row/column bookkeeping is observability data (#ZZ position,
 			// traces): a consumed terminator starts a new row; an
 			// unterminated final line just widens the current one.
+			//
+			// CHARACTERS, not bytes. `len(text)` is a byte count and the
+			// TypeScript half writes `seg.text.length`, a UTF-16 count —
+			// the same expression in the same place, and a different
+			// quantity. Only the unterminated branch shows it, because a
+			// consumed newline resets the column to 1 either way, which
+			// is why every input ending in `\n` agreed and hid this.
+			//
+			//	# é      TS #ZZ@1:4    Go was 1:5
+			//	# €      TS #ZZ@1:4    Go was 1:6
+			//	€€ text  TS #ZZ@1:8    Go was 1:12
 			terminated := next > pnt.SI+len(text)
 			pnt.SI = next
 			if terminated {
 				pnt.RI++
 				pnt.CI = 1
 			} else {
-				pnt.CI += len(text)
+				pnt.CI += utf8.RuneCountInString(text)
 			}
 
 			return tkn
