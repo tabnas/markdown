@@ -9,6 +9,8 @@
 
 A CommonMark parser for the [Tabnas](https://github.com/tabnas/parser) engine.
 
+Docs, guides, the error reference and the playground: **[tabnas.dev](https://tabnas.dev)**.
+
 **This parser is conformant to CommonMark 0.31.2.** All 652 examples pass, across all 26
 sections of the spec suite, in both implementations — TypeScript (canonical) and Go (a
 port of it). The suite is vendored in this repository, so the claim is checkable rather
