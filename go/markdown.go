@@ -23,7 +23,7 @@ import (
 // VERSION is this module's version. It MUST equal ts/package.json
 // "version": the release orchestrator rewrites both, and
 // TestVersionMatchesPackageJSON fails the build if they drift.
-const VERSION = "0.7.2"
+const VERSION = "0.7.3"
 
 // Defaults mirrors ts/src/markdown.ts Markdown.defaults.
 var Defaults = map[string]any{
