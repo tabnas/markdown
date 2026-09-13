@@ -79,8 +79,8 @@ npm install @tabnas/markdown @tabnas/parser
 `package.json` declares no `exports` map, so the engine-free module is reachable at
 `@tabnas/markdown/dist/commonmark.js`.
 
-The parser modules — `block.ts`, `inline.ts`, `html.ts`, `ast.ts`, `common.ts`,
-`node.ts`, `options.ts`, `entities.ts` — are all reachable from `commonmark.ts` and are
+The parser modules (`block.ts`, `inline.ts`, `html.ts`, `ast.ts`, `common.ts`,
+`node.ts`, `options.ts`, `entities.ts`) are all reachable from `commonmark.ts` and are
 therefore all engine-free.
 
 ## Exports of `@tabnas/markdown`
@@ -183,11 +183,11 @@ import type { ParserOptions, RefMap, RefDef } from '@tabnas/markdown/dist/common
 
 | Export | Kind | Signature / value |
 |---|---|---|
-| `parse` | function | `(input: string, opts?: Partial<ParserOptions>) => MdNode` — both phases, returns the native tree. |
+| `parse` | function | `(input: string, opts?: Partial<ParserOptions>) => MdNode`, both phases, returns the native tree. |
 | `renderHTML` | function | `(doc: MdNode, options?: Partial<ParserOptions>) => string` |
-| `parseBlocks` | function | `(input: string, options: ParserOptions) => { doc: MdNode, refmap: RefMap }` — phase 1 only. Paragraph and heading text is left raw in `stringContent`. |
-| `parseInlines` | function | `(doc: MdNode, refmap: RefMap, options: ParserOptions) => void` — phase 2, in place. |
-| `resolveOptions` | function | `(opts?: Partial<ParserOptions>) => ParserOptions` — fills omitted keys from `DEFAULT_OPTIONS`. |
+| `parseBlocks` | function | `(input: string, options: ParserOptions) => { doc: MdNode, refmap: RefMap }`, phase 1 only. Paragraph and heading text is left raw in `stringContent`. |
+| `parseInlines` | function | `(doc: MdNode, refmap: RefMap, options: ParserOptions) => void`, phase 2, in place. |
+| `resolveOptions` | function | `(opts?: Partial<ParserOptions>) => ParserOptions`, fills omitted keys from `DEFAULT_OPTIONS`. |
 | `DEFAULT_OPTIONS` | `ParserOptions` | `{ gfm: true, breaks: false }` |
 | `MdNode` | class | The native tree node. |
 | `ParserOptions`, `RefMap`, `RefDef` | types | See below. |
@@ -207,10 +207,10 @@ type ParserOptions = { gfm: boolean; breaks: boolean }
 
 | Option | Type | Default | Effect |
 |---|---|---|---|
-| `gfm` | `boolean` | `true` | Enables five GFM extensions together: tables (`table`, `tableRow`, `tableCell` nodes; a delimiter row under a paragraph's last line), strikethrough (`~~text~~` → a `delete` node / `<del>`, opening and closing runs the same length), task list items (`listItem.checked`), autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`), and the disallowed-raw-HTML filter. The first four are parse-time — tables in the block phase, task list markers in the block phase, strikethrough in the inline scanner, autolink literals in a post-pass over the inline tree — and the filter alone is applied by the renderer. |
+| `gfm` | `boolean` | `true` | Enables five GFM extensions together: tables (`table`, `tableRow`, `tableCell` nodes; a delimiter row under a paragraph's last line), strikethrough (`~~text~~` → a `delete` node / `<del>`, opening and closing runs the same length), task list items (`listItem.checked`), autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`), and the disallowed-raw-HTML filter. The first four are parse-time (tables in the block phase, task list markers in the block phase, strikethrough in the inline scanner, autolink literals in a post-pass over the inline tree) and the filter alone is applied by the renderer. |
 | `breaks` | `boolean` | `false` | When `true`, a soft line break becomes a `break` node in the AST and `<br />\n` in HTML. When `false`, a soft line break becomes a single space in the AST and `\n` in HTML. Hard line breaks (two or more trailing spaces, or a trailing backslash) are `break` nodes and `<br />` either way. |
 
-`renderHTML` reads `breaks`, and reads `gfm` for one thing only — the disallowed-raw-HTML
+`renderHTML` reads `breaks`, and reads `gfm` for one thing only, the disallowed-raw-HTML
 filter, which the extension defines at render time. Everything else `gfm` controls is
 already settled in the tree by then. Called as `renderHTML(tree)` with no options at all,
 it takes `gfm` from the parse that produced the tree, so a `gfm: false` parse renders as
@@ -221,7 +221,7 @@ plain CommonMark.
 | Type | Definition |
 |---|---|
 | `RefDef` | `{ destination: string; title: string \| null }` |
-| `RefMap` | `Record<string, RefDef>` — keys are link labels normalised by trimming, collapsing internal whitespace to one space, and case folding (`toLowerCase().toUpperCase()`). |
+| `RefMap` | `Record<string, RefDef>`, whose keys are link labels normalised by trimming, collapsing internal whitespace to one space, and case folding (`toLowerCase().toUpperCase()`). |
 
 ## AST
 
@@ -242,7 +242,7 @@ type Inline =
 
 ### Block nodes
 
-**`heading`** — ATX (`#`…`######`) and Setext (`===`, `---`).
+**`heading`**. ATX (`#`…`######`) and Setext (`===`, `---`).
 
 | Field | Type | Notes |
 |---|---|---|
@@ -271,7 +271,7 @@ type Inline =
 | `type` | `'list'` | |
 | `ordered` | `boolean` | |
 | `start` | `number \| null` | The start number for ordered lists; `null` for bullet lists. |
-| `spread` | `boolean` | `true` when the list is loose, i.e. any item is followed by a blank line or directly contains two blocks separated by one. mdast semantics. |
+| `spread` | `boolean` | `true` when the list is loose, that is, any item is followed by a blank line or directly contains two blocks separated by one. mdast semantics. |
 | `children` | `ListItemNode[]` | |
 
 **`listItem`**
@@ -280,10 +280,10 @@ type Inline =
 |---|---|---|
 | `type` | `'listItem'` | |
 | `spread` | `boolean` | `true` when two of the item's own children are separated by a blank line. Derived from the block phase's `sourcepos` line ranges. |
-| `checked` | `boolean \| null` | GFM task list item state: `true` for `- [x]`, `false` for `- [ ]`, `null` for an ordinary item — and so `null` on every item when `gfm` is off. mdast's field. |
+| `checked` | `boolean \| null` | GFM task list item state: `true` for `- [x]`, `false` for `- [ ]`, `null` for an ordinary item, and so `null` on every item when `gfm` is off. mdast's field. |
 | `children` | `Block[]` | |
 
-**`code`** — fenced and indented code blocks.
+**`code`**. Fenced and indented code blocks.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -292,7 +292,7 @@ type Inline =
 | `meta` | `string \| null` | Remainder of the info string after the first word, trimmed; `null` when empty. |
 | `value` | `string` | Content with exactly one trailing newline removed, if present. |
 
-**`html`** — an HTML block. The same node type is also an inline node; see below.
+**`html`**. An HTML block. The same node type is also an inline node, described below.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -388,12 +388,12 @@ Recognition rules:
 | `type` | `'inlineCode'` | |
 | `value` | `string` | Line endings converted to spaces; one leading and one trailing space stripped when the content is not all spaces. Escapes and entities are *not* resolved inside a code span. |
 
-**`link`** — inline, reference, collapsed, shortcut and autolink forms all produce this node.
+**`link`**. Inline, reference, collapsed, shortcut and autolink forms all produce this node.
 
 | Field | Type | Notes |
 |---|---|---|
 | `type` | `'link'` | |
-| `url` | `string` | Destination, backslash-unescaped and entity-decoded. Not percent-encoded — that happens at render time. An email autolink gets a `mailto:` prefix. |
+| `url` | `string` | Destination, backslash-unescaped and entity-decoded. Not percent-encoded: that happens at render time. An email autolink gets a `mailto:` prefix. |
 | `title` | `string \| null` | `null` when absent. |
 | `children` | `Inline[]` | |
 
@@ -406,7 +406,7 @@ Recognition rules:
 | `title` | `string \| null` | |
 | `alt` | `string` | The description flattened to plain text: text, code-span and raw-HTML literals kept, markup wrappers dropped, line breaks as `\n`. There are no `children`. |
 
-**`break`** — a hard line break, or a soft one when `breaks: true`.
+**`break`**. A hard line break, or a soft one when `breaks: true`.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -419,7 +419,7 @@ Recognition rules:
 | `type` | `'delete'` | |
 | `children` | `Inline[]` | |
 
-**`html`** — a raw inline tag, comment, processing instruction, declaration or CDATA
+**`html`**. A raw inline tag, comment, processing instruction, declaration or CDATA
 section. One node per tag, not per element.
 
 | Field | Type | Notes |
@@ -460,8 +460,8 @@ tree: children are reached with `firstChild`/`next`, not an array.
 `isContainer()` returns `true` for `document`, `block_quote`, `list`, `item`, `paragraph`,
 `heading`, `table`, `table_row`, `table_cell`, `emph`, `strong`, `link`, `image`, `del`.
 
-A `table` accepts lines like a leaf block — no block-level element can be placed inside
-one — but is a container in the tree: its children are `table_row` nodes, whose children
+A `table` accepts lines like a leaf block (no block-level element can be placed inside
+one) but is a container in the tree: its children are `table_row` nodes, whose children
 are `table_cell` nodes, whose children are inlines. `table` nodes appear only when `gfm`
 is `true`.
 
@@ -469,7 +469,7 @@ is `true`.
 
 | Field | Type | Default | Set for |
 |---|---|---|---|
-| `type` | `NodeType` | — | all |
+| `type` | `NodeType` | (none) | all |
 | `parent` | `MdNode \| null` | `null` | all |
 | `firstChild` | `MdNode \| null` | `null` | containers |
 | `lastChild` | `MdNode \| null` | `null` | containers |
@@ -478,7 +478,7 @@ is `true`.
 | `sourcepos` | `SourcePos` | `[[0,0],[0,0]]` | block nodes; inline nodes keep the default |
 | `literal` | `string \| null` | `null` | `text`, `code`, `code_block`, `html_block`, `html_inline` |
 | `level` | `number` | `0` | `heading` (1–6) |
-| `destination` | `string \| null` | `null` | `link`, `image` — entity-decoded and backslash-unescaped |
+| `destination` | `string \| null` | `null` | `link`, `image`, entity-decoded and backslash-unescaped |
 | `title` | `string \| null` | `null` | `link`, `image` |
 | `info` | `string \| null` | `null` | fenced `code_block`; `null` for indented |
 | `isFenced` | `boolean` | `false` | `code_block` |
@@ -486,10 +486,10 @@ is `true`.
 | `fenceLength` | `number` | `0` | fenced `code_block` |
 | `fenceOffset` | `number` | `0` | fenced `code_block` |
 | `listData` | `ListData \| null` | `null` | `list`, `item` |
-| `tableAlign` | `TableAlign[] \| null` | `null` | `table` — one entry per column, from the delimiter row; `null` on every other type |
-| `isHeaderRow` | `boolean` | `false` | `table_row` — `true` on the table's first child only |
-| `checked` | `boolean \| null` | `null` | `item` — GFM task list state; `null` on an ordinary item and on every item when `gfm` is off |
-| `gfm` | `boolean` | `true` | `document` — the `gfm` option the tree was parsed with, read by `renderHTML` when it is called with no options |
+| `tableAlign` | `TableAlign[] \| null` | `null` | `table`: one entry per column, from the delimiter row; `null` on every other type |
+| `isHeaderRow` | `boolean` | `false` | `table_row`: `true` on the table's first child only |
+| `checked` | `boolean \| null` | `null` | `item`: GFM task list state; `null` on an ordinary item and on every item when `gfm` is off |
+| `gfm` | `boolean` | `true` | `document`: the `gfm` option the tree was parsed with, read by `renderHTML` when it is called with no options |
 | `open` | `boolean` | `true` | block-phase bookkeeping |
 | `stringContent` | `string` | `''` | block-phase bookkeeping; consumed and cleared by phase 2 |
 | `lastLineBlank` | `boolean` | `false` | block-phase bookkeeping |
@@ -538,7 +538,7 @@ type TableAlign = 'left' | 'right' | 'center' | null
 type WalkEvent = { entering: boolean; node: MdNode }
 ```
 
-Containers produce two events — `entering: true` on the way down, `entering: false` on
+Containers produce two events: `entering: true` on the way down, `entering: false` on
 the way up. Leaves produce one event, with `entering: true`. For `- a` the event sequence
 is: `+document +list +item +paragraph +text -paragraph -item -list -document`.
 
@@ -633,8 +633,8 @@ toHtml('[l](/ä)') // => '<p><a href="/%C3%A4">l</a></p>\n'
 
 None is performed. `html_block` and `html_inline` literals are written verbatim, apart
 from GFM's disallowed-raw-HTML filter: with `gfm` on, the leading `<` of `title`,
-`textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext` —
-opening or closing, any case, followed by whitespace, `/`, `>` or the end of the text — is
+`textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext`,
+opening or closing, any case, followed by whitespace, `/`, `>` or the end of the text, is
 written as `&lt;`. That is nine tag names; every other tag, every attribute and every link
 destination is untouched. Untrusted Markdown requires a sanitizer downstream of this
 renderer.
@@ -649,7 +649,7 @@ renderer.
 | Result | **652/652**, all 26 sections |
 | Suite | `test/commonmark/spec.json`, vendored |
 | Command | `npm run conformance` (no build step, no engine required) |
-| Options used | `{ gfm: false, breaks: false }` — the suite is pure CommonMark |
+| Options used | `{ gfm: false, breaks: false }`, so the suite is pure CommonMark |
 | Go port | `cd go && go test -run TestCommonMarkSpec -v ./...`, also 652/652 |
 
 All 26 sections pass.
@@ -682,7 +682,7 @@ The extension set is complete: **24/24** on the vendored GFM extension corpus.
 | | |
 |---|---|
 | Result | **24/24**, all 5 extension sections |
-| Suite | `test/gfm/spec.json`, vendored — the extension sections of the GFM spec only |
+| Suite | `test/gfm/spec.json`, vendored: the extension sections of the GFM spec only |
 | Command | `npm run conformance-gfm` |
 | Options used | `{ gfm: true, breaks: false }` |
 | Go port | `cd go && go test -run TestGFMSpec -v ./...`, also 24/24 |
@@ -702,9 +702,9 @@ The extension set is complete: **24/24** on the vendored GFM extension corpus.
 | Strikethrough (`~~x~~`, `~x~`) | Implemented, gated on `gfm` | Inline scanner |
 | Autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`) | Implemented, gated on `gfm` | Post-pass over the inline tree |
 | Disallowed raw HTML filtering | Implemented, gated on `gfm` | Renderer |
-| Footnotes | Not implemented — a GitHub product feature, not a section of the GFM spec suite | — |
+| Footnotes | Not implemented: a GitHub product feature, not a section of the GFM spec suite | (none) |
 
-`gfm: false` disables all five together, and the output is then plain CommonMark —
+`gfm: false` disables all five together, and the output is then plain CommonMark,
 byte-identical to a pure-CommonMark parse over 1430 checked records. Both runtimes
 implement all five.
 
@@ -714,13 +714,13 @@ split off and stay a paragraph. A delimiter cell is hyphens with an optional lea
 and/or trailing colon. Leading and trailing pipes are optional and may differ between
 rows. A backslash-escaped pipe is resolved to a literal `|` before inline parsing, so it
 does not split a cell and a code span sees a raw pipe. Every row has exactly as many cells
-as the delimiter row had columns — short rows are padded, long ones truncated. The table
+as the delimiter row had columns: short rows are padded, long ones truncated. The table
 ends at a blank line or at the start of another block. See
 [Table nodes](#table-nodes) and [Table output](#table-output).
 
 **Task list items.** A list item whose first block is a paragraph starting with a task
-list item marker — optional spaces, `[`, a space/tab or `x`/`X`, `]`, then at least one
-space or tab — is a task list item. The marker is consumed, `listItem.checked` becomes
+list item marker (optional spaces, `[`, a space/tab or `x`/`X`, `]`, then at least one
+space or tab) is a task list item. The marker is consumed, `listItem.checked` becomes
 `true`/`false`, and the renderer writes `<input disabled="" type="checkbox"> ` (plus
 `checked=""` when checked) at the head of that paragraph.
 
@@ -732,8 +732,8 @@ and no `_` in either of the last two segments; trailing `?`, `!`, `.`, `,`, `:`,
 Never produced inside a link, a code span, raw HTML or an image description.
 
 **Disallowed raw HTML.** In `html` block and inline output the leading `<` of `title`,
-`textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext` —
-opening or closing, any case — is written as `&lt;`. The node's `value` keeps the
+`textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext`,
+opening or closing, any case, is written as `&lt;`. The node's `value` keeps the
 original text; only the rendered HTML changes. It escapes those nine tag names and nothing
 else: it is not a sanitizer. See [Sanitization](#sanitization).
 
@@ -741,7 +741,7 @@ else: it is not a sanitizer. See [Sanitization](#sanitization).
 
 **Footnotes.** A GitHub product feature, not part of the GFM specification suite. There is
 no option that enables them. `[^1]` is a valid CommonMark link label, so a
-GitHub-authored footnote does not error — it renders as a broken link. With no matching
+GitHub-authored footnote does not error. It renders as a broken link. With no matching
 definition the reference stays literal text and the definition line becomes a paragraph;
 if the definition body happens to parse as a link destination, the reference becomes a
 real link.

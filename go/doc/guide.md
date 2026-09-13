@@ -10,16 +10,16 @@ Two answers first, because most of these recipes depend on them:
   without running the renderer and without loading the engine.
 - **HTML output is available**: `ToHTML(src, opts)`. The CommonMark suite scores
   HTML, so the renderer is what makes the conformance result measurable; it is a
-  first-class output, not a side utility. It is also **not sanitized** — see
+  first-class output, not a side utility. It is also **not sanitized**; see
   [Render untrusted Markdown safely](#render-untrusted-markdown-safely).
 
 **The parser is conformant to CommonMark 0.31.2**: 652/652 examples of the
 specification's own suite, all 26 sections, in both the Go and the TypeScript
-runtime. The suite is vendored in this repository, so the claim is checkable —
+runtime. The suite is vendored in this repository, so the claim is checkable:
 `go test -run TestCommonMarkSpec -v ./...` runs it; see
 [Check conformance yourself](#check-conformance-yourself).
 
-On top of CommonMark it implements the complete set of five GFM extensions —
+On top of CommonMark it implements the complete set of five GFM extensions:
 tables, task list items, autolink literals, strikethrough and the
 disallowed-raw-HTML filter. That is 24/24 on the vendored GFM extension suite,
 which `go test -run TestGFMSpec -v ./...` runs. All five are gated on the `GFM`
@@ -64,7 +64,7 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("# Hello\n\nHello *world*\n", tabnasmar
 // "<h1>Hello</h1>\n<p>Hello <em>world</em></p>\n"
 ```
 
-The output is byte-exact against the CommonMark 0.31.2 expected HTML — including
+The output is byte-exact against the CommonMark 0.31.2 expected HTML, including
 where the newlines fall, which is a correctness contract, not formatting.
 `ToHTML` parses from source; it does not take an AST. To render something you
 have already parsed and changed, see
@@ -88,7 +88,7 @@ fmt.Println(result, err)
 
 `Parse` returns `(any, error)`. For Markdown the value is always a
 `map[string]any` document node, and it is exactly what `ParseDocument` returns
-for the same input — verified by `reflect.DeepEqual`, not by eye. Errors come
+for the same input, verified by `reflect.DeepEqual`, not by eye. Errors come
 from the engine, not from the Markdown, which has no syntax errors.
 
 `Make` takes an optional plugin option map:
@@ -118,7 +118,7 @@ fmt.Println(result)
 // map[children:[map[children:[map[type:text value:~~keep~~]] type:paragraph]] type:document]
 ```
 
-The instance is reusable — call `Parse` as often as you like. If you load other
+The instance is reusable: call `Parse` as often as you like. If you load other
 plugins, install `Markdown` last, because it claims the `markdown` start rule.
 
 ## Walk the AST
@@ -198,10 +198,10 @@ fmt.Println(urls)
 // [https://example.com/docs https://spec.commonmark.org /]
 ```
 
-Native node types are the CommonMark ones, exported as `NodeType` constants —
-`NodeHeading`, `NodeParagraph`, `NodeBlockQuote`, `NodeList`, `NodeItem`,
-`NodeCodeBlock`, `NodeHTMLBlock`, `NodeEmph`, `NodeStrong`, `NodeLink`, … — not
-the AST's mdast-adjacent names. A table is `NodeTable`, `NodeTableRow` and
+Native node types are the CommonMark ones, exported as `NodeType` constants
+(`NodeHeading`, `NodeParagraph`, `NodeBlockQuote`, `NodeList`, `NodeItem`,
+`NodeCodeBlock`, `NodeHTMLBlock`, `NodeEmph`, `NodeStrong`, `NodeLink` and the
+rest), not the AST's mdast-adjacent names. A table is `NodeTable`, `NodeTableRow` and
 `NodeTableCell` there. A heading's level is `Level`, a link's URL is
 `Destination`, text is `Literal`.
 
@@ -234,7 +234,7 @@ fmt.Printf("%q\n", tabnasmarkdown.RenderHTML(tree, tabnasmarkdown.DefaultOptions
 // "<h1>Title</h1>\n<p>See <a href=\"https://example.com/docs\">docs</a>.</p>\n"
 ```
 
-The same shape works for block-level edits — demoting every heading one level,
+The same shape works for block-level edits, such as demoting every heading one level,
 for instance:
 
 ```go
@@ -254,7 +254,7 @@ fmt.Printf("%q\n", tabnasmarkdown.RenderHTML(tree, tabnasmarkdown.DefaultOptions
 `MdNode` also has `AppendChild`, `PrependChild`, `InsertBefore`, `InsertAfter`
 and `Unlink` if you need to restructure rather than retag. `RenderHTML` takes
 the same `Options` value as everything else. `Breaks` affects it, and `GFM`
-selects one thing only — the disallowed-raw-HTML filter, which the extension
+selects one thing only, the disallowed-raw-HTML filter, which the extension
 defines at render time. The tree records the flavour it was parsed with, so
 `RenderHTML(tree, tabnasmarkdown.Options{GFM: tree.GFM})` renders it as parsed.
 
@@ -276,15 +276,15 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("[click](javascript:alert(1))\n", opts)
 
 What reaches the output untouched:
 
-- HTML blocks (§4.6) — whole `<div>`, `<form>`, `<table>` blocks and anything
+- HTML blocks (§4.6). Whole `<div>`, `<form>`, `<table>` blocks and anything
   else that starts a block-level tag.
-- Inline raw HTML (§6.6) — `<b onclick="...">` and friends, attributes intact.
+- Inline raw HTML (§6.6). `<b onclick="...">` and friends, attributes intact.
 - Link and image destinations, including `javascript:` URLs. They are
   percent-encoded and entity-decoded, not filtered by scheme.
 
 The one thing `GFM` changes here is the disallowed-raw-HTML filter, which
-rewrites the leading `<` of nine tag names — `title`, `textarea`, `style`,
-`xmp`, `iframe`, `noembed`, `noframes`, `script`, `plaintext` — and leaves every
+rewrites the leading `<` of nine tag names (`title`, `textarea`, `style`,
+`xmp`, `iframe`, `noembed`, `noframes`, `script`, `plaintext`) and leaves every
 other tag, and every attribute, alone:
 
 ```go
@@ -299,7 +299,7 @@ That is nine tag names out of the whole of HTML. It is not a sanitizer.
 
 Run the output through an HTML sanitizer (bluemonday, or whatever your stack
 already uses) before it reaches a browser. If you would rather detect raw HTML
-than strip it, the AST surfaces it as `html` nodes — one per tag inline, one per
+than strip it, the AST surfaces it as `html` nodes, one per tag inline, one per
 block:
 
 ```go
@@ -326,8 +326,8 @@ type Options struct {
 }
 ```
 
-`Options` is a plain struct, so its zero value is `{GFM: false, Breaks: false}`
-— **not** the defaults. `Options{Breaks: true}` therefore turns strikethrough
+`Options` is a plain struct, so its zero value is `{GFM: false, Breaks: false}`,
+**not** the defaults. `Options{Breaks: true}` therefore turns strikethrough
 off as a side effect. To change one setting, copy `DefaultOptions`:
 
 ```go
@@ -338,7 +338,7 @@ opts.Breaks = true
 Write `Options{GFM: false}` only when you mean pure CommonMark with no
 extensions, which is what the conformance suite runs.
 
-`GFM` gates five extensions as one switch — tables, strikethrough, task list
+`GFM` gates five extensions as one switch: tables, strikethrough, task list
 items, autolink literals and the disallowed-raw-HTML filter. Footnotes are not
 implemented, with `GFM: true` or without it. With `GFM: false` the output is
 plain CommonMark, byte for byte.
@@ -379,7 +379,7 @@ fmt.Println(table.Type, table.TableAlign)
 
 `TableAlign` has one entry per column, read off the colons in the delimiter row:
 `AlignLeft` for `:--`, `AlignRight` for `--:`, `AlignCenter` for `:-:`, and
-`AlignNone` — the empty string — for a cell with no colon.
+`AlignNone` (the empty string) for a cell with no colon.
 
 Rows and cells are ordinary linked children, so walk them with `FirstChild` and
 `Next`. A cell's children are inline nodes, the same ones a paragraph holds, so
@@ -413,8 +413,8 @@ for row := table.FirstChild; row != nil; row = row.Next {
 ```
 
 Two things make that loop safe to index into. Every row has exactly as many
-cells as `TableAlign` has entries — the block phase pads short rows with empty
-cells and truncates long ones — so `table.TableAlign[i]` is the alignment of
+cells as `TableAlign` has entries (the block phase pads short rows with empty
+cells and truncates long ones) so `table.TableAlign[i]` is the alignment of
 cell `i` of every row. And the header row is always the table's first child;
 `IsHeaderRow` is there so the renderer can pick `<th>` without walking back up,
 and you can use it the same way or just take the first child.
@@ -494,7 +494,7 @@ fmt.Println(string(b))
 // [null,"center"]
 ```
 
-There is no header flag on the map AST — that is mdast's shape, and mdast's
+There is no header flag on the map AST: that is mdast's shape, and mdast's
 convention is that the first row is the header row.
 
 ## Work with task lists and bare URLs
@@ -568,7 +568,7 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("Text[^1]\n\n[^1]: Note text here.\n", 
 ```
 
 Worse, a definition whose body happens to look like a destination *is* a valid
-link reference definition, so the footnote quietly becomes a link:
+link reference definition, so the footnote becomes a link with no error:
 
 ```go
 fmt.Printf("%q\n", tabnasmarkdown.ToHTML("Text[^1]\n\n[^1]: /note\n", tabnasmarkdown.DefaultOptions))
@@ -593,15 +593,15 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("H~2~O\n", tabnasmarkdown.Options{GFM: 
 If your input is really Pandoc-flavoured, escape the tildes (`H\~2\~O`) or parse
 with `GFM: false`; there is no way to keep strikethrough and lose the collision.
 
-Everything else outside CommonMark and the five GFM extensions is also absent —
+Everything else outside CommonMark and the five GFM extensions is also absent:
 math, front matter, definition lists, heading attributes, admonitions, wiki
 links, emoji shortcodes, highlight, and sub/superscript. Each would need its own
 opt-in flag rather than joining `GFM`, so none of them appear under `GFM: true`.
 
 ## Report errors with line numbers
 
-Use `ParseTree`. The map AST has no source positions — they are one of the
-things the projection drops — but every block node on the native tree carries
+Use `ParseTree`. The map AST has no source positions (they are one of the
+things the projection drops) but every block node on the native tree carries
 `SourcePos`, a `[2][2]int` of `[[startLine, startCol], [endLine, endCol]]`,
 1-based, as in the spec. Inline nodes carry `[[0, 0], [0, 0]]`.
 
@@ -635,7 +635,7 @@ cd go
 go test -run TestCommonMarkSpec -v ./...
 ```
 
-The last line is `TOTAL 652/652  100.00%`, across all 26 sections — that is the
+The last line is `TOTAL 652/652  100.00%`, across all 26 sections. That is the
 substantiation for "conformant to CommonMark 0.31.2", and the suite it reads,
 `test/commonmark/spec.json`, is vendored in the repository. The suite is pure
 CommonMark, so it runs with `Options{GFM: false, Breaks: false}`;
@@ -650,7 +650,7 @@ cd go
 go test -run TestGFMSpec -v ./...
 ```
 
-The last line is `TOTAL 24/24`, over the five extension sections — Tables 8,
+The last line is `TOTAL 24/24`, over the five extension sections: Tables 8,
 Autolinks 11, Task list items 2, Strikethrough 2, Disallowed Raw HTML 1. Every
 vendored section passes, and every one is asserted. The TypeScript twin is
 `npm run conformance-gfm`.
@@ -674,11 +674,11 @@ npm run conformance
 The 75 fixtures pin the AST through the plugin path in both runtimes; they are a
 regression net, not a proof that the runtimes agree. The claim that they agree
 rests on a wider comparison: all 652 spec inputs under all four `GFM` × `Breaks`
-combinations — 2608 records — with both the AST and the HTML compared on each,
+combinations (2608 records) with both the AST and the HTML compared on each,
 and 0 differences in either; extending the same run to the 24 GFM examples makes
 it 2704 records, again with none. Neither check covers `SourcePos`, which the AST
 drops and the HTML does not encode.
-## How do I extend the grammar the way GFM does?
+## Extend the grammar the way GFM does
 
 The GFM dialect reaches this plugin's grammar through public engine seams,
 and a downstream dialect extends it the same three ways:
@@ -704,7 +704,7 @@ j.Rule("line", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
 ```
 
 * **Subtract by group.** `gfm:false` applies `Rule: &RuleOptions{Exclude: "gfm"}`,
-  so the tagged alts do not exist in a base-dialect instance — inspect it
+  so the tagged alts do not exist in a base-dialect instance. Inspect it
   with `debug.model()` and count the alts. Your dialect gets the same
   off-switch for free by tagging its alts.
 
@@ -717,4 +717,4 @@ j.Rule("line", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
 The parts that stay out of reach are deliberate: block continuation, lazy
 continuation, and the delimiter/bracket resolution live in the shared
 engine-free core, and extensions arm or configure them rather than
-re-implement them — see `concepts.md` for why.
+re-implement them; see `concepts.md` for why.

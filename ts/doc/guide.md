@@ -10,16 +10,16 @@ Two answers first, because most of these recipes depend on them:
   without running the renderer and without loading the engine.
 - **HTML output is available**: `toHtml(src, opts)`. The CommonMark suite
   scores HTML, so the renderer is what makes the conformance result measurable;
-  it is a first-class output, not a side utility. It is also **not sanitized** —
+  it is a first-class output, not a side utility. It is also **not sanitized**;
   see [Render untrusted Markdown safely](#render-untrusted-markdown-safely).
 
 **The parser is conformant to CommonMark 0.31.2**: 652/652 examples of the
 specification's own suite, all 26 sections, in both the TypeScript and the Go
-runtime. The suite is vendored in this repository, so the claim is checkable —
+runtime. The suite is vendored in this repository, so the claim is checkable:
 `npm run conformance` runs it; see
 [Check conformance yourself](#check-conformance-yourself).
 
-On top of CommonMark it implements the complete set of five GFM extensions —
+On top of CommonMark it implements the complete set of five GFM extensions:
 tables, task list items, autolink literals, strikethrough and the
 disallowed-raw-HTML filter. That is 24/24 on the vendored GFM extension suite,
 which `npm run conformance-gfm` runs. All five are gated on the `gfm` option,
@@ -48,7 +48,7 @@ import { toHtml } from '@tabnas/markdown'
 toHtml('# Hello\n\n*hi*\n') // => '<h1>Hello</h1>\n<p><em>hi</em></p>\n'
 ```
 
-The output is byte-exact against the CommonMark 0.31.2 expected HTML —
+The output is byte-exact against the CommonMark 0.31.2 expected HTML,
 including where the newlines fall, which is a correctness contract, not
 formatting. `toHtml` parses from source; it does not take an AST.
 
@@ -72,7 +72,7 @@ JSON.stringify(j.parse('- a\n- b')) === JSON.stringify(parseDocument('- a\n- b')
 ```
 
 `.parse()` returns exactly what `parseDocument` returns. The instance is
-reusable — call `.parse()` as often as you like. If you load other plugins,
+reusable: call `.parse()` as often as you like. If you load other plugins,
 `Markdown` must go last, because it claims the `markdown` start rule.
 
 The plugin also hangs the other entry points off the instance, already bound to
@@ -156,7 +156,7 @@ which for the tree above produces:
 ```
 
 `renderHTML` takes the same options object as everything else. `breaks` affects
-it, and `gfm` selects one thing only — the disallowed-raw-HTML filter, which the
+it, and `gfm` selects one thing only, the disallowed-raw-HTML filter, which the
 extension defines at render time. Called with no options, it uses the `gfm` the
 tree was parsed with.
 
@@ -175,15 +175,15 @@ toHtml('[click](javascript:alert(1))\n') // => '<p><a href="javascript:alert(1)"
 
 What reaches the output untouched:
 
-- HTML blocks (§4.6) — whole `<div>`, `<form>`, `<table>` blocks and anything
+- HTML blocks (§4.6). Whole `<div>`, `<form>`, `<table>` blocks and anything
   else that starts a block-level tag.
-- Inline raw HTML (§6.6) — `<b onclick="...">` and friends, attributes intact.
+- Inline raw HTML (§6.6). `<b onclick="...">` and friends, attributes intact.
 - Link and image destinations, including `javascript:` URLs. They are
   percent-encoded and entity-decoded, not filtered by scheme.
 
 The one thing `gfm` changes here is the disallowed-raw-HTML filter, which
-rewrites the leading `<` of nine tag names — `title`, `textarea`, `style`,
-`xmp`, `iframe`, `noembed`, `noframes`, `script`, `plaintext` — and leaves
+rewrites the leading `<` of nine tag names (`title`, `textarea`, `style`,
+`xmp`, `iframe`, `noembed`, `noframes`, `script`, `plaintext`) and leaves
 every other tag, and every attribute, alone:
 
 ```js
@@ -197,7 +197,7 @@ That is nine tag names out of the whole of HTML. It is not a sanitizer.
 
 Run the output through a sanitizer (DOMPurify, sanitize-html, or whatever your
 stack already uses) before it reaches a browser. If you would rather detect raw
-HTML than strip it, the AST surfaces it as `html` nodes — one per tag inline,
+HTML than strip it, the AST surfaces it as `html` nodes, one per tag inline,
 one per block:
 
 ```js
@@ -215,7 +215,7 @@ There are two options, `gfm` (default `true`) and `breaks` (default `false`),
 and they behave the same on `parseDocument`, `parseInline`, `toHtml`,
 `parseTree` and `.use(Markdown, opts)`.
 
-`gfm` gates five extensions as one switch — tables, strikethrough, task list
+`gfm` gates five extensions as one switch: tables, strikethrough, task list
 items, autolink literals and the disallowed-raw-HTML filter. Footnotes are not
 implemented, with `gfm: true` or without it. With `gfm: false` the output is
 plain CommonMark.
@@ -248,7 +248,7 @@ table.children.length // => 3
 `:--` is `'left'`, `--:` is `'right'`, `:-:` is `'center'`, and a cell with no
 colon gives `null`.
 
-There is no header flag — this is mdast's shape, and mdast's convention is that
+There is no header flag: this is mdast's shape, and mdast's convention is that
 the **first** row is the header row. Take it off the front and the rest are body
 rows:
 
@@ -359,7 +359,7 @@ toHtml('Text[^1]\n\n[^1]: Note text here.\n') // => '<p>Text[^1]</p>\n<p>[^1]: N
 ```
 
 Worse, a definition whose body happens to look like a destination *is* a valid
-link reference definition, so the footnote quietly becomes a link:
+link reference definition, so the footnote becomes a link with no error:
 
 ```js
 import { toHtml } from '@tabnas/markdown'
@@ -384,15 +384,15 @@ toHtml('H~2~O\n', { gfm: false }) // => '<p>H~2~O</p>\n'
 If your input is really Pandoc-flavoured, escape the tildes (`H\~2\~O`) or parse
 with `gfm: false`; there is no way to keep strikethrough and lose the collision.
 
-Everything else outside CommonMark and the five GFM extensions is also absent —
+Everything else outside CommonMark and the five GFM extensions is also absent:
 math, front matter, definition lists, heading attributes, admonitions, wiki
 links, emoji shortcodes, highlight, and sub/superscript. Each would need its own
 opt-in flag rather than joining `gfm`, so none of them appear under `gfm: true`.
 
 ## Report errors with line numbers
 
-Use `parseTree`. The JSON AST has no source positions — they are one of the
-things the projection drops — but every block node on the native tree carries
+Use `parseTree`. The JSON AST has no source positions (they are one of the
+things the projection drops) but every block node on the native tree carries
 `sourcepos` as `[[startLine, startCol], [endLine, endCol]]`, 1-based, as in the
 spec. Inline nodes carry `[[0, 0], [0, 0]]`.
 
@@ -421,7 +421,7 @@ and `table_cell` there.
 
 ## Check conformance yourself
 
-The TypeScript suite runs straight from source — no build step, and no
+The TypeScript suite runs straight from source, with no build step and no
 `@tabnas/parser` installed:
 
 ```bash
@@ -430,7 +430,7 @@ npm run conformance
 ```
 
 It prints a per-section table and a total, which is `652/652 100.00%` across all
-26 sections — that is the substantiation for "conformant to CommonMark 0.31.2",
+26 sections. That is the substantiation for "conformant to CommonMark 0.31.2",
 and the spec suite it reads, `test/commonmark/spec.json`, is vendored in the
 repository. Narrow it down when you are chasing one case:
 
@@ -459,18 +459,18 @@ go test -run TestCommonMarkSpec -v ./...
 go test -run TestGFMSpec -v ./...
 ```
 
-The 75 shared AST fixtures in `test/spec/*.tsv` are asserted by both runtimes —
+The 75 shared AST fixtures in `test/spec/*.tsv` are asserted by both runtimes:
 `npm test` (after `npm run build`) on the TypeScript side, `go test ./...` on
 the Go side. They pin the AST through the plugin path; they are a regression
 net, not a proof that the runtimes agree.
 
 The claim that the runtimes agree rests on a wider comparison: all 652
-CommonMark spec inputs under all four `gfm` × `breaks` combinations — 2608
-records — with both the AST and the HTML compared on each, and 0 differences in
+CommonMark spec inputs under all four `gfm` × `breaks` combinations, 2608
+records, with both the AST and the HTML compared on each, and 0 differences in
 either; extending the same run to the 24 GFM examples makes it 676 inputs and
 2704 records, again with none. Neither check covers `sourcepos`, which the AST
 drops and the HTML does not encode.
-## How do I extend the grammar the way GFM does?
+## Extend the grammar the way GFM does
 
 The GFM dialect reaches this plugin's grammar through public engine seams,
 and a downstream dialect extends it the same three ways:
@@ -496,7 +496,7 @@ tn.rule('line', (rs) =>
 ```
 
 * **Subtract by group.** `gfm: false` applies `rule: { exclude: 'gfm' }`,
-  so the tagged alts do not exist in a base-dialect instance — inspect it
+  so the tagged alts do not exist in a base-dialect instance. Inspect it
   with `debug.model()` and count the alts. Your dialect gets the same
   off-switch for free by tagging its alts.
 
@@ -509,4 +509,4 @@ tn.rule('line', (rs) =>
 The parts that stay out of reach are deliberate: block continuation, lazy
 continuation, and the delimiter/bracket resolution live in the shared
 engine-free core, and extensions arm or configure them rather than
-re-implement them — see `concepts.md` for why.
+re-implement them; see `concepts.md` for why.

@@ -1,0 +1,61 @@
+# Words Vale's dictionary does not have, accepted by name.
+#
+# LISTED ONE BY ONE, never matched by suffix. A pattern like `\w+ise`
+# accepts any word ending in those letters, `madeupise` included, and
+# punches a hole through the gate this file exists to make usable.
+#
+# CASE PAIRS ARE ONE ENTRY, WRITTEN AS A REGEX. Two plain lines make
+# Vale enforce one spelling over the other, and it then reports the
+# other as a misspelling.
+
+[Aa]lphanumerics
+[Aa]ST
+[Aa]STs
+[Aa]utolink
+[Aa]utolinks
+[Bb]lockquote
+[Bb]luemonday
+[Cc]onformant
+[Cc]onst
+[Dd]OMPurify
+[Ff]inal_Sigma
+[Ff]unc
+[Gg]FM
+[Ii]nlines
+[Ii]nterop
+[Ii]ntraword
+[Jj]sonic
+[Ll]ookahead
+[Ll]ookback
+[Ll]ossy
+[Ll]owercasing
+[Mm]atchers
+[Mm]dast
+[Mm]isconfigured
+[Mm]itigations
+[Nn]pm
+[Nn]ullable
+[Pp]andoc
+[Pp]repended
+[Rr]egexes
+[Rr]enderer
+[Rr]epo
+[Rr]escope
+[Rr]etag
+[Rr]untime
+[Rr]untimes
+[Ss]anitization
+[Ss]etext
+[Ss]hortcodes
+[Ss]oftbreak
+[Ss]trikethrough
+[Tt]abnas
+[Tt]okenization
+[Uu]nescaped
+[Uu]nescaping
+[Uu]nlinks
+[Uu]ntrusted
+[Uu]ntyped
+[Uu]ppercasing
+[Vv]endored
+[Vv]oxgig
