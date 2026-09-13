@@ -1,6 +1,6 @@
 # Concepts: how @tabnas/markdown works (TypeScript)
 
-Background and design rationale — why the parser is shaped the way it is, and what the
+Background and design rationale: why the parser is shaped the way it is, and what the
 shape cost. For the API see the [reference](reference.md); for recipes see the
 [how-to guide](guide.md).
 
@@ -22,8 +22,9 @@ it.
 defines conformance as HTML output: the 652 examples in the suite are pairs of Markdown
 and expected HTML, compared byte for byte. Without a renderer there is no way to make the
 claim "652/652" mean anything. So the renderer exists as the instrument that measures the
-parser. That it is also useful — you can call `toHtml` and get correct HTML — is a
-consequence of building the measuring device honestly, not the reason it was built. More
+parser. That it is also useful (you can call `toHtml` and get correct HTML) is a
+consequence of building the measuring device to the specification, not the reason it
+was built. More
 on this below.
 
 ## Two phases, and why the order is forced
@@ -41,7 +42,7 @@ Conversely, a `` ` `` that opens a code span cannot suppress a block start: a co
 never spans a blank line, so block boundaries always win. Deciding blocks first makes that
 precedence structural rather than something the inline scanner has to remember.
 
-The block phase, in `block.ts`, keeps a *spine* of open blocks — the document, its last
+The block phase, in `block.ts`, keeps a *spine* of open blocks: the document, its last
 child, that block's last child, and so on. Every open block imposes a continuation
 condition on the next line: a block quote wants a `>`, a list item wants a certain content
 indent, a fenced code block wants anything that is not its closing fence. For each line
@@ -57,8 +58,8 @@ joins it.
 
 Two positions are tracked along each line: a UTF-16 offset, used to slice the text that is
 kept, and a tab-expanded display column, used for every indentation decision. They cannot
-be collapsed into one. A tab may be *partially* consumed by a list marker — the marker
-takes two of the tab's columns and the remaining two become content indent — and only the
+be collapsed into one. A tab may be *partially* consumed by a list marker (the marker
+takes two of the tab's columns and the remaining two become content indent) and only the
 column counter can express that.
 
 The inline phase, in `inline.ts`, then runs over the raw text each paragraph and heading
@@ -97,8 +98,8 @@ clearest motive. When a delimiter run could both open and close, matching it gre
 produces results that disagree with what people write. The rule is: if either side of a
 candidate pair can play both roles, the two run lengths may not sum to a multiple of
 three, unless both lengths are themselves multiples of three. It exists to make sequences
-like `*foo**bar**baz*` nest the way an author means them to — one emphasis wrapping a
-strong — instead of splitting into fragments. It is a heuristic, openly. The specification
+like `*foo**bar**baz*` nest the way an author means them to, one emphasis wrapping a
+strong, instead of splitting into fragments. It is a heuristic, openly. The specification
 adopted it because the alternatives were worse, and any implementation that wants the
 emphasis section to pass has to adopt it too.
 
@@ -106,7 +107,7 @@ emphasis section to pass has to adopt it too.
 
 Brackets get their own stack, for a related but distinct reason. When `[` is read the
 parser does not yet know whether it will turn out to be a link, an image, a reference, or
-literal text — that is only settled when a `]` arrives and the parser looks at what
+literal text: that is only settled when a `]` arrives and the parser looks at what
 follows it. So `[` and `![` are pushed, and the arrival of `]` triggers the resolution:
 try an inline destination, then a full reference, then a collapsed one, then a shortcut.
 
@@ -114,7 +115,7 @@ The two stacks interact, and the interaction is the source of Markdown's inline 
 Bracket matching happens *during* the scan; emphasis matching happens *afterwards*, over
 the delimiter stack. That single fact is what makes brackets bind more tightly than
 emphasis. Each bracket also records where the top of the delimiter stack was when it
-opened, giving emphasis resolution inside a link label a floor it may not reach below — so
+opened, giving emphasis resolution inside a link label a floor it may not reach below, so
 a `*` outside the label cannot pair with one inside it.
 
 Reference links need something the scan cannot provide at all: a definition that may
@@ -124,7 +125,7 @@ finalised. A paragraph may begin with link reference definitions; they are consu
 its front into a reference map, and if nothing is left the paragraph disappears entirely.
 By the time the inline phase runs, every definition in the document is already known, so
 reference resolution is a map lookup rather than a second traversal. The map's keys are
-normalised — trimmed, internal whitespace collapsed, case folded — because label matching
+normalised (trimmed, internal whitespace collapsed, case folded) because label matching
 in Markdown is deliberately forgiving.
 
 This is also why definitions are handled at paragraph finalisation rather than by a
@@ -135,8 +136,8 @@ block phase has decided it.
 ## Two trees: a native one, and a projection
 
 Internally the parse produces a native CommonMark node tree. The public AST is a
-projection of that tree, built by `ast.ts`. Having two representations is a real cost —
-one more thing to keep in step — so it is worth being clear about what each is for.
+projection of that tree, built by `ast.ts`. Having two representations is a real cost,
+one more thing to keep in step, so it is worth being clear about what each is for.
 
 The native tree is **linked**: parent, first child, last child, previous and next
 siblings, with no children array anywhere. This is not stylistic. Both phases splice nodes
@@ -146,15 +147,15 @@ wraps the sibling run between them in a new node, in place, while iterating over
 run. Every one of those operations is a constant-time pointer rewrite on a linked tree, and
 an index shuffle on an array of children. The renderer's walker exists for the same reason:
 a depth-first traversal that reports entering and exiting a container separately maps
-directly onto opening and closing tags, and it can be repositioned mid-walk — which is how
+directly onto opening and closing tags, and it can be repositioned mid-walk, which is how
 an image skips over its own children after flattening them into an `alt` attribute.
 
 The public AST is the opposite: plain JSON, arrays of children, no cycles, no parent
 pointers. It is what callers actually want to hand to `JSON.stringify`, walk with
 `children.map`, or compare in a test fixture. It has been this package's output since
-before the rewrite, and the rewrite kept it that way — the shared `.tsv` fixtures pass
+before the rewrite, and the rewrite kept it that way: the shared `.tsv` fixtures pass
 untouched. Two things did change: raw inline tags now get their own `html` node instead of
-leaking into `text`, and `spread` acquired a meaning — see below.
+leaking into `text`, and `spread` acquired a meaning, described below.
 
 The projection is deliberately lossy, in four places.
 
@@ -167,12 +168,12 @@ promotes them to `break` nodes for callers who need the distinction.
 
 *Source positions are dropped.* The AST carries no line or column information. The native
 tree keeps `sourcepos` on block nodes, which is why `parseTree` exists: if you need to map
-a node back to the source — for an editor, a linter, an error message — that is the tree to
+a node back to the source (for an editor, a linter, an error message) that is the tree to
 ask.
 
 *The block/inline distinction for raw HTML narrows.* The native tree distinguishes an HTML
 block from an inline tag; the AST calls both `html`. Their context makes them
-unambiguous — one appears among blocks, the other among inlines — so the distinction is
+unambiguous (one appears among blocks, the other among inlines) so the distinction is
 recoverable, and one node type is simpler.
 
 *A table's header-row flag goes.* The native tree marks the header row, because the
@@ -199,7 +200,7 @@ several lines later.
 
 The parser resolves this by assuming every list is tight and letting finalisation prove
 otherwise, once the list is closed and all its items are known. A blank line at the very
-end of the last item does not count — that blank line is what closed the list, not
+end of the last item does not count: that blank line is what closed the list, not
 something inside it.
 
 The renderer then reads the decision back off the list rather than off the paragraph.
@@ -223,18 +224,18 @@ This buys three things.
 The conformance suite runs without the engine, without a build step, and without
 `node_modules`. It stages the sources in a temporary directory and executes them under
 Node's type stripping. That means the 652/652 figure can be checked in an environment
-where the engine is not installed or not yet built — including CI on a fresh clone, and
+where the engine is not installed or not yet built, including CI on a fresh clone, and
 including the sibling-development setup where the engine is a local `file:` dependency
 that may be mid-change.
 
-It keeps the failure surface honest. When a conformance example fails you know it is the
+It keeps the failure surface narrow. When a conformance example fails you know it is the
 parser, because there is nothing else in the process. A parser entangled with a lexer would
 leave you bisecting between the two.
 
 And it makes the Go port a port of the parser rather than of the plugin. TypeScript is
 canonical and Go follows it (see `AGENTS.md`); because the parser is a self-contained set
 of modules with no engine surface, porting it is a mechanical translation of algorithms,
-and parity can be checked directly — 652 examples × 4 option combinations, comparing both
+and parity can be checked directly: 652 examples × 4 option combinations, comparing both
 ASTs and both HTML outputs.
 
 The cost is that the plugin cannot use the engine's lexer for anything. It reads the raw
@@ -257,7 +258,7 @@ claim, and it is the only thing that distinguishes a parser scoring 40% from one
 correctness contract, not a formatting preference, because the comparison is byte for
 byte.
 
-Having built it, there is no reason to hide it — `toHtml` is a supported part of the API
+Having built it, there is no reason to hide it: `toHtml` is a supported part of the API
 and produces spec-conformant output. But the AST remains the primary product, and the
 renderer remains, first, the thing that proves the AST was built correctly.
 
@@ -266,14 +267,14 @@ HTML is not sanitized.** CommonMark requires raw HTML blocks and inline tags to 
 through verbatim, and this renderer does exactly that. A conformant renderer cannot filter
 them, because filtering them would fail the suite. Anything rendering untrusted Markdown
 needs a sanitizer downstream. GFM's disallowed-raw-HTML extension is implemented, but it
-neutralises nine tag names and nothing else — it is not a sanitizer, and it says nothing
+neutralises nine tag names and nothing else. It is not a sanitizer, and it says nothing
 about attributes or `javascript:` destinations.
 
 ## What is and is not GFM
 
 The package parses CommonMark, with the complete set of five GFM extensions: tables, task
 list items, autolink literals, strikethrough and disallowed raw HTML. That is 24/24 on the
-GFM specification's extension corpus, and the set is closed — there is no sixth extension
+GFM specification's extension corpus, and the set is closed: there is no sixth extension
 in the specification waiting to be written. `gfm` gates the five as a single switch rather
 than as five flags: a document is either GitHub-flavoured or it is not, and a
 per-extension matrix is configuration surface nobody asked for.
@@ -289,7 +290,7 @@ one delimiter character the scanner previously ignored.
 That keeps the machinery that decides code spans, raw HTML, emphasis and links exactly as
 CommonMark specifies it, and the consequence is that `gfm: false` is not an approximation
 of CommonMark but the same parse: byte-identical output over 1430 checked records, not a
-resemblance. Turning the extensions on does move nine of the 652 spec examples — six in
+resemblance. Turning the extensions on does move nine of the 652 spec examples: six in
 HTML blocks, where the disallowed-raw-HTML filter escapes the `<script>`, `<style>` and
 `<textarea>` the suite expects verbatim, and three in Autolinks, where text the suite
 expects to stay literal becomes a link. Those nine are the extensions doing precisely what
@@ -300,7 +301,7 @@ that has extensions layered over it.
 What `gfm` does *not* mean is "everything a Markdown file might contain". Footnotes are the
 closest miss: they are a GitHub product feature, not part of the GFM specification suite,
 and there is nothing to conform to. The failure mode is quiet rather than loud, because
-`[^1]` is a perfectly good CommonMark link label — a GitHub-authored footnote renders as a
+`[^1]` is a perfectly good CommonMark link label, so a GitHub-authored footnote renders as a
 broken link rather than raising anything. If the definition body happens to look like a
 destination it is a link reference definition, and the footnote marker silently becomes a
 real link to it.
@@ -310,13 +311,13 @@ several other dialects spell subscript with single tildes, so `H~2~O` renders as
 `H<del>2</del>O` under `gfm: true`. There is no way to have GFM strikethrough and not have
 that; the only escape is `gfm: false` or escaping the tildes in the source.
 
-Everything further out — math, front matter, definition lists, heading attributes,
-admonitions, wiki links, emoji shortcodes, highlight, sub/superscript — is absent on
+Everything further out (math, front matter, definition lists, heading attributes,
+admonitions, wiki links, emoji shortcodes, highlight, sub/superscript) is absent on
 purpose. Each is a different dialect's idea, and each would need its own opt-in flag if it
 were ever added. Letting `gfm` grow to mean "everything" would turn a flag whose meaning
 is defined by an external specification into a flag whose meaning is whatever this package
 happened to implement last, and would take the conformance argument above with it. The
-honest statement of scope is still narrower than "CommonMark/GFM": a caller who needs
+statement of scope is still narrower than "CommonMark/GFM": a caller who needs
 footnotes knows to look elsewhere rather than discovering it at runtime.
 
 ## Tables are the extension that reaches backwards
@@ -327,7 +328,7 @@ about to write. Tables are the one construct in CommonMark or GFM whose trigger 
 *after* the text it governs, and that single fact accounts for nearly everything odd about
 how they are implemented.
 
-A delimiter row — `| --- | :-: |` — is meaningless on its own. It only means "table" if
+A delimiter row (`| --- | :-: |`) is meaningless on its own. It only means "table" if
 the line above it is a header row with the same number of cells, and by the time the block
 phase reads it, that line is no longer a line: it has been appended to an open paragraph's
 accumulated text and the paragraph is the tip of the spine. So the table start has to
@@ -339,8 +340,8 @@ hold link reference definitions, and a definition that has already been written 
 document should not vanish because the last line of the same paragraph turned out to be a
 table header.
 
-CommonMark has one construct that reaches back at all — the Setext underline, which
-consumes the paragraph above it and turns it into a heading — and it is instructive that
+CommonMark has one construct that reaches back at all, the Setext underline, which
+consumes the paragraph above it and turns it into a heading, and it is instructive that
 the table start is worse. Setext takes the paragraph *whole*: the block is replaced, and
 nothing is left over. A table start takes only the last line and leaves the rest standing
 as a paragraph, which means it is the one block start in the parser that has to edit the
@@ -349,8 +350,8 @@ additive: match continuations, open new blocks, close unmatched ones. That is wh
 whole of the reaching-backwards logic is confined to one function.
 
 That exception is also why tables are the one extension that could plausibly have cost
-core conformance. The other four are bolted on where nothing else is looking — a
-character the scanner ignored, a post-pass, a render step — but a table start is
+core conformance. The other four are bolted on where nothing else is looking (a
+character the scanner ignored, a post-pass, a render step) but a table start is
 evaluated against an open paragraph on lines that CommonMark has its own opinions about.
 Spec examples full of pipes, Setext headings whose underline is a run of hyphens, list
 items beginning with `-`: all of them present lines that a careless delimiter-row test
@@ -367,7 +368,7 @@ check on all of that: they are scored with `gfm: false`, and run again under eve
 
 Escaped pipes are the second place where tables have to break the usual order of
 operations, and this one is about phases rather than blocks. A cell is delimited by unescaped
-pipes, so splitting a row means understanding `\|` — that much is unavoidable. What is
+pipes, so splitting a row means understanding `\|`, and that much is unavoidable. What is
 less obvious is that `\|` must be *resolved* to a literal `|` at split time, before the
 inline phase ever sees the cell, rather than being left for the ordinary escape handling
 that resolves `\*` and `\[`. The reason is code spans. Inline escape resolution does not
@@ -384,11 +385,11 @@ Tables are also the only extension that added node types rather than a field. Ta
 became `listItem.checked`, strikethrough reused the `delete` node the AST already had,
 autolink literals produce ordinary `link` nodes, and the raw-HTML filter changes no tree
 at all. A table cannot be expressed that way. It is not a variation on a block that
-already exists — it is a two-dimensional structure with per-column data attached to the
+already exists: it is a two-dimensional structure with per-column data attached to the
 container rather than to the cells, and rows and cells that hold content in their own
 right. Any attempt to encode it in existing types (a list of lists, a paragraph with a
 marker field) would make consumers reconstruct the shape from a convention, which is worse
-than three honest node types. mdast had already settled the question, and matching it
+than three node types of its own. mdast had already settled the question, and matching it
 means `table`, `tableRow` and `tableCell` behave for downstream tooling exactly as they do
 everywhere else in that ecosystem.
 
@@ -411,27 +412,27 @@ instance, and the `inline` rule with its twelve-matcher token alphabet on
 the nested inline instance. `debug.model()` serializes it, and the
 railroad diagrams in `ts/doc/grammar.svg` and `ts/doc/grammar-inline.svg`
 are drawn from live instances by `tools/gen-railroad.mjs`, so they are
-honest by derivation — regenerate them after a rule or matcher change
+derived rather than drawn. Regenerate them after a rule or matcher change
 rather than editing them.
 
 An earlier revision shipped an inert `markdown-grammar.jsonic` file whose
 single rule merely drained the token stream while a `bo` action bypassed
 the engine entirely; its railroad diagram was famously a bare track with
-no boxes. That file, its embed step, and the bypass are gone — the engine
+no boxes. That file, its embed step, and the bypass are gone (the engine
 parse is the parse, over one `#LB` token per physical line and one inline
-token per construct — and the division of labor is deliberate: the engine
+token per construct) and the division of labor is deliberate: the engine
 owns tokenization, dispatch, state carriage and observability, while the
 spec's Appendix A algorithms stay in the shared engine-free core that
 both the plugin path and the direct API run.
 
 Whether the Markdown *algorithms* could usefully be expressed as declarative alts
-remains the more interesting question, and the answer is still no — deliberately. Lazy
+remains the more interesting question, and the answer is still no, deliberately. Lazy
 continuation is a cross-step commit protocol, setext promotion and the table split are
 lookback tree surgery, and the emphasis rule of three needs backward search over
 unmatched delimiter runs; a first-match-wins alternation cannot express any of them,
 which is why the specification describes an algorithm rather than a grammar, and why
-every conformant implementation is an algorithm too. What the engine *does* own here —
+every conformant implementation is an algorithm too. What the engine *does* own here,
 line and inline tokenization through custom matchers (including the context-sensitive
 `]` matcher that consumes a link tail at lex time), rule dispatch, per-parse state via
 `parse.prepare` and `ctx.u`, the group-tagged GFM extension seam, and the observability
-surface — is the part of a parser an engine is genuinely for.
+surface, is the part of a parser an engine is genuinely for.

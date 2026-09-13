@@ -12,7 +12,7 @@ A CommonMark parser for the [Tabnas](https://github.com/tabnas/parser) engine.
 Docs, guides, the error reference and the playground: **[tabnas.dev](https://tabnas.dev)**.
 
 **This parser is conformant to CommonMark 0.31.2.** All 652 examples pass, across all 26
-sections of the spec suite, in both implementations — TypeScript (canonical) and Go (a
+sections of the spec suite, in both implementations, TypeScript (canonical) and Go (a
 port of it). The suite is vendored in this repository, so the claim is checkable rather
 than asserted:
 
@@ -21,7 +21,7 @@ cd ts && npm run conformance                    # 652/652
 cd go && go test -run TestCommonMarkSpec ./...  # 652/652
 ```
 
-On top of CommonMark it implements **five GFM extensions** — tables, task list items,
+On top of CommonMark it implements **five GFM extensions**: tables, task list items,
 autolink literals, strikethrough and disallowed raw HTML. That is the complete GFM
 extension set: 24/24 on the vendored GFM corpus.
 
@@ -30,7 +30,7 @@ The parser itself is engine-free; the Tabnas plugin is wiring around it.
 ## Two outputs: the AST, and HTML if you ask
 
 **The AST is the primary output.** `parseDocument()` returns a JSON tree and runs nothing
-else — no renderer, no extra cost.
+else: no renderer, no extra cost.
 
 ```js
 import { parseDocument } from '@tabnas/markdown'
@@ -94,7 +94,7 @@ go get github.com/tabnas/markdown/go@latest
 ```
 
 `@tabnas/parser` is a peer dependency of the npm package. The Go module requires
-`github.com/tabnas/parser/go` — the bare engine — and nothing else.
+`github.com/tabnas/parser/go` (the bare engine) and nothing else.
 
 ## What is parsed
 
@@ -120,7 +120,7 @@ TypeScript is canonical and the Go port follows it; the two are level, and verif
 example for example on both outputs. `gfm:false` turns every one of them off, and the
 output is then plain CommonMark, byte for byte.
 
-Tables contribute three node types, in mdast's shape — `table`, `tableRow` and
+Tables contribute three node types, in mdast's shape: `table`, `tableRow` and
 `tableCell`. `align` carries one entry per column, `null` where the delimiter cell had no
 colon, and there is no header flag: the first row is the header row, by convention.
 
@@ -139,7 +139,7 @@ rows and truncates long ones. The native tree names the same three nodes `table`
 
 **Footnotes are not implemented.** They are a GitHub product feature, not part of the GFM
 spec suite. Because `[^1]` is a valid CommonMark link label, a GitHub-authored footnote
-does not error — it silently renders as a broken link:
+does not error. It silently renders as a broken link:
 
 ```js
 import { toHtml } from '@tabnas/markdown'
@@ -147,7 +147,7 @@ import { toHtml } from '@tabnas/markdown'
 toHtml('Text[^1]\n\n[^1]: note') // => '<p>Text<a href="note">^1</a></p>\n'
 ```
 
-Nothing outside CommonMark and GFM is implemented either — no math, front matter,
+Nothing outside CommonMark and GFM is implemented either: no math, front matter,
 definition lists, heading attributes, admonitions, wiki links, emoji shortcodes,
 highlight or sub/superscript. Each would need its own opt-in flag; `gfm` is not going to
 grow to mean "everything". One collision is worth knowing about: GFM's single-tilde
@@ -181,7 +181,7 @@ sanitizer, and it does nothing about attributes or `javascript:` destinations.
 
 ## Conformance
 
-**The parser is conformant to CommonMark 0.31.2** — 652/652, all 26 sections, in both
+**The parser is conformant to CommonMark 0.31.2**, 652/652, all 26 sections, in both
 runtimes. The suite is vendored at [`test/commonmark/spec.json`](test/commonmark/), so you
 can check that for yourself rather than take it on trust:
 
@@ -190,7 +190,7 @@ cd ts && npm run conformance                    # no build step, no engine neede
 cd go && go test -run TestCommonMarkSpec -v ./...
 ```
 
-Both report 652/652, run with the GFM extensions off — which is what measuring
+Both report 652/652, run with the GFM extensions off, which is what measuring
 CommonMark conformance means. GFM deliberately changes the output of nine of those
 examples (six raw-HTML, three autolink), so with `gfm: true` the same suite reports
 643/652. That is the extensions working, not a conformance failure.
@@ -217,14 +217,14 @@ in both.
   identical output and the field carried no information. It now does.
 * Inline raw HTML produces `{ type: 'html', value: '<b>' }` inline nodes. There was
   previously no node type for it and tags leaked into `text`.
-* Tables add three public AST node types — `table`, `tableRow` and `tableCell`. Input that
+* Tables add three public AST node types: `table`, `tableRow` and `tableCell`. Input that
   previously came back as a paragraph of pipe characters is now a `table` node under the
   default `gfm:true`.
-* Otherwise the AST is unchanged — the `test/spec/*.tsv` fixtures pass untouched.
+* Otherwise the AST is unchanged: the `test/spec/*.tsv` fixtures pass untouched.
 
 ## Documentation
 
-Documentation follows the [Diátaxis](https://diataxis.fr) framework — one file per
+Documentation follows the [Diátaxis](https://diataxis.fr) framework, one file per
 quadrant, per language.
 
 | | TypeScript | Go |
@@ -245,7 +245,7 @@ Per-language hubs: [ts/README.md](ts/README.md) · [go/README.md](go/README.md).
 | [`test/spec/`](test/spec/) | 83 shared AST fixtures, run by both runtimes. |
 | [`test/commonmark/`](test/commonmark/) | Vendored CommonMark 0.31.2 spec suite (652 examples). |
 | [`test/gfm/`](test/gfm/) | Vendored GFM extension corpus (24 examples), run by both runtimes. |
-| [`ts/doc/grammar.svg`](ts/doc/grammar.svg), [`ts/doc/grammar-inline.svg`](ts/doc/grammar-inline.svg) | Railroad diagrams of the LIVE grammar — the block instance's `markdown`/`line` rules and the inline instance's twelve-token alphabet — drawn from real plugin instances by [`ts/tools/gen-railroad.mjs`](ts/tools/gen-railroad.mjs). |
+| [`ts/doc/grammar.svg`](ts/doc/grammar.svg), [`ts/doc/grammar-inline.svg`](ts/doc/grammar-inline.svg) | Railroad diagrams of the LIVE grammar (the block instance's `markdown`/`line` rules and the inline instance's twelve-token alphabet), drawn from real plugin instances by [`ts/tools/gen-railroad.mjs`](ts/tools/gen-railroad.mjs). |
 
 > **Rescope note:** this package was previously a CSV-family record parser (copied from
 > `@tabnas/csv`). It now parses prose Markdown; record parsing is available via

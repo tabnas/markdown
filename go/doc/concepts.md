@@ -1,11 +1,11 @@
 # Concepts: how @tabnas/markdown works (Go)
 
-Background and design rationale — why the parser is shaped the way it is, what the shape
+Background and design rationale: why the parser is shaped the way it is, what the shape
 cost, and what porting it to Go changed. For the API see the [reference](reference.md);
 for recipes see the [how-to guide](guide.md).
 
-**The parser is conformant to CommonMark 0.31.2** — 652/652 examples, all 26 sections, in
-this runtime and in the TypeScript one — and implements the complete set of five GFM
+**The parser is conformant to CommonMark 0.31.2**, 652/652 examples, all 26 sections, in
+this runtime and in the TypeScript one, and it implements the complete set of five GFM
 extensions, 24/24. Both suites are vendored (`test/commonmark/spec.json`,
 `test/gfm/spec.json`) and run by `go test -run TestCommonMarkSpec -v ./...` and
 `go test -run TestGFMSpec -v ./...`, so the claim is checkable rather than asserted. Much
@@ -14,16 +14,16 @@ of what follows is an account of what that number cost to reach, and where it is
 Two things are worth settling before anything else, because they decide how you read the
 rest of this document.
 
-**The AST is the primary output.** A JSON-shaped tree of blocks and inlines — here, a
-`map[string]any` — is what this package exists to produce, and what `ParseDocument`
+**The AST is the primary output.** A JSON-shaped tree of blocks and inlines (here, a
+`map[string]any`) is what this package exists to produce, and what `ParseDocument`
 returns. Nothing else runs when you ask for it.
 
 **There is an HTML emitter, and it is not a side utility.** The CommonMark specification
 defines conformance as HTML output: the 652 examples in the suite are pairs of Markdown
 and expected HTML, compared byte for byte. Without a renderer there is no way to make the
 claim "652/652" mean anything. So `ToHTML` exists as the instrument that measures the
-parser. That it is also useful — you can call it and get correct HTML — is a consequence
-of building the measuring device honestly, not the reason it was built. More on this
+parser. That it is also useful (you can call it and get correct HTML) is a consequence
+of building the measuring device to the specification, not the reason it was built. More on this
 below.
 
 TypeScript is canonical and this package is a port of it; see `AGENTS.md`. The first two
@@ -45,7 +45,7 @@ Conversely, a `` ` `` that opens a code span cannot suppress a block start: a co
 never spans a blank line, so block boundaries always win. Deciding blocks first makes that
 precedence structural rather than something the inline scanner has to remember.
 
-The block phase, in `block.go`, keeps a *spine* of open blocks — the document, its last
+The block phase, in `block.go`, keeps a *spine* of open blocks: the document, its last
 child, that block's last child, and so on. Every open block imposes a continuation
 condition on the next line: a block quote wants a `>`, a list item wants a certain content
 indent, a fenced code block wants anything that is not its closing fence. For each line
@@ -61,8 +61,8 @@ joins it.
 
 Two positions are tracked along each line: an offset, used to slice the text that is kept,
 and a tab-expanded display column, used for every indentation decision. They cannot be
-collapsed into one. A tab may be *partially* consumed by a list marker — the marker takes
-two of the tab's columns and the remaining two become content indent — and only the column
+collapsed into one. A tab may be *partially* consumed by a list marker (the marker takes
+two of the tab's columns and the remaining two become content indent) and only the column
 counter can express that. In Go the offset is a byte index; see
 [Byte offsets, rune classification](#byte-offsets-rune-classification) for what that costs.
 
@@ -89,7 +89,7 @@ specification's own definitions of Unicode whitespace and Unicode punctuation ra
 on a regexp character class. Those near-misses are exactly where conformance leaks: version
 0.31.2 widened the punctuation class from P\* alone to P\* ∪ S\*, which is why `$`, `+`,
 `<`, `=`, `>`, `^`, `` ` ``, `|`, `~` and currency symbols now count, and a P-only test
-costs a handful of emphasis examples and nothing else — which makes it very hard to notice.
+costs a handful of emphasis examples and nothing else, which makes it very hard to notice.
 `common.go` spells both classes out; `isUnicodePunctuation` is `unicode.IsPunct ||
 unicode.IsSymbol`, and `isUnicodeWhitespace` is the spec's §2.3 list rather than
 `unicode.IsSpace`, which differs from it at the edges.
@@ -104,7 +104,7 @@ clearest motive. When a delimiter run could both open and close, matching it gre
 produces results that disagree with what people write. The rule is: if either side of a
 candidate pair can play both roles, the two run lengths may not sum to a multiple of three,
 unless both lengths are themselves multiples of three. It exists to make sequences like
-`*foo**bar**baz*` nest the way an author means them to — one emphasis wrapping a strong —
+`*foo**bar**baz*` nest the way an author means them to, one emphasis wrapping a strong,
 instead of splitting into fragments. It is a heuristic, openly. The specification adopted it
 because the alternatives were worse, and any implementation that wants the emphasis section
 to pass has to adopt it too.
@@ -113,7 +113,7 @@ to pass has to adopt it too.
 
 Brackets get their own stack, for a related but distinct reason. When `[` is read the
 parser does not yet know whether it will turn out to be a link, an image, a reference, or
-literal text — that is only settled when a `]` arrives and the parser looks at what follows
+literal text: that is only settled when a `]` arrives and the parser looks at what follows
 it. So `[` and `![` are pushed, and the arrival of `]` triggers the resolution: try an
 inline destination, then a full reference, then a collapsed one, then a shortcut.
 
@@ -121,7 +121,7 @@ The two stacks interact, and the interaction is the source of Markdown's inline 
 Bracket matching happens *during* the scan; emphasis matching happens *afterwards*, over
 the delimiter stack. That single fact is what makes brackets bind more tightly than
 emphasis. Each bracket also records where the top of the delimiter stack was when it
-opened, giving emphasis resolution inside a link label a floor it may not reach below — so
+opened, giving emphasis resolution inside a link label a floor it may not reach below, so
 a `*` outside the label cannot pair with one inside it.
 
 Reference links need something the scan cannot provide at all: a definition that may appear
@@ -130,8 +130,8 @@ this by collecting definitions during the block phase, when each paragraph is fi
 paragraph may begin with link reference definitions; they are consumed from its front into
 a `RefMap`, and if nothing is left the paragraph disappears entirely. By the time the
 inline phase runs, every definition in the document is already known, so reference
-resolution is a map lookup rather than a second traversal. The map's keys are normalised —
-trimmed, internal whitespace collapsed, case folded — because label matching in Markdown is
+resolution is a map lookup rather than a second traversal. The map's keys are normalised (trimmed,
+internal whitespace collapsed, case folded) because label matching in Markdown is
 deliberately forgiving. Getting that fold right in Go took more than `strings.ToUpper`; see
 [Case folding a link label](#case-folding-a-link-label).
 
@@ -143,8 +143,8 @@ block phase has decided it.
 ## Two trees: a native one, and a projection
 
 Internally the parse produces a native CommonMark node tree of `*MdNode`. The public AST is
-a projection of that tree, built by `ast.go`. Having two representations is a real cost —
-one more thing to keep in step — so it is worth being clear about what each is for.
+a projection of that tree, built by `ast.go`. Having two representations is a real cost,
+one more thing to keep in step, so it is worth being clear about what each is for.
 
 The native tree is **linked**: `Parent`, `FirstChild`, `LastChild`, `Prev`, `Next`, with no
 children slice anywhere. This is not stylistic. Both phases splice nodes mid-walk. The
@@ -154,15 +154,15 @@ sibling run between them in a new node, in place, while iterating over the same 
 one of those operations is a constant-time pointer rewrite on a linked tree, and an index
 shuffle on a slice of children. The renderer's `NodeWalker` exists for the same reason: a
 depth-first traversal that reports entering and exiting a container separately maps
-directly onto opening and closing tags, and `ResumeAt` can reposition it mid-walk — which
+directly onto opening and closing tags, and `ResumeAt` can reposition it mid-walk, which
 is how an image skips over its own children after flattening them into an `alt` attribute.
 
 The public AST is the opposite: plain maps and slices, no cycles, no parent pointers. It is
 what callers actually want to hand to `encoding/json`, range over, or compare in a test
 fixture. It has been this package's output since before the rewrite, and the rewrite kept
-it that way — the shared `.tsv` fixtures pass untouched. Two things did change: raw inline
+it that way: the shared `.tsv` fixtures pass untouched. Two things did change: raw inline
 tags now get their own `html` node instead of leaking into `text`, and `spread` acquired a
-meaning — see below.
+meaning, described below.
 
 The projection is deliberately lossy, in four places.
 
@@ -175,17 +175,17 @@ them to `break` nodes for callers who need the distinction.
 
 *Source positions are dropped.* The AST carries no line or column information. The native
 tree keeps `SourcePos` on block nodes, which is why `ParseTree` exists: if you need to map
-a node back to the source — for an editor, a linter, an error message — that is the tree to
+a node back to the source (for an editor, a linter, an error message) that is the tree to
 ask.
 
 *The block/inline distinction for raw HTML narrows.* The native tree distinguishes
 `html_block` from `html_inline`; the AST calls both `html`. Their context makes them
-unambiguous — one appears among blocks, the other among inlines — so the distinction is
+unambiguous (one appears among blocks, the other among inlines) so the distinction is
 recoverable, and one node type is simpler.
 
 *A table row's header flag disappears.* The native tree marks it, the AST does not, because
 mdast does not: the first row of a `table` is the header row by convention. Recoverable
-from position, like the one above, and the same argument applies — the AST follows mdast
+from position, like the one above, and the same argument applies: the AST follows mdast
 where mdast has an opinion, rather than adding a field the ecosystem would ignore.
 
 One thing the projection now does *better* is `spread`. It follows mdast semantics: a list
@@ -196,7 +196,7 @@ Nothing could have depended on it, which is what made the change safe to make.
 
 The projection also has one decision that exists only in Go: every `children` slice is
 allocated non-nil, and every absent optional value is an untyped `nil` rather than a missing
-key. Both are `encoding/json` concerns — a nil slice marshals to `null` where an empty one
+key. Both are `encoding/json` concerns: a nil slice marshals to `null` where an empty one
 marshals to `[]`, and a missing key is not the same JSON document as a key with `null`.
 The previous port left the slices nil, which silently changed the JSON of every empty
 document, blockquote, list item and link label relative to the TypeScript. The
@@ -216,7 +216,7 @@ several lines later.
 
 The parser resolves this by assuming every list is tight and letting finalisation prove
 otherwise, once the list is closed and all its items are known. A blank line at the very
-end of the last item does not count — that blank line is what closed the list, not
+end of the last item does not count: that blank line is what closed the list, not
 something inside it.
 
 The renderer then reads the decision back off the list rather than off the paragraph. A
@@ -243,13 +243,13 @@ paragraph that keeps taking lines until something ends it. Nothing else in the p
 on both sides of that line.
 
 *Recognition is retroactive.* The delimiter row is what tells you the line *before* it was
-a header row — so by the time the parser can recognise a table, the header row has already
+a header row, so by the time the parser can recognise a table, the header row has already
 been accepted into an open paragraph. A setext heading has the same shape of problem and
 solves it by claiming the whole paragraph. A table cannot: it claims the paragraph's *last
 line only* and leaves the earlier lines behind as a paragraph in their own right, finalised
 on the spot so that they can still contribute link reference definitions. That is why the
-cell-count test is on the last line rather than on the paragraph — the earlier lines are
-not candidates, they are prose that happens to precede a table — and it is the one place
+cell-count test is on the last line rather than on the paragraph (the earlier lines are
+not candidates, they are prose that happens to precede a table) and it is the one place
 in the parser where a block start takes a *part* of what another block already holds.
 
 *Rectangularity is enforced, not observed.* Short rows are padded with empty cells and long
@@ -257,7 +257,7 @@ ones truncated, to the delimiter row's column count. GFM specifies this, and it 
 makes `align` usable at all: because every row has exactly `len(align)` cells,
 `align[i]` is the alignment of cell `i` of every row, and a consumer can index cells
 without checking. The cost is that padding is the one part of a table whose node count is
-not bounded by the input length — a one-column row under a thousand-column delimiter row
+not bounded by the input length: a one-column row under a thousand-column delimiter row
 produces a thousand cells, so 60 KB of input can ask for 10⁸ of them. `block.go` therefore
 holds a document-wide budget for padding cells, cmark-gfm's `MAX_AUTOCOMPLETED_CELLS` and
 for the same reason; every other part of the extension is linear in the input, so that one
@@ -275,7 +275,7 @@ block phase too, but stripping a known prefix leaves the rest of the line untouc
 is resolved to a literal `|` wherever it occurs, when the row is split into cells. It has
 to happen there. The extension requires a pipe to work inside other inline spans, and
 `` `\|` `` can only come out as `<code>|</code>` if the backslash is gone before the code
-span is scanned — no amount of unescaping *after* inline parsing produces that. It is still
+span is scanned, and no amount of unescaping *after* inline parsing produces that. It is still
 not a change to the scanner: the scanner is unmodified and simply receives different text,
 which is the weakest form of interference available and the reason the CommonMark score is
 unaffected. Every other backslash escape is left exactly as written, so no cell text is
@@ -289,7 +289,7 @@ TypeScript's `('left'|'right'|'center'|null)[]`. And the renderer keeps the curr
 alignment slice and a cell index in its own state rather than asking each cell for its
 column: a cell in a linked tree can only find its index by counting previous siblings,
 which is quadratic in the row width. A table can never contain another table, so one slice
-and one counter are enough — no stack.
+and one counter are enough, with no stack.
 
 ## Why the parser is engine-free
 
@@ -304,19 +304,19 @@ The conformance suite runs without constructing an engine. `TestCommonMarkSpec` 
 `ToHTML` directly, so when an example fails you know it is the parser, because there is
 nothing else in the call. A parser entangled with a lexer would leave you bisecting between
 the two. (Go compiles the package as a unit, so the engine module is still a build
-requirement here — the guarantee is about the code path and the failure surface, not about
+requirement here: the guarantee is about the code path and the failure surface, not about
 the module graph. In TypeScript, where modules are separate, the conformance run genuinely
 loads no engine at all.)
 
-It keeps `go.mod` honest. The module requires the bare engine and nothing else: no jsonic,
+It keeps `go.mod` small. The module requires the bare engine and nothing else: no jsonic,
 no indirect requirements. Earlier documentation claimed that while `go.mod` said otherwise;
 it is now true, and it stays true only because there is one file that could ever add an
 import.
 
 And it makes this package a port of the parser rather than of the plugin. Because the
 parser is a self-contained set of files with no engine surface, porting it is a mechanical
-translation of algorithms, file for file — `block.ts` to `block.go`, `inline.ts` to
-`inline.go` — and parity can be checked directly, by comparing outputs rather than
+translation of algorithms, file for file (`block.ts` to `block.go`, `inline.ts` to
+`inline.go`) and parity can be checked directly, by comparing outputs rather than
 behaviour under a shared host.
 
 The cost is that the plugin cannot use the engine's lexer for anything. It reads the raw
@@ -338,7 +338,7 @@ claim, and it is the only thing that distinguishes a parser scoring 40% from one
 100%, since without it neither number exists. Newline placement in `html.go` is a
 correctness contract, not a formatting preference, because the comparison is byte for byte.
 
-Having built it, there is no reason to hide it — `ToHTML` is a supported part of the API
+Having built it, there is no reason to hide it: `ToHTML` is a supported part of the API
 and produces spec-conformant output. But the AST remains the primary product, and the
 renderer remains, first, the thing that proves the AST was built correctly.
 
@@ -347,14 +347,14 @@ HTML is not sanitized.** CommonMark requires raw HTML blocks and inline tags to 
 through verbatim, and this renderer does exactly that. A conformant renderer cannot filter
 them, because filtering them would fail the suite. Anything rendering untrusted Markdown
 needs a sanitizer downstream. GFM's disallowed-raw-HTML extension is implemented, but it
-neutralises nine tag names and nothing else — it is not a sanitizer, and it says nothing
+neutralises nine tag names and nothing else. It is not a sanitizer, and it says nothing
 about attributes or `javascript:` destinations.
 
 ## What is and is not GFM
 
 The package parses CommonMark, with the complete set of five GFM extensions: tables,
 strikethrough, task list items, autolink literals and disallowed raw HTML. `GFM` gates the
-five as a single switch rather than as five flags — a document is either GitHub-flavoured
+five as a single switch rather than as five flags: a document is either GitHub-flavoured
 or it is not, and a per-extension matrix is configuration surface nobody asked for. The
 switch is also what makes `GFM: false` mean something exact: pure CommonMark, byte for
 byte, which is the setting the conformance suite runs under.
@@ -370,7 +370,7 @@ as CommonMark specifies it, and the consequence is that `GFM: false` is not an
 approximation of CommonMark but the same parse: byte-identical output over 1430 checked
 records, not a resemblance.
 
-Turning the extensions on does move nine of the 652 spec examples — six in HTML blocks,
+Turning the extensions on does move nine of the 652 spec examples: six in HTML blocks,
 where the disallowed-raw-HTML filter escapes the `<script>`, `<style>` and `<textarea>` the
 suite expects verbatim, and three in Autolinks, where text the suite expects to stay
 literal becomes a link. Those nine are the extensions doing precisely what they are
@@ -380,25 +380,25 @@ that has extensions layered over it.
 
 ### What is still missing, and why it stays missing
 
-The extension set is complete against the GFM specification suite, so the honest statement
-of scope is now exactly "CommonMark 0.31.2 plus the five GFM extensions" — and both halves
+The extension set is complete against the GFM specification suite, so the statement
+of scope is now exactly "CommonMark 0.31.2 plus the five GFM extensions", and both halves
 of that are worth reading strictly.
 
 **Footnotes are not implemented**, and that is not an oversight in the extension set: they
 are a GitHub product feature that never entered the GFM specification, so they are not in
 the suite the 24/24 is measured against. The failure mode is the quiet kind. `[^1]` is a
-valid CommonMark link label, so a footnote authored on GitHub does not error — the
+valid CommonMark link label, so a footnote authored on GitHub does not error: the
 reference falls through to literal text, and a definition line whose body happens to look
 like a destination is a perfectly good link reference definition, which turns the footnote
 into a link to somewhere the author never meant. Detecting `[^` in a corpus before you
 convert it is the only defence; the [how-to guide](guide.md) has the recipe.
 
 **GFM's strikethrough collides with other dialects' subscript.** GFM accepts a single `~`
-as well as `~~`, so `H~2~O` — subscript in Pandoc and several others — is `H<del>2</del>O`
+as well as `~~`, so `H~2~O` (subscript in Pandoc and several others) is `H<del>2</del>O`
 under the default `GFM: true`. There is no way to keep strikethrough and lose the
 collision: they are the same syntax, and the extension is the one being implemented.
 
-Everything outside CommonMark and those five extensions is absent — math, front matter,
+Everything outside CommonMark and those five extensions is absent: math, front matter,
 definition lists, heading attributes, admonitions, wiki links, emoji shortcodes, highlight,
 sub/superscript. Each of them is a dialect of somebody's, not of GFM's, and each would need
 its own opt-in flag if it were added. `GFM` means the GFM specification's extensions and
@@ -414,21 +414,21 @@ and the plugin registers it the way any tabnas grammar plugin does: the
 instance (`markdown.go`, `engineblock.go`), and the `inline` rule with its
 twelve-matcher token alphabet on the nested inline instance
 (`engineinline.go`). The railroad diagrams in `ts/doc/grammar.svg` and
-`ts/doc/grammar-inline.svg` are drawn from live TypeScript instances —
+`ts/doc/grammar-inline.svg` are drawn from live TypeScript instances, and
 the two runtimes register the same rules, name for name.
 
 An earlier revision shipped an inert `markdown-grammar.jsonic` file whose
 single rule merely drained the token stream while a `BO` action bypassed
-the engine entirely. That file, its embed step, and the bypass are gone —
-the engine parse is the parse, over one `#LB` token per physical line and
-one inline token per construct — and the division of labor is deliberate:
+the engine entirely. That file, its embed step, and the bypass are gone
+(the engine parse is the parse, over one `#LB` token per physical line and
+one inline token per construct) and the division of labor is deliberate:
 the engine owns tokenization, dispatch, state carriage and observability,
 while the spec's Appendix A algorithms stay in the shared engine-free
 core that both the plugin path and the direct API run.
 
 Whether the Markdown *algorithms* could usefully be expressed as
 declarative alts remains the more interesting question, and the answer is
-still no — deliberately. Lazy continuation is a cross-step commit
+still no, deliberately. Lazy continuation is a cross-step commit
 protocol, setext promotion and the table split are lookback tree surgery,
 and the emphasis rule of three needs backward search over unmatched
 delimiter runs; a first-match-wins alternation cannot express any of
@@ -438,8 +438,8 @@ grammar, and why every conformant implementation is an algorithm too.
 ## Differences from the TS version
 
 Everything above describes a design the two runtimes share. What follows is where Go could
-not spell it the same way. In every case the observable behaviour is identical — that is the
-point — but the route to it differs, and each of these was a defect in the previous port
+not spell it the same way. In every case the observable behaviour is identical, which is the
+point, but the route to it differs, and each of these was a defect in the previous port
 before it was a design note.
 
 ### Byte offsets, rune classification
@@ -449,21 +449,21 @@ offset, because every character the block and inline scanners branch on is ASCII
 UTF-8 continuation byte can hold an ASCII value. Slicing at a byte offset the scanner
 reached therefore never splits a rune, and the scan is exact.
 
-What is *not* safe is treating the byte at that offset as a character. The previous port did
-— it appended `string(text[i])` when accumulating literal text — and `text[i]` is a `byte`,
+What is *not* safe is treating the byte at that offset as a character. The previous port
+did, appending `string(text[i])` when accumulating literal text, and `text[i]` is a `byte`,
 so `string()` widened each UTF-8 continuation byte into its own code point. `café` came back
 as `cafÃ©`. Every multi-byte character in the corpus was corrupted, silently, because the
 output was still valid UTF-8 and still looked like text.
 
 So the rule the port follows is: **scan by byte, classify by rune.** Wherever a whole
-character is needed — emphasis flanking above all, which is decided on Unicode whitespace
-and Unicode punctuation — the rune is decoded with `utf8.DecodeRuneInString` or
+character is needed (emphasis flanking above all, which is decided on Unicode whitespace
+and Unicode punctuation) the rune is decoded with `utf8.DecodeRuneInString` or
 `utf8.DecodeLastRuneInString` first. `TestNonASCII` in `robust_test.go` pins the round trip.
 
 The same distinction has a performance edge. A `sourcepos` column counts *characters*, as
 the spec means it, but this port's offsets are bytes, so `block.go` has to convert on the
 way out. Counting characters from the start of the line each time makes a line of *n* nested
-containers — `> - > - > - …`, cheap to write and chosen by whoever supplies the input — cost
+containers (`> - > - > - …`, cheap to write and chosen by whoever supplies the input) cost
 O(n²), where the canonical runtime is linear because its offsets are already index-like.
 `TestNestedContainersAreNotQuadratic` pins the incremental anchor that fixes it. This is a
 denial-of-service bound, not a micro-benchmark.
@@ -471,7 +471,7 @@ denial-of-service bound, not a micro-benchmark.
 ### Regexes are never built from input-derived counts
 
 The canonical runtime builds a closing-fence pattern from the opening fence's length. The
-first Go port did the same, interpolating the count into a `{n,}` bounded repeat — and RE2
+first Go port did the same, interpolating the count into a `{n,}` bounded repeat, and RE2
 caps bounded repeats at 1000. `regexp.MustCompile` on a longer one panics, and a panic in a
 parsing library called from a request handler aborts the process. A code fence of 1001
 backticks is a trivial thing to paste, so that was a remote kill switch.
@@ -496,13 +496,13 @@ Both are hand-coded scanners in `block.go` instead. They are short, and the inte
 is the argument that a scanner is *equivalent* rather than merely similar. For the opening
 fence: a backtick fence is only a fence when the info string that follows holds no backtick,
 and backtracking to a shorter run cannot rescue a rejected one, because the shorter run's
-own next character is then a backtick — so a single maximal-run count plus one
+own next character is then a backtick, so a single maximal-run count plus one
 `strings.IndexByte` decides it exactly. For the closing fence: the maximal run must be
 followed by spaces and tabs only, which is a loop.
 
 A third hand-coded scanner exists for a different RE2 reason. The link-label pattern is
 `/\[(?:[^\\[\]]|\\.){0,1000}\]/sy`, and RE2 expands a bounded repeat by copying the
-sub-automaton — a thousand copies of an alternation, compiled at package init, for a
+sub-automaton: a thousand copies of an alternation, compiled at package init, for a
 construct that a loop handles in a few lines.
 
 ### JavaScript whitespace is not Go whitespace
@@ -514,8 +514,8 @@ language/meta split of an info string, and §4.7 label matching.
 
 Neither obvious Go tool is that set.
 
-- `strings.TrimSpace` uses `unicode.IsSpace`, which **trims U+0085 NEXT LINE** — JavaScript
-  keeps it — and **keeps U+FEFF** — JavaScript trims it.
+- `strings.TrimSpace` uses `unicode.IsSpace`. It **trims U+0085 NEXT LINE**, which
+  JavaScript keeps, and **keeps U+FEFF**, which JavaScript trims.
 - Go's `regexp` `\s` is ASCII-only: `[\t\n\f\r ]`. It omits the vertical tab and every
   Unicode space separator, so a pattern using it rejects input the canonical runtime
   accepts.
@@ -525,9 +525,9 @@ front of an info string is exactly the kind of thing that survives a copy-paste,
 `&#160;` in an info string puts a non-breaking space back *after* the block phase has
 trimmed it.
 
-So `common.go` defines the set once, as `isJSSpace` — the ECMAScript *WhiteSpace* and
+So `common.go` defines the set once, as `isJSSpace` (the ECMAScript *WhiteSpace* and
 *LineTerminator* productions, which is the spec's §2.3 Unicode whitespace plus the vertical
-tab and U+FEFF — with `jsTrim` and `jsSpaceIndex` over it. `jsSpaceIndex` returns the width
+tab and U+FEFF) with `jsTrim` and `jsSpaceIndex` over it. `jsSpaceIndex` returns the width
 of the match as well as its index, because JavaScript can step past the match with `+ 1`
 where Go must advance a whole rune.
 
@@ -539,13 +539,13 @@ one file looks like duplication and is not. Collapsing them would break the othe
 
 §4.7 matches link labels case-insensitively, and the reference implementation approximates
 Unicode case folding by lowercasing and then uppercasing. In JavaScript that round trip
-uses the **full** case mappings — the unconditional entries of Unicode's `SpecialCasing.txt`
-— so `"ß".toUpperCase()` is `"SS"`.
+uses the **full** case mappings, the unconditional entries of Unicode's
+`SpecialCasing.txt`, so `"ß".toUpperCase()` is `"SS"`.
 
 Go's `strings.ToUpper` and `strings.ToLower` apply the **simple** mappings: one rune in, one
 rune out. `strings.ToUpper("ß")` is `"ß"`. So `[ẞ]` does not resolve against a definition of
-`[SS]`, which is CommonMark example 540, and 103 further code points — mostly Greek Extended
-iota-subscript forms and the Latin/Armenian ligatures — diverge the same way.
+`[SS]`, which is CommonMark example 540, and 103 further code points (mostly Greek
+Extended iota-subscript forms and the Latin/Armenian ligatures) diverge the same way.
 
 `common.go` therefore carries `jsFullCaseUpper`, a table keyed on the original rune and
 holding the result of the whole round trip. Keying on the original rune is well defined
@@ -565,7 +565,7 @@ fixture reaches it.
 | Options | a partial `MarkdownOptions` object | an `Options` struct; `ResolveOptions` converts the plugin's `map[string]any` |
 | Nullable fields on the tree | `title: string \| null`, `info: string \| null` | `Title` + `HasTitle`, `Info` + `HasInfo` |
 | Sticky regexes | `/…/y` matched at `pos` | `^`-anchored patterns matched against `subject[pos:]`; a Go string slice is a header, not a copy |
-| Entity decoding | a vendored HTML5 table (`entities.ts`) | the standard library's table, gated so only semicolon-terminated references decode — `html.UnescapeString` also accepts legacy forms such as `&auml`, which §6.2 does not |
+| Entity decoding | a vendored HTML5 table (`entities.ts`) | the standard library's table, gated so only semicolon-terminated references decode; `html.UnescapeString` also accepts legacy forms such as `&auml`, which §6.2 does not |
 | Unicode punctuation | a regexp character class | `unicode.IsPunct \|\| unicode.IsSymbol` |
 | Case-insensitive regexes | the `i` flag | both cases spelled out. Go folds `(?i)[A-Za-z]` over all of Unicode, so it would also match U+017F LONG S and U+212A KELVIN SIGN, and `<ſpan>` would be accepted as a tag |
 | Table alignment | `('left' \| 'right' \| 'center' \| null)[]` on the node | `[]TableAlign` on the node, with `AlignNone` as the empty string; `ast.go` projects it back to an `[]any` with untyped `nil` entries so the JSON matches |
@@ -580,7 +580,7 @@ across its five sections, the same way.
 
 Cross-runtime agreement is checked on top of that, and it is worth being precise about what
 each check does and does not cover, because an earlier version of this document claimed
-"everything else behaves the same across both runtimes, as enforced by `test/spec/`" — and
+"everything else behaves the same across both runtimes, as enforced by `test/spec/`", and
 `test/spec/` has 75 fixtures. Seventy-five cases cannot enforce agreement over a parser.
 
 What `test/spec/*.tsv` actually guarantees: 75 hand-written cases, each an input plus the
@@ -592,18 +592,18 @@ deliberately. They are not a proof of equivalence, they cover only the option co
 their own rows name, and they say nothing about HTML.
 
 What actually supports the claim that the runtimes agree is a wider comparison: the 652 spec
-inputs run under all four `gfm` × `breaks` combinations in both runtimes — 2608 records —
+inputs run under all four `gfm` × `breaks` combinations in both runtimes, 2608 records,
 comparing **both** the AST and the HTML on each. The result is 0 differing ASTs and 0
 differing HTML outputs. That is a statement about 652 documents chosen to exercise every
 corner of the specification, under every option this package has, on both of its outputs.
 Extending the same run to the 24 GFM examples makes it 676 inputs and 2704 records, again
 with 0 differences. A separate comparison backs the other claim the single `GFM` switch
-makes — that with the extensions off the output is pure CommonMark and nothing else: 1430
+makes, that with the extensions off the output is pure CommonMark and nothing else: 1430
 records, byte-identical.
 
 What none of it covers is `sourcepos`. The public AST does not carry source positions, so an
 AST comparison is blind to them, and the HTML does not encode them either. A divergence in
 the positional data is invisible to every automated check above, which is why
-`TestSourcePosColumnsCountCharacters` exists as a direct unit test — both runtimes had the
+`TestSourcePosColumnsCountCharacters` exists as a direct unit test. Both runtimes had the
 column unit wrong at first, in opposite directions, and `😀 *x*` reported column 5 in one and
 6 in the other. If you touch anything positional, compare the native trees by hand.

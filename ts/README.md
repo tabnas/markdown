@@ -2,14 +2,14 @@
 
 A CommonMark parser for the [Tabnas](https://github.com/tabnas/parser) engine.
 
-**This parser is conformant to CommonMark 0.31.2** — all 652 examples, across all 26
+**This parser is conformant to CommonMark 0.31.2**, all 652 examples, across all 26
 sections of the spec suite, in both runtimes. The suite is vendored in this repository, so
 the claim is checkable: `npm run conformance` reports 652/652, with no build step and no
 engine installed. It runs with the GFM extensions off, which is what measuring CommonMark
-conformance means — with `gfm: true` the extensions deliberately change nine of those
-examples. It also implements **all five GFM extensions** — tables, task list
-items, autolink literals, strikethrough and disallowed raw HTML — 24/24 on the vendored
-GFM corpus, via `npm run conformance-gfm`.
+conformance means: with `gfm: true` the extensions deliberately change nine of those
+examples. It also implements **all five GFM extensions** (tables, task list
+items, autolink literals, strikethrough and disallowed raw HTML) for 24/24 on the
+vendored GFM corpus, via `npm run conformance-gfm`.
 
 This is the canonical implementation; [`go/`](../go/README.md) is a port of it.
 
@@ -53,8 +53,8 @@ toHtml('<img onerror="alert(1)">') // => '<img onerror="alert(1)">\n'
 ```
 
 GFM's disallowed-raw-HTML filter (on with `gfm`, the default) rewrites the leading `<` of
-nine tag names — `title`, `textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`,
-`script`, `plaintext` — and touches nothing else:
+nine tag names (`title`, `textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`,
+`script`, `plaintext`) and touches nothing else:
 
 ```js
 import { toHtml } from '@tabnas/markdown'
@@ -73,11 +73,11 @@ const tn = new Tabnas().use(Markdown)
 tn.parse('# Hello') // => { type: 'document', children: [ { type: 'heading', depth: 1, children: [ { type: 'text', value: 'Hello' } ] } ] }
 ```
 
-`parseTree()` returns the native CommonMark node tree instead — it keeps `sourcepos` on
+`parseTree()` returns the native CommonMark node tree instead. It keeps `sourcepos` on
 block nodes, and can be walked or mutated and then rendered. See the
 [reference](doc/reference.md).
 
-GFM tables add three node types, in mdast's shape — `table`, `tableRow` and `tableCell`.
+GFM tables add three node types, in mdast's shape: `table`, `tableRow` and `tableCell`.
 `align` has one entry per column, `null` where the delimiter cell had no colon; there is
 no header flag, so the first row is the header row by convention, and every row has
 exactly as many cells as `align` has entries.
@@ -103,7 +103,7 @@ npm install @tabnas/markdown @tabnas/parser
 
 The parser is **engine-free**: nothing under `src/commonmark.ts` imports `@tabnas/parser`.
 Only `src/markdown.ts`, the plugin wiring, does. That is what lets the conformance runner
-work with no build step and no engine installed — it stages `src/*.ts` in a temp directory
+work with no build step and no engine installed: it stages `src/*.ts` in a temp directory
 whose `package.json` says `"type": "module"` and runs them under Node's type stripping:
 
 ```bash
@@ -117,7 +117,7 @@ The `// =>` assertions in this repo's Markdown are executed as tests
 check), so a wrong expected value is a failing test.
 
 Options are `gfm` (default `true`) and `breaks` (default `false`). `gfm` gates five
-extensions together — tables, strikethrough, task list items, autolink literals (bare
+extensions together: tables, strikethrough, task list items, autolink literals (bare
 `www.` / `https://` / `a@b.co`) and the disallowed-raw-HTML filter. Footnotes are not
 implemented. With `gfm:false` the output is plain CommonMark.
 
@@ -131,7 +131,7 @@ import { toHtml } from '@tabnas/markdown'
 toHtml('Text[^1]\n\n[^1]: note') // => '<p>Text<a href="note">^1</a></p>\n'
 ```
 
-Nothing outside CommonMark and GFM is implemented — no math, front matter, definition
+Nothing outside CommonMark and GFM is implemented: no math, front matter, definition
 lists, heading attributes, admonitions, wiki links, emoji shortcodes, highlight or
 sub/superscript. Each would need its own opt-in flag; `gfm` is not going to grow to mean
 "everything". Note one collision: GFM's single-tilde strikethrough takes the syntax other
@@ -145,10 +145,10 @@ toHtml('H~2~O') // => '<p>H<del>2</del>O</p>\n'
 
 ## Documentation
 
-- [Tutorial](doc/tutorial.md) — first parse, start to finish.
-- [How-to guide](doc/guide.md) — task recipes.
-- [Reference](doc/reference.md) — API, options, AST node types.
-- [Concepts](doc/concepts.md) — how it works, and why.
+- [Tutorial](doc/tutorial.md). First parse, start to finish.
+- [How-to guide](doc/guide.md). Task recipes.
+- [Reference](doc/reference.md). API, options, AST node types.
+- [Concepts](doc/concepts.md). How it works, and why.
 
 Top-level [README](../README.md) · Go port: [go/README.md](../go/README.md).
 

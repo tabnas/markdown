@@ -11,15 +11,15 @@ to take on trust: clone the repository and run `npm run conformance` in `ts/`,
 and it prints the score. The Markdown you learn here is the whole language, not
 a subset of it.
 
-The package also implements the complete set of five GFM extensions — tables,
-task list items, autolink literals, strikethrough and disallowed raw HTML — and
+The package also implements the complete set of five GFM extensions (tables,
+task list items, autolink literals, strikethrough and disallowed raw HTML) and
 they are on by default. Their corpus is vendored too, 24 examples, and
 `npm run conformance-gfm` runs that one.
 
 Two answers before you start, because they shape everything below:
 
 - **The AST is the primary output.** `parseDocument()` returns it. Nothing else
-  runs — the HTML renderer is never touched.
+  runs: the HTML renderer is never touched.
 - **Yes, there is an HTML emitter**: `toHtml()`. The CommonMark test suite
   scores HTML output, so the renderer is the instrument that makes the
   conformance claim measurable. You get to use it too.
@@ -61,7 +61,7 @@ Run it:
 node notes.mjs
 ```
 
-You will see the AST. It is plain JSON — no classes, no cycles, nothing that
+You will see the AST. It is plain JSON: no classes, no cycles, nothing that
 needs a special printer:
 
 ```json
@@ -121,7 +121,7 @@ blocks of the file in source order: the heading, the paragraph, the list.
 
 ## 3. Read the AST
 
-Blocks that hold prose — headings, paragraphs, list items — have their own
+Blocks that hold prose (headings, paragraphs, list items) have their own
 `children`, holding the inline nodes. Replace the body of `notes.mjs` with:
 
 ```js
@@ -142,7 +142,7 @@ comments are what the value is; they are checked as tests in this repository,
 so they are never out of date.
 
 Notice the shape: `*short*` did not stay as text with asterisks in it. It became
-an `emphasis` node with a `text` child. That is the whole point of the AST —
+an `emphasis` node with a `text` child. That is the whole point of the AST:
 you read structure, not punctuation.
 
 ## 4. Render the same document to HTML
@@ -177,7 +177,7 @@ parseDocument('line one\nline two').children[0].children // => [{ type: 'text', 
 toHtml('line one\nline two') // => '<p>line one\nline two</p>\n'
 ```
 
-Pass `breaks: true` and every soft break becomes a hard one — a `break` node in
+Pass `breaks: true` and every soft break becomes a hard one, a `break` node in
 the AST, a `<br />` in the HTML:
 
 ```js
@@ -194,8 +194,8 @@ parser. That is the pattern for everything else in this package.
 
 You have the two outputs and one option. That is enough to be useful.
 
-- [How-to guide](guide.md) — recipes: walking the AST, rewriting links, reading
+- [How-to guide](guide.md). Recipes: walking the AST, rewriting links, reading
   a table's alignment and cells, rendering untrusted input safely, source
   positions, running the conformance suite.
-- [Reference](reference.md) — every export, every option, every node type.
-- [Concepts](concepts.md) — why the parser is built the way it is.
+- [Reference](reference.md). Every export, every option, every node type.
+- [Concepts](concepts.md). Why the parser is built the way it is.
