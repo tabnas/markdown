@@ -7,13 +7,14 @@
 subset.
 
 **The parser is conformant to CommonMark 0.31.2** — all 652 examples of
-the spec suite, across all 26 sections, in both runtimes. The suite is
-vendored at `test/commonmark/spec.json`, so the claim is one a reader can
-run rather than one they have to take:
+the spec suite, across all 26 sections, in all three runtimes. The suite
+is vendored at `test/commonmark/spec.json`, so the claim is one a reader
+can run rather than one they have to take:
 
 ```bash
 cd ts && npm run conformance                    # 652/652
 cd go && go test -run TestCommonMarkSpec ./...  # 652/652
+cd rs && cargo test --test commonmark_test      # 652/652
 ```
 
 State it that way — conformant, with the command that substantiates it —
@@ -22,21 +23,23 @@ conformance is the claim, and the vendored suite is the evidence.
 
 On top of CommonMark it implements **five GFM extensions**, all gated on
 the single `gfm` option (default `true`). That is the complete GFM
-extension set. The two runtimes are level:
+extension set. The three runtimes are level:
 
-| Extension | TypeScript | Go |
-|---|---|---|
-| Strikethrough (`~~x~~`) | yes | yes |
-| Task list items (`- [x] foo`) | yes | yes |
-| Autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`) | yes | yes |
-| Disallowed raw HTML (tagfilter) | yes | yes |
-| Tables | yes | yes |
-| Footnotes | no | no |
+| Extension | TypeScript | Go | Rust |
+|---|---|---|---|
+| Strikethrough (`~~x~~`) | yes | yes | yes |
+| Task list items (`- [x] foo`) | yes | yes | yes |
+| Autolink literals (bare `www.` / `http://` / `https://` / `ftp://` / `a@b.co`) | yes | yes | yes |
+| Disallowed raw HTML (tagfilter) | yes | yes | yes |
+| Tables | yes | yes | yes |
+| Footnotes | no | no | no |
 
-Both score **24/24** on the vendored GFM extension corpus
+All three score **24/24** on the vendored GFM extension corpus
 (`test/gfm/spec.json`) — every section, nothing failing.
-`node ts/tools/gfm-conformance.mjs` and
-`go test -run TestGFMSpec -v ./...` print the same per-section table.
+`node ts/tools/gfm-conformance.mjs`,
+`go test -run TestGFMSpec -v ./...` and
+`cargo test --test gfm_test gfm_spec -- --nocapture` (from `rs/`) print
+the same per-section table.
 
 Still **not** implemented, and worth saying as precisely as what is:
 
@@ -62,13 +65,14 @@ comments, in docs, in commit messages — say "CommonMark, with GFM
 extensions", and name them. Do not write "CommonMark/GFM", which implies
 footnotes too.
 
-`test/spec/*.tsv` pins `listItem.checked`, which both runtimes now
+`test/spec/*.tsv` pins `listItem.checked`, which all three runtimes
 project. If you ever see those eight parity rows fail again (six in
 `list.tsv`, one each in `blockquote.tsv` and `mixed.tsv`), the fixtures
 are right and the runtime is wrong — do not "fix" it by editing them.
 
-Where each extension lives is deliberate, and the two runtimes keep the
-same placement:
+Where each extension lives is deliberate, and the three runtimes keep
+the same placement (the Rust file is the Go file's name with `.rs`, and
+`engine_block.rs` / `engine_inline.rs` for the drivers):
 
 * **Tables** — three files, one concern each: block detection in
   `block.ts` / `block.go`, rendering in `html.ts` / `html.go`, projection to
@@ -137,13 +141,13 @@ same placement:
   side is a hand-coded scan — with ASCII-only case folding, because Go's
   `(?i)` folds U+017F and U+212A onto ASCII and JavaScript's `i` does not.
 
-There are three public outputs, in both runtimes:
+There are three public outputs, in all three runtimes:
 
-| Output | TypeScript | Go |
-|---|---|---|
-| mdast-adjacent JSON AST (**primary**) | `parseDocument(src, opts)` | `ParseDocument(src, opts)` |
-| CommonMark-conformant HTML (opt-in) | `toHtml(src, opts)` | `ToHTML(src, opts)` |
-| Native CommonMark node tree | `parseTree(src, opts)` / `renderHTML(tree)` | `ParseTree(src, opts)` / `RenderHTML(tree, opts)` |
+| Output | TypeScript | Go | Rust |
+|---|---|---|---|
+| mdast-adjacent JSON AST (**primary**) | `parseDocument(src, opts)` | `ParseDocument(src, opts)` | `parse_document(src, &opts)` |
+| CommonMark-conformant HTML (opt-in) | `toHtml(src, opts)` | `ToHTML(src, opts)` | `to_html(src, &opts)` |
+| Native CommonMark node tree | `parseTree(src, opts)` / `renderHTML(tree)` | `ParseTree(src, opts)` / `RenderHTML(tree, opts)` | `parse_tree(src, &opts)` / `render_html(&tree, opts)` |
 
 The AST is what the plugin's `.parse()` / `.Parse()` returns, and asking
 for it runs no renderer. The HTML emitter is not incidental: the spec
@@ -158,11 +162,12 @@ to [`@tabnas/csv`](https://github.com/tabnas/csv). The RFC-4180 leftovers
 reintroduce that shape. See `dx-report.md` §1 and the 2026-08-06 entry.
 
 It is a **bare-engine** plugin (not jsonic-based). Install on a Tabnas
-instance — `new Tabnas().use(Markdown)`, or `tabnasmarkdown.Make()` in Go.
-Its only runtime tabnas dependency is the engine.
+instance — `new Tabnas().use(Markdown)`, `tabnasmarkdown.Make()` in Go,
+or `tabnas_markdown::make()` in Rust. Its only runtime tabnas dependency
+is the engine.
 
-There are two implementations that must behave identically — TypeScript
-(canonical) and a Go port.
+There are three implementations that must behave identically — TypeScript
+(canonical), a Go port and a Rust port.
 
 ## Repository map
 
@@ -170,9 +175,12 @@ There are two implementations that must behave identically — TypeScript
 |---|---|
 | [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/markdown` package. Depends on `@tabnas/parser` only, and only in `src/markdown.ts`. |
 | [`go/`](go/) | Go port — `github.com/tabnas/markdown/go`, package `tabnasmarkdown`. |
-| [`test/spec/`](test/spec/) | 83 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) across 10 `*.tsv` files, auto-discovered and run by both runtimes. The TS/Go parity contract. See `test/AGENTS.md`. |
-| [`test/commonmark/spec.json`](test/commonmark/) | Vendored CommonMark 0.31.2 suite, 652 examples of Markdown → expected **HTML**. The conformance contract for both runtimes. See `test/AGENTS.md`. |
-| [`test/gfm/spec.json`](test/gfm/) | Vendored GFM extension corpus, 24 examples of Markdown → expected **HTML**, run with `gfm:true`. The extension contract for both runtimes. See `test/AGENTS.md`. |
+| [`rs/`](rs/) | Rust port — the `tabnas-markdown` crate (library `tabnas_markdown`). Same file split as `go/` under `rs/src/`, plugin wiring in `src/lib.rs`, both HTML-corpus graders under `rs/tests/`. Depends on the `tabnas` crate via a `path` dependency (sibling checkout) and, dev-only, on `tabnas-support` for the fixture runner. Library only: no CLI. See [`rs/AGENTS.md`](rs/AGENTS.md). |
+| [`ci/`](ci/) | Workflows and scripts **staged** for promotion into `.github/workflows/` by someone whose credentials can write there: `ci/workflows/rust.yml` (the Rust gate), `ci/workflows/docs.yml` (the prose gate), `ci/rust/run.sh` (what the Rust gate runs). See [`ci/README.md`](ci/README.md). |
+| [`test/spec/`](test/spec/) | 83 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) across 10 `*.tsv` files, auto-discovered and run by all three runtimes. The TS/Go/Rust parity contract. See `test/AGENTS.md`. |
+| [`test/spec/tree/`](test/spec/tree/) | Golden native-tree snapshots (`sourcepos` included), one per fixture file, generated from the canonical TypeScript and asserted by `ts/test/tree-golden.test.ts`, `go/tree_golden_test.go` and `rs/tests/tree_golden_test.rs`. |
+| [`test/commonmark/spec.json`](test/commonmark/) | Vendored CommonMark 0.31.2 suite, 652 examples of Markdown → expected **HTML**. The conformance contract for all three runtimes. See `test/AGENTS.md`. |
+| [`test/gfm/spec.json`](test/gfm/) | Vendored GFM extension corpus, 24 examples of Markdown → expected **HTML**, run with `gfm:true`. The extension contract for all three runtimes. See `test/AGENTS.md`. |
 | [`ts/tools/gen-railroad.mjs`](ts/tools/gen-railroad.mjs) | Draws `ts/doc/grammar{,-inline}.{svg,txt}` from LIVE plugin instances — see "The grammar is live" below. |
 | [`ts/tools/conformance.mjs`](ts/tools/conformance.mjs) | Runs the 652-example suite straight off `ts/src/*.ts` — no build step, no engine. `npm run conformance`. |
 | [`ts/tools/gfm-conformance.mjs`](ts/tools/gfm-conformance.mjs) | Runs the 24-example GFM corpus the same way, with `gfm:true`. `node tools/gfm-conformance.mjs`. |
@@ -196,6 +204,18 @@ Source files, mirrored name for name across the two runtimes:
 | `ts/src/engine-block.ts` | `go/engineblock.go` | The engine-facing block driver: the `mdLine` matcher and the rule actions (see "Architecture notes"). Engine-facing modules (`markdown.*`, `engine-*`) are the ONLY files that may import the engine; nothing reachable from `commonmark.ts` / `commonmark.go` does, which is what keeps the conformance suite runnable engine-free. |
 | `ts/src/entities.ts` | — | Generated HTML5 named character references (2125 semicolon-terminated entries). Go uses the standard library's table instead, gated to reject the legacy semicolon-less forms §6.2 does not allow. |
 
+The Rust port keeps the same split under `rs/src/`: `node.rs`,
+`common.rs`, `options.rs`, `commonmark.rs`, `block.rs`, `inline.rs`,
+`ast.rs`, `html.rs`, `engine_block.rs`, `engine_inline.rs`, with the
+plugin wiring and public surface in `lib.rs` (the `markdown.ts` role) and
+its own generated `entities.rs`, which `rs/tests/entities_test.rs` pins
+entry for entry to `ts/src/entities.ts`. The same layering rule holds:
+only `lib.rs` and the two `engine_*.rs` drivers use engine behaviour
+(`Tabnas`, `Context`, `Lexer`, `Rule`, `Token`); `ast.rs` and
+`options.rs` name `tabnas::Value` because the AST and the option bag ARE
+engine values, and nothing reachable from `commonmark.rs` calls into the
+engine.
+
 There is **no CLI** (`package.json` has no `bin`). There is no
 `test/fixtures/` — the 258 orphaned CSV files that lived there were
 deleted with the rescope.
@@ -206,6 +226,7 @@ Both runtimes depend on the **bare engine**, not jsonic:
 
 - TypeScript: `@tabnas/parser` is a `peerDependency` (`>=0`) and a `file:../../parser/ts` devDependency. `@tabnas/debug`, `@tabnas/railroad` and `@tabnas/jsonic` are dev-only (debug for `debug-model.test.ts`, railroad for `ts/doc/grammar.{svg,txt}`). `engines.node` is `>=24`.
 - Go: `go/go.mod` requires `github.com/tabnas/parser/go` and **nothing else** — no jsonic, no indirect requirements. Earlier revisions of this file claimed that while `go.mod` said otherwise; it is now true. Keep it true: a new direct requirement in `go/go.mod` needs a reason stated here.
+- Rust: `tabnas = { path = "../../parser/rs" }` in `rs/Cargo.toml` is the crate's only runtime tabnas dependency; `tabnas-support = { path = "../../support/rs" }` (the shared fixture runner) is dev-only. Neither crate is published, so both are sibling checkouts and `rs/Cargo.lock` records a resolution naming them — which is why `ci/rust/run.sh` runs cargo **without** `--locked` and checks the lockfile by diffing it instead, exempting both siblings' recorded versions.
 
 Development uses `replace github.com/tabnas/parser/go => ../../parser/go`
 (via the repo-set `go.work`, not checked in). Clone `parser` (plus
@@ -214,10 +235,11 @@ TS (`cd parser/ts && npm i && npm run build`), then work here.
 `admin/scripts/link.sh` does this for the whole tabnas folder.
 
 Note the layering, and preserve it: **nothing reachable from
-`commonmark.ts` / `commonmark.go` may import `@tabnas/parser`.** That is
-what lets the conformance suite and `check-doc-examples.mjs` run with no
-engine installed. `markdown.ts` imports `commonmark.ts`; never the
-reverse.
+`commonmark.ts` / `commonmark.go` / `commonmark.rs` may import the
+engine.** That is what lets the conformance suite and
+`check-doc-examples.mjs` run with no engine installed. `markdown.ts`
+imports `commonmark.ts` (`lib.rs` imports `commonmark.rs` in Rust); never
+the reverse.
 
 ## Executable contracts — do not weaken any of them
 
@@ -245,26 +267,41 @@ them against the real package — a scratch test under `/tmp` run with
 
 ## Authority and alignment rules
 
-**TypeScript is canonical. Go is a port of it.** When you change behaviour:
+**TypeScript is canonical. Go and Rust are ports of it.** When you change
+behaviour:
 
 1. Change the TypeScript first, in the module that owns the concern
    (`block.ts`, `inline.ts`, `ast.ts`, `html.ts`, …).
-2. Port the same change to the same-named Go file. The two are mirrored
-   deliberately so a diff can be read side by side.
-3. Add/extend shared fixture(s) in `test/spec/*.tsv` so both runtimes
-   assert the new AST behaviour. The fixtures are the parity contract;
-   both suites resolve them (TS: `ts/test/parity.test.ts` →
-   `../../test/spec`; Go: `go/parity_test.go` → `../test/spec`).
-4. Mirror unit cases across `ts/test/markdown.test.ts` and
-   `go/markdown_test.go`.
-5. Run both suites, plus the CommonMark and GFM conformance runs in each
-   runtime, and confirm green before landing.
+2. Port the same change to the same-named Go file and the same-named
+   Rust file under `rs/src/`. The three are mirrored deliberately so a
+   diff can be read side by side.
+3. Add/extend shared fixture(s) in `test/spec/*.tsv` so all three
+   runtimes assert the new AST behaviour. The fixtures are the parity
+   contract; every suite resolves them (TS: `ts/test/parity.test.ts` →
+   `../../test/spec`; Go: `go/parity_test.go` → `../test/spec`; Rust:
+   `rs/tests/parity_test.rs` → `../test/spec`, through
+   `tabnas_support::Runner`).
+4. Mirror unit cases across `ts/test/markdown.test.ts`,
+   `go/markdown_test.go` and `rs/tests/markdown_test.rs`.
+5. Run all three suites, plus the CommonMark and GFM conformance runs in
+   each runtime, and confirm green before landing.
 
-Do not let Go drift from TS. Where Go differs on purpose it is because
-the standard library is the better tool (entity decoding, Unicode
-punctuation — both noted in `go/common.go`), and the observable behaviour
-is still identical. If Go cannot match, document the gap here and in the
-relevant `go/doc/*.md`.
+Do not let Go or Rust drift from TS. Where a port differs on purpose it is
+because the standard library is the better tool (entity decoding, Unicode
+punctuation — both noted in `go/common.go`; Rust generates its own
+entity table and uses the `regex` crate's Unicode tables for punctuation,
+noted in `rs/src/common.rs`), and the observable behaviour is still
+identical. If a port cannot match, document the gap here and in the
+relevant `go/doc/*.md` or `rs/README.md`; a same-input-different-result
+gap is a divergence and also belongs in a `DIVERGENCE.md` and the
+executable register `test/spec/divergent.tsv`, per the org rule (neither
+exists here yet, because there is nothing to record). The one
+engine-level divergence this repo inherits is token column positions
+after an astral character (TypeScript counts UTF-16 units, Go and Rust
+count characters); it is recorded in `parser/DIVERGENCE.md` and cited,
+not re-adjudicated, by `go/enginecol_test.go` and
+`rs/tests/engine_columns_test.rs`. It never reaches the AST or the
+native tree.
 
 The AST comparison alone is not a complete parity check: `sourcepos` is
 not projected into the public AST, so a divergence there is invisible to
@@ -312,15 +349,30 @@ go test -run TestCommonMarkSpec -v ./...   # conformance only, per-section table
 go test -run TestGFMSpec -v ./...          # the GFM corpus, per-section table
 ```
 
+Rust (from `rs/`, with `parser` and `support` checked out as siblings):
+
+```bash
+cargo build --all-targets
+cargo test --all-targets && cargo test --doc          # unit + shared fixtures + both corpora + README doctests
+cargo test --test commonmark_test -- --nocapture      # conformance only, per-section table
+cargo test --test gfm_test gfm_spec -- --nocapture    # the GFM corpus, per-section table
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
 `npm run conformance` and `check-doc-examples.mjs` both stage `src/*.ts`
 into a temp directory whose `package.json` says `{"type":"module"}` and
 run them under Node's type stripping, because `ts/package.json` is
 `"type": "commonjs"`. Use the same trick for ad-hoc TypeScript
 experiments.
 
-The repo root `Makefile` wraps both halves: `make build|test|clean` run TS
-and Go sides; `make publish-go V=x.y.z` tags `go/vX.Y.Z`. CI is the
-org-standard `polyglot-ci` caller in `.github/workflows/ci.yml`.
+The repo root `Makefile` wraps all three: `make build|test|clean` run the
+TS, Go and Rust sides (`make test-rs` is tests, doctests and clippy;
+`make version-rs V=x.y.z` bumps both Rust version sites and the lock);
+`make publish-go V=x.y.z` tags `go/vX.Y.Z`. CI is the org-standard
+`polyglot-ci` caller in `.github/workflows/ci.yml`; the Rust gate is
+staged as `ci/workflows/rust.yml` running `ci/rust/run.sh`, which is
+also the local full gate (fmt, build, tests, doctests, clippy, lockfile
+check).
 
 ## Verify your work
 
@@ -328,7 +380,7 @@ The commands that prove a change is correct. Run from the repo root unless
 stated:
 
 ```bash
-make build && make test      # both runtimes — the check that matters
+make build && make test      # all three runtimes — the check that matters
 ```
 
 Narrower, when iterating:
@@ -336,8 +388,11 @@ Narrower, when iterating:
 ```bash
 (cd ts && npm test)                    # `pretest` builds first
 (cd go && go test ./...)               # unit + shared fixtures + both corpora
+(cd rs && cargo test --all-targets)    # unit + shared fixtures + both corpora, Rust side
 (cd ts && npm run conformance)         # the 652-example suite off src/*.ts — no build
 (cd go && go test -run TestCommonMarkSpec ./...)   # the same claim, Go side
+(cd rs && cargo test --test commonmark_test)       # the same claim, Rust side
+ci/rust/run.sh                         # the full Rust gate, as CI would run it
 ```
 
 Each line is a subshell. `npm test` compiles first — its `pretest`
@@ -355,17 +410,21 @@ around it; the wiring is fixed instead, and
 
 What "correct" means here, in order of authority:
 
-1. **The shared fixtures pass in BOTH runtimes.** `test/spec/*.tsv` is the
-   AST parity contract — a row green in one runtime and red in the other is
-   a failure, not a discrepancy.
-2. **The conformance corpora stay perfect in BOTH runtimes.** 652/652 on the
-   vendored CommonMark 0.31.2 suite and 24/24 on the GFM extension corpus. A
-   change that drops an example is a regression, not a trade-off — the
-   comparison is byte-for-byte HTML and must stay one.
-3. **The three version constants agree** — `ts/package.json` `"version"`,
-   `const VERSION` in `ts/src/markdown.ts`, and `const VERSION` in
-   `go/markdown.go`. `ts/test/version.test.ts` and `go/version_test.go` fail
-   the build if they drift.
+1. **The shared fixtures pass in ALL THREE runtimes.** `test/spec/*.tsv` is
+   the AST parity contract — a row green in one runtime and red in another
+   is a failure, not a discrepancy.
+2. **The conformance corpora stay perfect in ALL THREE runtimes.** 652/652
+   on the vendored CommonMark 0.31.2 suite and 24/24 on the GFM extension
+   corpus. A change that drops an example is a regression, not a trade-off
+   — the comparison is byte-for-byte HTML and must stay one.
+3. **The five version sites agree** — `ts/package.json` `"version"`,
+   `const VERSION` in `ts/src/markdown.ts`, `const VERSION` in
+   `go/markdown.go`, `version` in `rs/Cargo.toml` and `pub const VERSION`
+   in `rs/src/lib.rs`. `ts/test/version.test.ts`, `go/version_test.go` and
+   `rs/tests/version_test.rs` fail the build if they drift.
+   `make version-rs V=x.y.z` rewrites both Rust sites and the crate's own
+   entry in `rs/Cargo.lock` together (the lock is committed, and
+   `ci/rust/run.sh` fails on a stale one).
 4. **The railroad diagrams match the live grammar.** If you changed any
    rule or matcher registration, regenerate `ts/doc/grammar{,-inline}.{svg,txt}`
    with `node ts/tools/gen-railroad.mjs` (after a build) — never hand-edit
@@ -394,9 +453,14 @@ accepts the publish. Pushing a tag by hand is the orchestrator's path
 
 The steps, in order:
 
-1. Bump all **three** version sites together — `ts/package.json`, `VERSION`
-   in `ts/src/markdown.ts` and `const VERSION` in `go/markdown.go`. Drift is
-   caught by `ts/test/version.test.ts` and `go/version_test.go`.
+1. Bump all **five** version sites together — `ts/package.json`, `VERSION`
+   in `ts/src/markdown.ts`, `const VERSION` in `go/markdown.go`, and the
+   two Rust sites `rs/Cargo.toml` and `rs/src/lib.rs` (plus the crate's
+   entry in `rs/Cargo.lock`; `make version-rs V=x.y.z` does all three Rust
+   files). Drift is caught by `ts/test/version.test.ts`,
+   `go/version_test.go` and `rs/tests/version_test.rs`. The Rust crate is
+   unpublished and consumed as a sibling checkout, so the bump IS its
+   release; there is no `publish-rs`.
 2. Verify against the **published** dependencies rather than your checkout.
    The release runner installs fresh from the registry; a working tree
    usually does not, so reproduce that before believing anything:

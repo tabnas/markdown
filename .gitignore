@@ -41,3 +41,6 @@ yarn.lock
 
 # Written by the counts script while measuring, removed after.
 .vale-counts.ini
+
+# Cargo's build output for the Rust crate in rs/.
+target/
