@@ -12,13 +12,14 @@ A CommonMark parser for the [Tabnas](https://github.com/tabnas/parser) engine.
 Docs, guides, the error reference and the playground: **[tabnas.dev](https://tabnas.dev)**.
 
 **This parser is conformant to CommonMark 0.31.2.** All 652 examples pass, across all 26
-sections of the spec suite, in both implementations, TypeScript (canonical) and Go (a
-port of it). The suite is vendored in this repository, so the claim is checkable rather
-than asserted:
+sections of the spec suite, in all three implementations: TypeScript (canonical), Go and
+Rust (ports of it). The suite is vendored in this repository, so the claim is checkable
+rather than asserted:
 
 ```bash
 cd ts && npm run conformance                    # 652/652
 cd go && go test -run TestCommonMarkSpec ./...  # 652/652
+cd rs && cargo test --test commonmark_test      # 652/652
 ```
 
 On top of CommonMark it implements **five GFM extensions**: tables, task list items,
@@ -66,6 +67,21 @@ fmt.Print(tabnasmarkdown.ToHTML("# Hello\n\nHello *world*", opts))
 // <p>Hello <em>world</em></p>
 ```
 
+In Rust it is `parse_document()` and `to_html()`, with the options passed by reference:
+
+```rust
+use tabnas_markdown::{parse_document, to_html, Options};
+
+let opts = Options::default();
+
+let doc = parse_document("# Hello\n\nHello *world*", &opts);
+assert_eq!(doc.to_json()["type"], "document");
+
+print!("{}", to_html("# Hello\n\nHello *world*", &opts));
+// <h1>Hello</h1>
+// <p>Hello <em>world</em></p>
+```
+
 On a Tabnas engine instance, the plugin's `parse()` returns that same AST:
 
 ```js
@@ -96,6 +112,11 @@ go get github.com/tabnas/markdown/go@latest
 `@tabnas/parser` is a peer dependency of the npm package. The Go module requires
 `github.com/tabnas/parser/go` (the bare engine) and nothing else.
 
+The Rust crate, `tabnas-markdown` in [`rs/`](rs/), is not published: the `tabnas` engine
+crate it depends on is unpublished too, so both are consumed as sibling checkouts through
+`path` dependencies. Clone `parser` and `markdown` next to each other and see
+[`rs/README.md`](rs/README.md) for the two `Cargo.toml` lines.
+
 ## What is parsed
 
 **CommonMark 0.31.2, in full.** All 26 sections of the spec suite pass: tabs, backslash
@@ -107,17 +128,17 @@ breaks, soft line breaks, textual content.
 
 **All five GFM extensions**, gated together on the `gfm` option (default `true`):
 
-| Extension | TypeScript | Go |
-|---|---|---|
-| Tables | yes | yes |
-| Task list items (`- [x] done`) | yes | yes |
-| Autolink literals (bare `www.` / `https://` / `a@b.co`) | yes | yes |
-| Strikethrough (`~~text~~`) | yes | yes |
-| Disallowed raw HTML (`<script>` → `&lt;script>`) | yes | yes |
-| Footnotes | no | no |
+| Extension | TypeScript | Go | Rust |
+|---|---|---|---|
+| Tables | yes | yes | yes |
+| Task list items (`- [x] done`) | yes | yes | yes |
+| Autolink literals (bare `www.` / `https://` / `a@b.co`) | yes | yes | yes |
+| Strikethrough (`~~text~~`) | yes | yes | yes |
+| Disallowed raw HTML (`<script>` → `&lt;script>`) | yes | yes | yes |
+| Footnotes | no | no | no |
 
-TypeScript is canonical and the Go port follows it; the two are level, and verified
-example for example on both outputs. `gfm:false` turns every one of them off, and the
+TypeScript is canonical and the Go and Rust ports follow it; the three are level, and
+verified example for example on both outputs. `gfm:false` turns every one of them off, and the
 output is then plain CommonMark, byte for byte.
 
 Tables contribute three node types, in mdast's shape: `table`, `tableRow` and
@@ -160,7 +181,7 @@ import { toHtml } from '@tabnas/markdown'
 toHtml('H~2~O') // => '<p>H<del>2</del>O</p>\n'
 ```
 
-The only options, in both runtimes, are `gfm` (default `true`) and `breaks` (default
+The only options, in all three runtimes, are `gfm` (default `true`) and `breaks` (default
 `false`, which promotes soft line breaks to hard breaks when set). See the reference for
 each runtime.
 
@@ -181,16 +202,17 @@ sanitizer, and it does nothing about attributes or `javascript:` destinations.
 
 ## Conformance
 
-**The parser is conformant to CommonMark 0.31.2**, 652/652, all 26 sections, in both
-runtimes. The suite is vendored at [`test/commonmark/spec.json`](test/commonmark/), so you
-can check that for yourself rather than take it on trust:
+**The parser is conformant to CommonMark 0.31.2**, 652/652, all 26 sections, in all
+three runtimes. The suite is vendored at [`test/commonmark/spec.json`](test/commonmark/),
+so you can check that for yourself rather than take it on trust:
 
 ```bash
 cd ts && npm run conformance                    # no build step, no engine needed
 cd go && go test -run TestCommonMarkSpec -v ./...
+cd rs && cargo test --test commonmark_test -- --nocapture
 ```
 
-Both report 652/652, run with the GFM extensions off, which is what measuring
+All three report 652/652, run with the GFM extensions off, which is what measuring
 CommonMark conformance means. GFM deliberately changes the output of nine of those
 examples (six raw-HTML, three autolink), so with `gfm: true` the same suite reports
 643/652. That is the extensions working, not a conformance failure.
@@ -201,14 +223,15 @@ examples, covering all five extensions):
 ```bash
 cd ts && npm run conformance-gfm
 cd go && go test -run TestGFMSpec -v ./...
+cd rs && cargo test --test gfm_test gfm_spec -- --nocapture
 ```
 
-Both report 24/24.
+All three report 24/24.
 
 Parity between the runtimes is checked separately: 676 examples (652 CommonMark + 24 GFM)
 across 4 option combinations (`gfm` x `breaks`) is 2704 records, with 0 differing ASTs and
-0 differing HTML outputs. The 75 shared AST fixtures in [`test/spec/`](test/spec/) also run
-in both.
+0 differing HTML outputs. The 83 shared AST fixtures in [`test/spec/`](test/spec/) also run
+in all three, and so do the golden native-tree snapshots in `test/spec/tree/`.
 
 ## Changes you may notice
 
@@ -234,7 +257,9 @@ quadrant, per language.
 | Reference (API + options + AST) | [ts/doc/reference.md](ts/doc/reference.md) | [go/doc/reference.md](go/doc/reference.md) |
 | Concepts (how it works) | [ts/doc/concepts.md](ts/doc/concepts.md) | [go/doc/concepts.md](go/doc/concepts.md) |
 
-Per-language hubs: [ts/README.md](ts/README.md) · [go/README.md](go/README.md).
+Per-language hubs: [ts/README.md](ts/README.md) · [go/README.md](go/README.md) ·
+[rs/README.md](rs/README.md). The Rust crate has no Diátaxis set of its own yet; its
+README covers use, install and the differences from the TypeScript.
 
 ## Repository layout
 
@@ -242,9 +267,10 @@ Per-language hubs: [ts/README.md](ts/README.md) · [go/README.md](go/README.md).
 |---|---|
 | [`ts/`](ts/) | TypeScript / JavaScript implementation (canonical). |
 | [`go/`](go/) | Go port. |
-| [`test/spec/`](test/spec/) | 83 shared AST fixtures, run by both runtimes. |
+| [`rs/`](rs/) | Rust port, the `tabnas-markdown` crate. Library only. |
+| [`test/spec/`](test/spec/) | 83 shared AST fixtures, run by all three runtimes. |
 | [`test/commonmark/`](test/commonmark/) | Vendored CommonMark 0.31.2 spec suite (652 examples). |
-| [`test/gfm/`](test/gfm/) | Vendored GFM extension corpus (24 examples), run by both runtimes. |
+| [`test/gfm/`](test/gfm/) | Vendored GFM extension corpus (24 examples), run by all three runtimes. |
 | [`ts/doc/grammar.svg`](ts/doc/grammar.svg), [`ts/doc/grammar-inline.svg`](ts/doc/grammar-inline.svg) | Railroad diagrams of the LIVE grammar (the block instance's `markdown`/`line` rules and the inline instance's twelve-token alphabet), drawn from real plugin instances by [`ts/tools/gen-railroad.mjs`](ts/tools/gen-railroad.mjs). |
 
 > **Rescope note:** this package was previously a CSV-family record parser (copied from
