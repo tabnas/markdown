@@ -8,7 +8,10 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use common::{best_of, to_json};
-use tabnas_markdown::{parse_document, parse_tree, render_html_with, to_html, NodeType, Options};
+use tabnas_markdown::{
+    parse_document, parse_tree, render_html_with, to_html, NodeType, Options,
+    MAX_CONTAINER_NESTING, MAX_INLINE_NESTING,
+};
 
 #[test]
 fn no_panic_on_adversarial_input() {
@@ -303,14 +306,16 @@ fn destinations_decoded_in_ast() {
 
 /// Nesting depth is chosen by the input, and the whole pipeline (block
 /// phase, inline phase, projection, rendering) stays off the call stack
-/// for it: 8000 levels on the 2 MB stack a test thread has.
+/// for it: 8000 levels of input on the 2 MB stack a test thread has.
 ///
 /// The one recursive step left is outside this crate: dropping the
 /// projected `tabnas::Value`, and converting it with `to_json`, both walk
-/// its nesting on the call stack. A debug build on a 2 MB stack drops
-/// about 2000 nested block quotes or 1000 nested lists; the deep values
-/// here are therefore handed to a thread with room. `parse_tree` and
-/// `render_html` have no such limit. AGENTS.md records this.
+/// its nesting on the call stack. That is what `MAX_CONTAINER_NESTING`
+/// and `MAX_INLINE_NESTING` bound, so the value this returns is shallow
+/// however deep the input runs, and an ordinary caller may drop it.
+/// The large stack below is belt and braces for the intermediate work,
+/// not a requirement on callers. `nesting_is_capped_at_the_constants`
+/// pins the boundary itself; DIVERGENCE.md records the cap.
 #[test]
 fn deep_nesting_stays_off_the_stack() {
     let opts = Options::default();
@@ -344,5 +349,98 @@ fn deep_nesting_stays_off_the_stack() {
         let ast = parse_document(&src, &opts);
         assert!(!ast.is_undefined());
         drop(ast);
+    }
+}
+
+/// Pins the two nesting caps at their boundary, which is what makes
+/// them a divergence a reader can check rather than a claim in prose.
+///
+/// A document at the bound parses as the canonical TypeScript does. Past
+/// it the extra markers stay literal text, so the tree stops growing and
+/// the `tabnas::Value` projected from it stays inside the headroom
+/// `deep_nesting_stays_off_the_stack` describes. DIVERGENCE.md records
+/// both bounds and the measurements behind them.
+#[test]
+fn nesting_is_capped_at_the_constants() {
+    let opts = Options::default();
+
+    // The deepest run of matching nodes anywhere in the tree, counted
+    // over every descendant: past the bound the wrappers that do form
+    // sit beside the literal text, not above it.
+    fn deepest(
+        tree: &tabnas_markdown::Tree,
+        at: tabnas_markdown::NodeId,
+        want: fn(NodeType) -> bool,
+    ) -> usize {
+        let here = usize::from(want(tree.get(at).node_type));
+        let below = tree
+            .children(at)
+            .into_iter()
+            .map(|c| deepest(tree, c, want))
+            .max()
+            .unwrap_or(0);
+        here + below
+    }
+    let depth = |src: String, want: fn(NodeType) -> bool| -> usize {
+        let tree = parse_tree(&src, &opts);
+        let root = tree.root();
+        deepest(&tree, root, want)
+    };
+
+    let quotes = |n: usize| format!("{}x", "> ".repeat(n));
+    let is_quote = |t: NodeType| NodeType::BlockQuote == t;
+    assert_eq!(
+        depth(quotes(MAX_CONTAINER_NESTING), is_quote),
+        MAX_CONTAINER_NESTING
+    );
+    assert_eq!(
+        depth(quotes(MAX_CONTAINER_NESTING + 1), is_quote),
+        MAX_CONTAINER_NESTING
+    );
+    assert_eq!(
+        depth(quotes(MAX_CONTAINER_NESTING + 50), is_quote),
+        MAX_CONTAINER_NESTING
+    );
+
+    // A list marker is two containers, the list and its item, so the
+    // bound is reached at half as many markers.
+    let items = |n: usize| format!("{}x", "- ".repeat(n));
+    let is_list = |t: NodeType| matches!(t, NodeType::List | NodeType::Item);
+    assert_eq!(
+        depth(items(MAX_CONTAINER_NESTING / 2), is_list),
+        MAX_CONTAINER_NESTING
+    );
+    assert_eq!(
+        depth(items(MAX_CONTAINER_NESTING), is_list),
+        MAX_CONTAINER_NESTING
+    );
+
+    // A run of stars pairs up: `**` a side is one `strong`, so 2n stars
+    // a side nest n wrappers.
+    let stars = |n: usize| format!("{}x{}", "*".repeat(n), "*".repeat(n));
+    let is_wrapper = |t: NodeType| matches!(t, NodeType::Emph | NodeType::Strong);
+    assert_eq!(
+        depth(stars(2 * MAX_INLINE_NESTING), is_wrapper),
+        MAX_INLINE_NESTING
+    );
+    assert_eq!(
+        depth(stars(2 * MAX_INLINE_NESTING + 2), is_wrapper),
+        MAX_INLINE_NESTING
+    );
+    assert_eq!(
+        depth(stars(4 * MAX_INLINE_NESTING), is_wrapper),
+        MAX_INLINE_NESTING
+    );
+
+    // Nothing the reader wrote disappears: the markers past the bound
+    // stay in the output as text.
+    for src in [
+        quotes(MAX_CONTAINER_NESTING + 3),
+        stars(2 * MAX_INLINE_NESTING + 4),
+    ] {
+        assert!(
+            to_html(&src, &opts).contains('x'),
+            "{src:.20}: content survives"
+        );
     }
 }

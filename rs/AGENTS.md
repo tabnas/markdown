@@ -1,4 +1,4 @@
-# Agents Guide — rs/
+# Agents Guide: rs/
 
 The Rust port of the canonical TypeScript in [`../ts`](../ts). Read
 [`../AGENTS.md`](../AGENTS.md) first: it holds the cross-runtime rules
@@ -98,17 +98,43 @@ fixture runner compares numerically. Do not "fix" this in the
 projection: it is the engine's value type, and every other Rust port
 has the same shape.
 
-## The one divergence is the engine's
+## The divergences
 
 Token columns after an astral character: TypeScript counts UTF-16
 units, Go and Rust count characters. It is recorded in
 `parser/DIVERGENCE.md` ("Column positions for astral characters");
 `tests/engine_columns_test.rs` cites it and pins the Rust answer on the
 same table `go/enginecol_test.go` uses. It never reaches the AST or the
-native tree (the goldens pass). This repo has no `DIVERGENCE.md` and no
-`test/spec/divergent.tsv` because nothing else diverges; if something
-ever does, record it in both, with a `rust` column in the register, per
-[`../AGENTS.md`](../AGENTS.md).
+native tree (the goldens pass).
+
+The Rust port adds one of its own, the nesting cap described below.
+Both are written up in [`../DIVERGENCE.md`](../DIVERGENCE.md). There is
+still no `test/spec/divergent.tsv` register: a shared fixture row states
+one expected value per input, and neither divergence can be spelled that
+way (one is invisible to the AST, the other needs a document larger than
+a fixture cell). A divergence that a row CAN express belongs in a
+register, with a `rust` column, per [`../AGENTS.md`](../AGENTS.md).
+
+## Deep nesting: the crate is off the stack, the AST type is not
+
+`block.rs`, `inline.rs`, `html.rs` and `ast.rs` never recurse on the
+document's nesting, and `tests/robust_test.rs::deep_nesting_stays_off_the_stack`
+pins 8000 levels of input on a 2 MB test thread. What still recurses is
+outside this crate: `tabnas::Value::to_json()` and the default drop of a
+`tabnas::Value` (`parser/rs/src/value.rs`), which walk the projected
+tree once per level. Measured in a debug build on a 2 MB thread, the
+drop survives about 5,300 levels and `to_json()` about 1,250, and each
+container costs two levels.
+
+Two constants keep the projected AST inside that headroom:
+`block::MAX_CONTAINER_NESTING` (100 block quotes, lists and list items)
+and `inline::MAX_INLINE_NESTING` (50 emphasis, link and image
+wrappers). Markers past either bound stay literal text, which is what
+`tests/robust_test.rs` pins. The canonical TypeScript has no such cap,
+so this is a divergence and it is recorded in `../DIVERGENCE.md`, with
+the reasoning here. Raising a constant means re-measuring both walks
+first; removing them needs the engine to stop recursing, which is
+`parser/rs`'s to fix, not this crate's.
 
 ## The README is doctested
 

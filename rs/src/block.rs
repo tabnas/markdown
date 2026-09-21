@@ -49,7 +49,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use crate::common::{js_trim, unescape_string};
-use crate::inline::parse_reference;
+use crate::inline::parse_references;
 use crate::node::{
     Align, ListData, ListType, MdNode, NodeId, NodeType, SourcePos, TableAlign, Tree,
 };
@@ -667,6 +667,29 @@ pub fn parse_delimiter_row(line: &str) -> Option<Vec<TableAlign>> {
 /// pathological; ordinary tables are nowhere near.
 const MAX_AUTOCOMPLETED_CELLS: usize = 0x80000;
 
+/// The most container blocks (block quotes, lists and list items, each
+/// counted) that may be open at once. A block quote marker or list marker
+/// that would open a deeper one is not a block start, so it is paragraph
+/// text, which is what markdown-it's `maxNesting` does at its limit.
+///
+/// This bound exists for the caller's stack, not the parser's: every
+/// phase here is iterative, but the AST is a `tabnas::Value`, whose
+/// destructor and `to_json` recurse once per nesting level. Unbounded,
+/// a few thousand nested block quotes made an ordinary caller's drop
+/// abort the process. Measured in a debug build on a 2 MiB thread: drop
+/// survives about 5,300 nested levels and `to_json` about 1,250, and
+/// each container is two levels (an object and its children array), so
+/// 100 containers leaves the deepest document well inside both. The
+/// canonical TypeScript has no such limit; `DIVERGENCE.md` records it,
+/// and `tests/robust_test.rs` pins the boundary. The inline phase bounds
+/// its own wrappers the same way: `inline::MAX_INLINE_NESTING`.
+pub const MAX_CONTAINER_NESTING: usize = 100;
+
+/// The blocks `MAX_CONTAINER_NESTING` counts.
+fn is_container(t: NodeType) -> bool {
+    matches!(t, NodeType::BlockQuote | NodeType::List | NodeType::Item)
+}
+
 /// Section 5.3: two markers make the same list only if type, bullet and
 /// delimiter agree.
 fn lists_match(list_data: &ListData, item_data: &ListData) -> bool {
@@ -999,6 +1022,38 @@ impl BlockParser {
         self.last_added_to = Some(tip);
     }
 
+    /// How many container blocks the spine holds from the document down
+    /// to `id`, `id` included.
+    fn container_depth(&self, id: NodeId) -> usize {
+        let mut depth = 0;
+        let mut cur = Some(id);
+        while let Some(n) = cur {
+            if is_container(self.node_type(n)) {
+                depth += 1;
+            }
+            cur = self.tree.get(n).parent;
+        }
+        depth
+    }
+
+    /// The container depth a new block of `tag` would open at under `tip`.
+    /// `add_child` closes the blocks that cannot hold it first, so the
+    /// holder is the nearest of `tip` and its ancestors that can (or the
+    /// document), and the new block is one deeper than that. The walk is
+    /// bounded by `MAX_CONTAINER_NESTING` itself, since the spine never
+    /// holds more containers than that.
+    fn depth_of_new(&self, tip: NodeId, tag: NodeType) -> usize {
+        let mut holder = tip;
+        while holder != self.doc && !can_contain(self.node_type(holder), tag) {
+            holder = self
+                .tree
+                .get(holder)
+                .parent
+                .expect("every block below the document has a parent");
+        }
+        self.container_depth(holder) + 1
+    }
+
     /// Open a block of `tag` as a child of the tip, closing blocks that
     /// cannot contain it first.
     fn add_child(&mut self, tag: NodeType, offset: usize) -> NodeId {
@@ -1239,6 +1294,27 @@ impl BlockParser {
         self.tip = above;
     }
 
+    /// `block.listData.tight = false` on a list, as the other runtimes see
+    /// it. In TypeScript the list and the item that opened it hold the SAME
+    /// `listData` object (`addChild('list').listData = data` and then
+    /// `addChild('item').listData = data`), and Go shares the pointer the
+    /// same way, so loosening the list also loosens that first item's
+    /// `listData`. Here `list_data` is an owned value on each node, so the
+    /// aliasing has to be spelled out: the native tree (and its goldens)
+    /// carry the item's `tight`, and the projection and the renderer read
+    /// only the list's. Later items keep their own `tight: true`, in every
+    /// runtime.
+    fn mark_list_loose(&mut self, list: NodeId) {
+        if let Some(data) = self.tree.get_mut(list).list_data.as_mut() {
+            data.tight = false;
+        }
+        if let Some(first) = self.tree.get(list).first_child {
+            if let Some(data) = self.tree.get_mut(first).list_data.as_mut() {
+                data.tight = false;
+            }
+        }
+    }
+
     /// The per-type finalizer the TypeScript keeps in `BLOCK_HANDLERS`.
     fn finalize_block(&mut self, block: NodeId) {
         match self.node_type(block) {
@@ -1251,9 +1327,7 @@ impl BlockParser {
                 'items: while let Some(it) = item {
                     let item_next = self.tree.get(it).next;
                     if self.ends_with_blank_line(it) && item_next.is_some() {
-                        if let Some(data) = self.tree.get_mut(block).list_data.as_mut() {
-                            data.tight = false;
-                        }
+                        self.mark_list_loose(block);
                         break;
                     }
                     let mut subitem = self.tree.get(it).first_child;
@@ -1262,9 +1336,7 @@ impl BlockParser {
                         if self.ends_with_blank_line(sub)
                             && (item_next.is_some() || sub_next.is_some())
                         {
-                            if let Some(data) = self.tree.get_mut(block).list_data.as_mut() {
-                                data.tight = false;
-                            }
+                            self.mark_list_loose(block);
                             break 'items;
                         }
                         subitem = sub_next;
@@ -1378,14 +1450,7 @@ impl BlockParser {
     /// any were consumed.
     fn consume_reference_defs(&mut self, block: NodeId) -> bool {
         let content = std::mem::take(&mut self.tree.get_mut(block).string_content);
-        let mut consumed = 0;
-        while consumed < content.len() && content.as_bytes()[consumed] == b'[' {
-            let pos = parse_reference(&content[consumed..], &mut self.refmap);
-            if pos == 0 {
-                break;
-            }
-            consumed += pos;
-        }
+        let consumed = parse_references(&content, &mut self.refmap);
         let node = self.tree.get_mut(block);
         if consumed == 0 {
             node.string_content = content;
@@ -1634,6 +1699,12 @@ impl BlockParser {
             // Block quote (section 5.1).
             0 => {
                 if !self.indented && peek(&self.current_line, self.next_nonspace) == Some(b'>') {
+                    // The nesting limit: past it the marker is text. The
+                    // holder is judged from `container`, which is what the
+                    // tip becomes once `close_unmatched_blocks` has run.
+                    if self.depth_of_new(container, NodeType::BlockQuote) > MAX_CONTAINER_NESTING {
+                        return StartResult::None;
+                    }
                     self.advance_next_nonspace();
                     self.advance_offset(1, false);
                     if is_space_or_tab(peek(&self.current_line, self.offset)) {
@@ -1785,22 +1856,43 @@ impl BlockParser {
             // indented four or more columns on its own, so there is no
             // `indented` test here.
             6 => {
+                // `parse_list_marker` moves the cursor when it matches, so
+                // the position is kept for the nesting limit below, which
+                // has to leave the line exactly as it found it.
+                let before = (self.offset, self.column, self.partially_consumed_tab);
                 let Some(data) = self.parse_list_marker(container) else {
                     return StartResult::None;
                 };
 
-                self.close_unmatched_blocks();
-
                 // Section 5.3: a change of bullet character or ordered
-                // delimiter starts a new list.
-                let tip = self.open_tip();
-                let same_list = self.node_type(tip) == NodeType::List
+                // delimiter starts a new list. Judged from `container`,
+                // which is what the tip becomes once
+                // `close_unmatched_blocks` has run.
+                let same_list = self.node_type(container) == NodeType::List
                     && self
                         .tree
-                        .get(tip)
+                        .get(container)
                         .list_data
                         .as_ref()
                         .is_some_and(|existing| lists_match(existing, &data));
+
+                // The nesting limit: an item in the open list is one
+                // container deeper, a new list and its item are two. Past
+                // it the marker is text.
+                let depth = if same_list {
+                    self.depth_of_new(container, NodeType::Item)
+                } else {
+                    self.depth_of_new(container, NodeType::List) + 1
+                };
+                if depth > MAX_CONTAINER_NESTING {
+                    (self.offset, self.column, self.partially_consumed_tab) = before;
+                    return StartResult::None;
+                }
+
+                self.close_unmatched_blocks();
+
+                let tip = self.open_tip();
+                debug_assert_eq!(tip, container, "the tip is the last matched container");
                 if !same_list {
                     let list = self.add_child(NodeType::List, self.next_nonspace);
                     self.tree.get_mut(list).list_data = Some(data.clone());

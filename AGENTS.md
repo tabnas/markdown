@@ -162,11 +162,11 @@ to [`@tabnas/csv`](https://github.com/tabnas/csv). The RFC-4180 leftovers
 reintroduce that shape. See `dx-report.md` §1 and the 2026-08-06 entry.
 
 It is a **bare-engine** plugin (not jsonic-based). Install on a Tabnas
-instance — `new Tabnas().use(Markdown)`, `tabnasmarkdown.Make()` in Go,
+instance: `new Tabnas().use(Markdown)`, `tabnasmarkdown.Make()` in Go,
 or `tabnas_markdown::make()` in Rust. Its only runtime tabnas dependency
 is the engine.
 
-There are three implementations that must behave identically — TypeScript
+There are three implementations that must behave identically: TypeScript
 (canonical), a Go port and a Rust port.
 
 ## Repository map
@@ -175,7 +175,7 @@ There are three implementations that must behave identically — TypeScript
 |---|---|
 | [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/markdown` package. Depends on `@tabnas/parser` only, and only in `src/markdown.ts`. |
 | [`go/`](go/) | Go port — `github.com/tabnas/markdown/go`, package `tabnasmarkdown`. |
-| [`rs/`](rs/) | Rust port — the `tabnas-markdown` crate (library `tabnas_markdown`). Same file split as `go/` under `rs/src/`, plugin wiring in `src/lib.rs`, both HTML-corpus graders under `rs/tests/`. Depends on the `tabnas` crate via a `path` dependency (sibling checkout) and, dev-only, on `tabnas-support` for the fixture runner. Library only: no CLI. See [`rs/AGENTS.md`](rs/AGENTS.md). |
+| [`rs/`](rs/) | Rust port: the `tabnas-markdown` crate (library `tabnas_markdown`). Same file split as `go/` under `rs/src/`, plugin wiring in `src/lib.rs`, both HTML-corpus graders under `rs/tests/`. Depends on the `tabnas` crate via a `path` dependency (sibling checkout) and, dev-only, on `tabnas-support` for the fixture runner. Library only: no CLI. See [`rs/AGENTS.md`](rs/AGENTS.md). |
 | [`ci/`](ci/) | Workflows and scripts **staged** for promotion into `.github/workflows/` by someone whose credentials can write there: `ci/workflows/rust.yml` (the Rust gate), `ci/workflows/docs.yml` (the prose gate), `ci/rust/run.sh` (what the Rust gate runs). See [`ci/README.md`](ci/README.md). |
 | [`test/spec/`](test/spec/) | 83 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) across 10 `*.tsv` files, auto-discovered and run by all three runtimes. The TS/Go/Rust parity contract. See `test/AGENTS.md`. |
 | [`test/spec/tree/`](test/spec/tree/) | Golden native-tree snapshots (`sourcepos` included), one per fixture file, generated from the canonical TypeScript and asserted by `ts/test/tree-golden.test.ts`, `go/tree_golden_test.go` and `rs/tests/tree_golden_test.rs`. |
@@ -226,7 +226,7 @@ Both runtimes depend on the **bare engine**, not jsonic:
 
 - TypeScript: `@tabnas/parser` is a `peerDependency` (`>=0`) and a `file:../../parser/ts` devDependency. `@tabnas/debug`, `@tabnas/railroad` and `@tabnas/jsonic` are dev-only (debug for `debug-model.test.ts`, railroad for `ts/doc/grammar.{svg,txt}`). `engines.node` is `>=24`.
 - Go: `go/go.mod` requires `github.com/tabnas/parser/go` and **nothing else** — no jsonic, no indirect requirements. Earlier revisions of this file claimed that while `go.mod` said otherwise; it is now true. Keep it true: a new direct requirement in `go/go.mod` needs a reason stated here.
-- Rust: `tabnas = { path = "../../parser/rs" }` in `rs/Cargo.toml` is the crate's only runtime tabnas dependency; `tabnas-support = { path = "../../support/rs" }` (the shared fixture runner) is dev-only. Neither crate is published, so both are sibling checkouts and `rs/Cargo.lock` records a resolution naming them — which is why `ci/rust/run.sh` runs cargo **without** `--locked` and checks the lockfile by diffing it instead, exempting both siblings' recorded versions.
+- Rust: `tabnas = { path = "../../parser/rs" }` in `rs/Cargo.toml` is the crate's only runtime tabnas dependency; `tabnas-support = { path = "../../support/rs" }` (the shared fixture runner) is dev-only. Neither crate is published, so both are sibling checkouts and `rs/Cargo.lock` records a resolution naming them, which is why `ci/rust/run.sh` runs cargo **without** `--locked` and checks the lockfile by diffing it instead, exempting both siblings' recorded versions.
 
 Development uses `replace github.com/tabnas/parser/go => ../../parser/go`
 (via the repo-set `go.work`, not checked in). Clone `parser` (plus
@@ -288,7 +288,7 @@ behaviour:
 
 Do not let Go or Rust drift from TS. Where a port differs on purpose it is
 because the standard library is the better tool (entity decoding, Unicode
-punctuation — both noted in `go/common.go`; Rust generates its own
+punctuation, both noted in `go/common.go`; Rust generates its own
 entity table and uses the `regex` crate's Unicode tables for punctuation,
 noted in `rs/src/common.rs`), and the observable behaviour is still
 identical. If a port cannot match, document the gap here and in the
@@ -380,7 +380,7 @@ The commands that prove a change is correct. Run from the repo root unless
 stated:
 
 ```bash
-make build && make test      # all three runtimes — the check that matters
+make build && make test      # all three runtimes: the check that matters
 ```
 
 Narrower, when iterating:
@@ -411,13 +411,13 @@ around it; the wiring is fixed instead, and
 What "correct" means here, in order of authority:
 
 1. **The shared fixtures pass in ALL THREE runtimes.** `test/spec/*.tsv` is
-   the AST parity contract — a row green in one runtime and red in another
+   the AST parity contract: a row green in one runtime and red in another
    is a failure, not a discrepancy.
 2. **The conformance corpora stay perfect in ALL THREE runtimes.** 652/652
    on the vendored CommonMark 0.31.2 suite and 24/24 on the GFM extension
    corpus. A change that drops an example is a regression, not a trade-off
-   — the comparison is byte-for-byte HTML and must stay one.
-3. **The five version sites agree** — `ts/package.json` `"version"`,
+   (the comparison is byte-for-byte HTML and must stay one).
+3. **The five version sites agree**: `ts/package.json` `"version"`,
    `const VERSION` in `ts/src/markdown.ts`, `const VERSION` in
    `go/markdown.go`, `version` in `rs/Cargo.toml` and `pub const VERSION`
    in `rs/src/lib.rs`. `ts/test/version.test.ts`, `go/version_test.go` and
@@ -453,7 +453,7 @@ accepts the publish. Pushing a tag by hand is the orchestrator's path
 
 The steps, in order:
 
-1. Bump all **five** version sites together — `ts/package.json`, `VERSION`
+1. Bump all **five** version sites together: `ts/package.json`, `VERSION`
    in `ts/src/markdown.ts`, `const VERSION` in `go/markdown.go`, and the
    two Rust sites `rs/Cargo.toml` and `rs/src/lib.rs` (plus the crate's
    entry in `rs/Cargo.lock`; `make version-rs V=x.y.z` does all three Rust

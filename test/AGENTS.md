@@ -5,13 +5,13 @@ change belongs in before you add to any of them.
 
 | Directory | Contents | Compares | Canonical for | Add to it? |
 |---|---|---|---|---|
-| [`spec/`](spec/) | 83 hand-written cases across 10 `*.tsv` files | the **JSON AST**, through the engine | TS ↔ Go ↔ Rust parity, and the shape of the public AST | **yes** — this is where cases of our own go |
+| [`spec/`](spec/) | 83 hand-written cases across 10 `*.tsv` files | the **JSON AST**, through the engine | TS ↔ Go ↔ Rust parity, and the shape of the public AST | **yes**, this is where cases of our own go |
 | [`spec/tree/`](spec/tree/) | one golden native-tree file per fixture file | the **native tree**, `sourcepos` included, engine-free | positional parity the AST projection cannot see | only by regenerating from the canonical TypeScript (`MD_TREE_GOLDEN=write npm test`) |
 | [`commonmark/`](commonmark/) | the vendored CommonMark 0.31.2 suite, 652 examples in `spec.json` | the **HTML** output, byte for byte | spec conformance | no — upstream data |
 | [`gfm/`](gfm/) | the extension sections of the GFM spec, 24 examples in `spec.json` | the **HTML** output, byte for byte | the GFM extensions | no — upstream data |
 
-Scores, all three runtimes: **652/652** on the CommonMark suite — the
-parser is conformant to CommonMark 0.31.2, all 26 sections — and
+Scores, all three runtimes: **652/652** on the CommonMark suite (the
+parser is conformant to CommonMark 0.31.2, all 26 sections) and
 **24/24** on the GFM corpus, which is the complete GFM extension set.
 
 All of these are executable contracts: do not weaken any of them to make
@@ -22,7 +22,7 @@ a change pass. All are run by all three runtimes (TypeScript, Go, Rust).
 # `spec/*.tsv` — the parity corpus
 
 All three runtimes auto-discover and run **every** file in `spec/`, so a
-change there affects TypeScript, Go and Rust together — edit with that in
+change there affects TypeScript, Go and Rust together; edit with that in
 mind. Each case goes through a real engine instance with the plugin
 installed (`Tabnas().use(Markdown).parse()` / `parser.Make()` +
 `UseDefaults` / `tabnas_markdown::make_with(&opts).parse()`), so this
@@ -76,19 +76,19 @@ comparison.
 
 - TypeScript: `ts/test/parity.test.ts` — `makeRunner(...).dir(...)`.
 - Go: `go/parity_test.go` — `support.Runner{...}.Dir(t, dir)`.
-- Rust: `rs/tests/parity_test.rs` — `Runner::new_with_row(...).dir(dir)`
+- Rust: `rs/tests/parity_test.rs`, `Runner::new_with_row(...).dir(dir)`
   from the `tabnas-support` crate; a fresh `make_with(&opts)` per row.
 
 All three are a dozen lines holding only what is specific to markdown:
-how to build the parser for a row's options. Everything else — finding
+how to build the parser for a row's options. Everything else (finding
 `test/spec`, reading the file, decoding escapes, the `ERROR:` contract,
-the comparison, the `<file>:<line>` in a failure message — comes from
+the comparison, the `<file>:<line>` in a failure message) comes from
 [`@tabnas/support`](https://github.com/tabnas/support) and its Go and Rust
 halves, so the three loaders cannot drift from each other either.
 
 All three discover files by directory listing: adding a `.tsv` here runs
 it in all three runtimes without touching any runner. An empty fixture,
-and a spec directory with no fixtures in it, both **fail** — a runner
+and a spec directory with no fixtures in it, both **fail**: a runner
 that reports green having run nothing is indistinguishable from coverage
 that was never there.
 
@@ -114,7 +114,7 @@ also fails when a fixture file has no golden.
   case is expressible as input → output. That is what keeps the three
   runtimes honest against each other.
 - TypeScript is canonical. If the runtimes disagree, the TS behaviour is
-  the expected value — unless a port has exposed a genuine TS defect, in
+  the expected value, unless a port has exposed a genuine TS defect, in
   which case fix TS first and pin the corrected behaviour here.
 - This corpus does not cover `sourcepos` / `SourcePos`, which the AST
   projection drops. Positional changes need a native-tree comparison as
@@ -152,7 +152,7 @@ CommonMark; strikethrough changes the expected output for several examples.
   same file re-runs the corpus across all four `GFM` × `Breaks`
   combinations, asserting only that nothing panics — the corpus itself never
   exercises those.
-- Rust: `rs/tests/commonmark_test.rs` —
+- Rust: `rs/tests/commonmark_test.rs`,
   `cargo test --test commonmark_test -- --nocapture` (from `rs/`), the
   same per-section table and the same option matrix, over the engine-free
   modules. `rs/tests/engine_conformance_test.rs` runs the same corpus a
@@ -191,7 +191,7 @@ pre-0.31.2 output this parser correctly no longer produces. Core
 conformance is `commonmark/spec.json`, against 0.31.2.
 
 **24/24 today, in all three runtimes.** Every section passes in all
-three, and every section is asserted in all three — there is nothing
+three, and every section is asserted in all three; there is nothing
 failing and nothing reported-but-tolerated. That covers the whole
 extension set the spec defines: tables, task list items, autolink
 literals, strikethrough and disallowed raw HTML.

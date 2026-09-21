@@ -3,10 +3,11 @@
 How the tabnas documentation is written. Adapted from
 [aontu](https://github.com/aontu-lang/aontu)'s `docs/STYLE-GUIDE.md`,
 with tabnas's terminology, two-runtime file layout, and executable-example
-conventions. This guide is normative for every page `ts/scripts/gated-docs.cjs`
-lists, which is the reader-facing set: 11 pages in this repository. It exists so that a page written next year sounds like a
-page written this year, and so that a reviewer can point at a rule instead
-of arguing taste.
+conventions. This guide is normative for every page
+`ts/scripts/gated-docs.cjs` lists, which is the reader-facing set: 12
+pages in this repository. It exists so that a page written next year
+sounds like a page written this year, and so that a reviewer can point
+at a rule instead of arguing taste.
 
 Three sources feed it, in a fixed priority order. The same order is
 encoded in `.vale.ini`, and every rule switched off there names the
@@ -41,7 +42,7 @@ drift from the other:
 
 The gated set is the reader-facing one: the language-neutral pages under
 `doc/`, the four Diátaxis kinds under `ts/doc/` and `go/doc/`, and the
-three package READMEs. The Rust-port series, the feasibility reports and
+four package READMEs. The Rust-port series, the feasibility reports and
 the defect ledgers are working documents, and they are out.
 
 **Four checks live in the local gate rather than in Vale, and the reason
@@ -65,7 +66,7 @@ is capability, not preference.**
 
 **A Google rule sitting below error level was tried at error first and
 found wrong for these pages.** `.vale.ini` records what each produced on
-a clean run over the gated set: 877 alerts across 11 files. Those
+a clean run over the gated set: 914 alerts across 12 files. Those
 numbers were written by hand once, and this sentence and the one in
 `.vale.ini` drifted apart from each other and from a run.
 `node ts/scripts/vale-counts.cjs` now reads both against a live Vale run

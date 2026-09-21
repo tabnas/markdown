@@ -22,7 +22,7 @@ This directory exists because session credentials cannot write
   (`ts/test/docs.test.js`), so promoting this adds the spelling and
   Google-convention arm rather than the whole gate.
 
-- **`workflows/rust.yml`** — the Rust gate: `ci/rust/run.sh` over the
+- **`workflows/rust.yml`**, the Rust gate: `ci/rust/run.sh` over the
   crate in `rs/`, on the MSRV pinned in `rs/Cargo.toml`. The engine and
   the test-support crate are unpublished path dependencies on sibling
   checkouts (`../parser/rs`, `../support/rs`), so the workflow checks

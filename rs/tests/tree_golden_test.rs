@@ -197,3 +197,47 @@ fn every_fixture_has_a_golden() {
         );
     }
 }
+
+/// A loose list loosens the `listData` of the item that OPENED it, and
+/// only that one. The canonical runtime hands one `listData` object to
+/// both the new list and its first item, and Go shares the pointer, so
+/// `tight = false` on the list shows through on that item; later items
+/// keep their own `tight: true`. No fixture holds a loose list, so the
+/// goldens above never see this; it is pinned here on the same
+/// serialization, with the values the TypeScript produces.
+#[test]
+fn loose_list_loosens_the_opening_item_only() {
+    let tight = |v: &Value| v["listData"]["tight"].as_bool().expect("tight");
+    let items = |v: &Value| -> Vec<bool> {
+        v["children"]
+            .as_array()
+            .expect("children")
+            .iter()
+            .map(tight)
+            .collect()
+    };
+
+    for (input, list_tight, item_tights) in [
+        ("- a\n- b\n\n- c", false, vec![false, true, true]),
+        ("- a\n\n  b", false, vec![false]),
+        ("1. a\n\n   b\n2. c", false, vec![false, true]),
+        ("- a\n- b\n- c", true, vec![true, true, true]),
+    ] {
+        let tree = parse_tree(input, &Options::default());
+        let root = serialize_tree(&tree, tree.root());
+        let list = &root["children"][0];
+        assert_eq!(tight(list), list_tight, "{input:?}: list tight");
+        assert_eq!(items(list), item_tights, "{input:?}: item tight values");
+    }
+
+    // A loose SUBLIST loosens its own opening item and nothing outside it.
+    let tree = parse_tree("- a\n  - b\n\n\n  - c", &Options::default());
+    let root = serialize_tree(&tree, tree.root());
+    let outer = &root["children"][0];
+    assert!(tight(outer), "outer list stays tight");
+    assert_eq!(items(outer), vec![true]);
+    let sub = &outer["children"][0]["children"][1];
+    assert_eq!(sub["type"], "list");
+    assert!(!tight(sub), "sublist is loose");
+    assert_eq!(items(sub), vec![false, true]);
+}

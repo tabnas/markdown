@@ -29,6 +29,12 @@
 //! projects it to the map-based JSON AST this package has always returned
 //! (as a [`tabnas::Value`]), and [`html`] renders it for [`to_html`].
 //!
+//! Nesting is bounded, at [`MAX_CONTAINER_NESTING`] container blocks and
+//! [`MAX_INLINE_NESTING`] inline containers, which the canonical
+//! TypeScript does not do: a `Value` is dropped and converted
+//! recursively, so an unbounded AST could overflow the caller's stack.
+//! See those constants and `DIVERGENCE.md` at the repository root.
+//!
 //! This is a port of `ts/src/*.ts`, which is canonical, and a sibling of
 //! the Go port in `go/`. See AGENTS.md.
 
@@ -56,7 +62,9 @@ pub mod node;
 pub mod options;
 
 pub use ast::to_ast;
+pub use block::MAX_CONTAINER_NESTING;
 pub use html::{render_html, render_html_with, DISALLOWED_TAGS};
+pub use inline::MAX_INLINE_NESTING;
 pub use node::{
     Align, ListData, ListType, MdNode, NodeId, NodeType, SourcePos, TableAlign, Tree, WalkEvent,
     Walker,

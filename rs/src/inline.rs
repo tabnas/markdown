@@ -168,6 +168,37 @@ fn re_email_autolink() -> &'static Regex {
 /// `scan_link_destination`).
 const MAX_LINK_PAREN_NESTING: usize = 32;
 
+/// The most inline containers (emphasis, strong emphasis, strikethrough,
+/// links and images) that may nest inside one block. A delimiter pair,
+/// link or image whose content already holds that many nested containers
+/// stays literal text.
+///
+/// The reason is the same as `block::MAX_CONTAINER_NESTING` (see there
+/// for the measurements): each wrapper is two levels of the projected
+/// `tabnas::Value`, whose destructor and `to_json` recurse per level, and
+/// `****x****` nests one `strong` per two stars a side. The canonical
+/// TypeScript has no such limit; `DIVERGENCE.md` records it, and
+/// `tests/robust_test.rs` pins the boundary.
+pub const MAX_INLINE_NESTING: usize = 50;
+
+/// The code span search memo, cmark's `backticks[]`: the start of the
+/// last backtick run of each length that a scan has passed, and whether
+/// a scan has reached the end of the subject. Once one has, every run
+/// after that scan's start is on record, so an opener whose length has
+/// no run ahead of it is refused without rescanning. Without it, a
+/// subject holding unmatched runs of distinct lengths rescanned its whole
+/// tail once per run.
+///
+/// An entry only ever moves forward. A scan that succeeds part way stops
+/// before the last run of its length, and letting it overwrite the
+/// position a full scan recorded would hide a later closer from the next
+/// opener.
+#[derive(Debug, Clone, Default)]
+pub struct BacktickMemo {
+    last_run: HashMap<usize, usize>,
+    scanned_to_end: bool,
+}
+
 fn text_node(tree: &mut Tree, literal: &str) -> NodeId {
     let mut node = MdNode::new(NodeType::Text);
     node.literal = literal.to_string();
@@ -305,6 +336,16 @@ pub enum CodeSpanScan {
 /// Hand-coded rather than the TypeScript's sticky and global regexes, so
 /// that no regex is built from an input-derived run length.
 pub fn scan_code_span(subject: &str, pos: usize) -> Option<CodeSpanScan> {
+    scan_code_span_memo(subject, pos, &mut BacktickMemo::default())
+}
+
+/// [`scan_code_span`] with the search memo the inline parser keeps per
+/// block, so that a subject full of unmatched runs is scanned once.
+pub fn scan_code_span_memo(
+    subject: &str,
+    pos: usize,
+    memo: &mut BacktickMemo,
+) -> Option<CodeSpanScan> {
     let s = subject.as_bytes();
     let mut i = pos;
     while i < s.len() && s[i] == b'`' {
@@ -316,6 +357,15 @@ pub fn scan_code_span(subject: &str, pos: usize) -> Option<CodeSpanScan> {
     let tick_len = i - pos;
     let after_open_ticks = i;
 
+    // A full scan has been past here: a closer exists only if a run of
+    // this length was recorded after the opener.
+    if memo.scanned_to_end && memo.last_run.get(&tick_len).is_none_or(|&last| last <= pos) {
+        return Some(CodeSpanScan::Open {
+            end: after_open_ticks,
+            ticks: subject[pos..after_open_ticks].to_string(),
+        });
+    }
+
     while i < s.len() {
         if s[i] != b'`' {
             i += 1;
@@ -325,7 +375,12 @@ pub fn scan_code_span(subject: &str, pos: usize) -> Option<CodeSpanScan> {
         while i < s.len() && s[i] == b'`' {
             i += 1;
         }
-        if i - run_start == tick_len {
+        let run_len = i - run_start;
+        memo.last_run
+            .entry(run_len)
+            .and_modify(|last| *last = (*last).max(run_start))
+            .or_insert(run_start);
+        if run_len == tick_len {
             // Line endings become spaces; then one leading and one trailing
             // space are stripped together, but only if the content is not
             // all spaces (which is what lets a code span hold backticks).
@@ -344,6 +399,7 @@ pub fn scan_code_span(subject: &str, pos: usize) -> Option<CodeSpanScan> {
         }
     }
 
+    memo.scanned_to_end = true;
     Some(CodeSpanScan::Open {
         end: after_open_ticks,
         ticks: subject[pos..after_open_ticks].to_string(),
@@ -685,6 +741,13 @@ pub struct InlineParser {
     brackets: Vec<Bracket>,
     pub refmap: RefMap,
     pub options: Options,
+    /// The nesting height of every inline container made for the current
+    /// block: 1 for one wrapping only leaves, and one more per level.
+    /// Leaves are absent and count 0. `MAX_INLINE_NESTING` is judged from
+    /// it; see `run_height`.
+    nesting: HashMap<NodeId, usize>,
+    /// The code span search memo for the current block's subject.
+    backticks: BacktickMemo,
 }
 
 impl InlineParser {
@@ -697,7 +760,26 @@ impl InlineParser {
             brackets: Vec::new(),
             refmap,
             options,
+            nesting: HashMap::new(),
+            backticks: BacktickMemo::default(),
         }
+    }
+
+    /// The tallest nesting height among the siblings from `from` up to
+    /// but not including `until` (or to the end of the run). Stops at
+    /// `MAX_INLINE_NESTING`, the only threshold the callers compare
+    /// against, so the walk never costs more than it decides.
+    fn run_height(&self, tree: &Tree, from: Option<NodeId>, until: Option<NodeId>) -> usize {
+        let mut height = 0;
+        let mut cur = from;
+        while let Some(id) = cur {
+            if cur == until || height >= MAX_INLINE_NESTING {
+                break;
+            }
+            height = height.max(self.nesting.get(&id).copied().unwrap_or(0));
+            cur = tree.get(id).next;
+        }
+        height
     }
 
     // --- scanning primitives ---
@@ -750,7 +832,7 @@ impl InlineParser {
     /// of *exactly* the same length. Unmatched opening backticks are
     /// literal text.
     pub fn parse_backticks(&mut self, tree: &mut Tree, block: NodeId) -> bool {
-        let Some(scan) = scan_code_span(&self.subject, self.pos) else {
+        let Some(scan) = scan_code_span_memo(&self.subject, self.pos, &mut self.backticks) else {
             return false;
         };
         match scan {
@@ -939,6 +1021,21 @@ impl InlineParser {
                 opener = od.previous;
             }
 
+            // The nesting limit: a pair whose content already holds
+            // `MAX_INLINE_NESTING` nested containers stays literal, which
+            // is the closer finding no opener.
+            let mut height = 0;
+            if let Some(o) = opener.filter(|_| opener_found) {
+                height = self.run_height(
+                    tree,
+                    tree.get(self.delims[o].node).next,
+                    Some(self.delims[c].node),
+                );
+                if height >= MAX_INLINE_NESTING {
+                    opener_found = false;
+                }
+            }
+
             let old_closer = c;
 
             match opener {
@@ -983,6 +1080,7 @@ impl InlineParser {
                         tmp = nxt;
                     }
                     tree.insert_after(opener_inl, emph);
+                    self.nesting.insert(emph, height + 1);
 
                     // Delimiters between the pair can never match anything
                     // now.
@@ -1193,6 +1291,31 @@ impl InlineParser {
         // Emphasis inside the link text resolves now, and only down to the
         // delimiter that was current when the `[` opened.
         self.process_emphasis(tree, opener.previous_delimiter);
+
+        // The nesting limit, judged once the content's own nesting is
+        // settled: a link or image whose text already holds
+        // `MAX_INLINE_NESTING` nested containers stays literal. Its
+        // children go back where they were, the `[` stays the text it
+        // still is, and the `]` becomes text, as for any other failed
+        // match; the tail after `]` is rescanned as text too.
+        let height = self.run_height(tree, tree.get(node).first_child, None);
+        if height >= MAX_INLINE_NESTING {
+            tree.unlink(node);
+            let mut child = tree.get(node).first_child;
+            while let Some(c) = child {
+                let nxt = tree.get(c).next;
+                tree.unlink(c);
+                tree.append_child(block, c);
+                child = nxt;
+            }
+            self.remove_bracket();
+            self.pos = startpos;
+            let text = text_node(tree, "]");
+            tree.append_child(block, text);
+            return true;
+        }
+        self.nesting.insert(node, height + 1);
+
         self.remove_bracket();
         tree.unlink(opener.node);
 
@@ -1332,6 +1455,8 @@ impl InlineParser {
         self.delims.clear();
         self.delim_top = None;
         self.brackets.clear();
+        self.nesting.clear();
+        self.backticks = BacktickMemo::default();
         !self.subject.is_empty()
     }
 
@@ -1349,14 +1474,20 @@ impl InlineParser {
         self.finish_block(tree, block);
     }
 
-    /// Section 4.7: consume leading link reference definitions, adding
-    /// each to `refmap`. Called by the block phase while finalizing a
-    /// paragraph, repeatedly, until it returns 0. Returns the number of
-    /// BYTES consumed.
+    /// Section 4.7: consume one link reference definition at the start
+    /// of `s`, adding it to `refmap`. Returns the number of BYTES consumed.
+    /// The block phase goes through [`parse_references`], which takes
+    /// every leading definition of a paragraph over one copy of it.
     pub fn parse_reference(&mut self, s: &str, refmap: &mut RefMap) -> usize {
         self.subject = s.to_string();
         self.pos = 0;
+        self.parse_reference_here(refmap)
+    }
 
+    /// [`parse_reference`] at the current position of the current
+    /// subject: on success the position is past the definition, on
+    /// failure it is back where it was and the result is 0.
+    fn parse_reference_here(&mut self, refmap: &mut RefMap) -> usize {
         let startpos = self.pos;
 
         // Section 4.7 allows up to three spaces of indentation before the
@@ -1979,4 +2110,23 @@ pub fn parse_inlines(tree: &mut Tree, refmap: RefMap, options: Options) {
 pub fn parse_reference(s: &str, refmap: &mut RefMap) -> usize {
     let mut parser = InlineParser::new(RefMap::new(), Options::COMMONMARK);
     parser.parse_reference(s, refmap)
+}
+
+/// Section 4.7 over a whole paragraph: every link reference definition
+/// at the start of `s`, in order, each added to `refmap`. Returns the
+/// number of BYTES they take up together.
+///
+/// One parser over one copy of `s`, advancing through it. Copying the
+/// remaining tail once per definition, as the per-definition entry
+/// point does, made a paragraph of n short definitions cost O(n^2).
+pub fn parse_references(s: &str, refmap: &mut RefMap) -> usize {
+    let mut parser = InlineParser::new(RefMap::new(), Options::COMMONMARK);
+    parser.subject = s.to_string();
+    parser.pos = 0;
+    while parser.pos < s.len() && s.as_bytes()[parser.pos] == b'[' {
+        if parser.parse_reference_here(refmap) == 0 {
+            break;
+        }
+    }
+    parser.pos
 }

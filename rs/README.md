@@ -278,6 +278,18 @@ output:
   UTF-16 units. That is the engine's recorded divergence, inherited
   here; it is visible only on the token stream, never in the AST or the
   native tree, whose `sourcepos` matches the TypeScript goldens.
+- **Nesting is capped.** A document may nest
+  `MAX_CONTAINER_NESTING` (100) block quotes, lists and list items, and
+  `MAX_INLINE_NESTING` (50) emphasis, link and image wrappers. Deeper
+  markers stay literal text. The canonical TypeScript has no such cap,
+  so a document nested past either bound parses to a different tree
+  here; `DIVERGENCE.md` records it and `tests/robust_test.rs` pins the
+  boundary. The reason is the AST type rather than this crate: every
+  phase here is iterative, but the AST is a `tabnas::Value`, whose
+  `to_json()` and whose drop both recurse once per level, and an
+  unbounded document aborted the process in the caller's own stack
+  frame. The canonical runtime reaches the same wall as a `RangeError`
+  from `JSON.stringify`, which the caller can catch.
 
 ## Build and test
 
@@ -300,7 +312,7 @@ twice (engine-free and through the plugin), the differential gate
 between those two paths, and the in-language tests: the plugin surface,
 the pure recognisers, the entity table, adversarial input, token
 columns, the inline driver's contract, scaling, and the version sites.
-This README's Rust examples run as doctests.
+The Rust examples on this page run as doctests.
 
 ## License
 

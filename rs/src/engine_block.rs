@@ -21,9 +21,14 @@
 //! carries its slot index. The slot is claimed by the `parse.prepare`
 //! hook and released by the `markdown` rule's finish action, which is the
 //! last thing a parse runs. A parse the engine aborts between the two
-//! (a budget error, a panic in some other plugin's callback) leaves its
-//! slot occupied until the next parse on that thread reuses it: the
-//! prepare hook takes the lowest free slot, so nothing accumulates.
+//! (a budget error, a panic in some other plugin's callback) never runs
+//! the finish action, so its slot is reclaimed by liveness instead: the
+//! index travels inside a one-element array whose `Arc` the slot also
+//! holds, the engine drops the context, and with it the array, when the
+//! parse ends however it ends, and the next prepare on the thread frees
+//! every slot whose `Arc` it is the last holder of. The slab therefore
+//! never holds more than the parses live on the thread plus the aborted
+//! ones since the last prepare, whatever a long-lived worker is fed.
 //!
 //! Thread-local rather than keyed by parse: a [`tabnas::Tabnas`] instance
 //! is `Send + Sync` and parses through `&self`, so one installed plugin
@@ -36,6 +41,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 use tabnas::{Context, Lexer, Rule, Tin, Token, Value};
@@ -132,10 +138,17 @@ pub(crate) fn value_get<'v>(value: &'v Value, key: &str) -> Option<&'v Value> {
     }
 }
 
-/// The slot index a prepare hook stored under `ctx.u[key]`.
+/// The slot index a prepare hook stored under `ctx.u[key]`: a bare
+/// number (the inline driver's form), or a number alone in an array (the
+/// block driver's form, where the array's `Arc` doubles as the lease
+/// described at the top of this module).
 pub(crate) fn slot_of(ctx: &Context, key: &str) -> Option<usize> {
-    match ctx.u.get(key) {
-        Some(Value::Number(n)) if *n >= 0.0 => Some(*n as usize),
+    let mut value = ctx.u.get(key)?;
+    if let Value::Array(items) = value {
+        value = items.first()?;
+    }
+    match value {
+        Value::Number(n) if *n >= 0.0 => Some(*n as usize),
         _ => None,
     }
 }
@@ -147,6 +160,16 @@ pub(crate) fn slot_of(ctx: &Context, key: &str) -> Option<usize> {
 struct BlockState {
     bp: BlockParser,
     keep_tree: bool,
+    /// The array `ctx.u["md"]` holds, shared with the context. While the
+    /// context lives the count is at least two; once the engine has
+    /// dropped it, this is the last holder and the slot is stale.
+    lease: Arc<Vec<Value>>,
+}
+
+impl BlockState {
+    fn stale(&self) -> bool {
+        Arc::strong_count(&self.lease) == 1
+    }
 }
 
 thread_local! {
@@ -157,20 +180,36 @@ thread_local! {
     static KEPT_TREE: RefCell<Option<Tree>> = const { RefCell::new(None) };
 }
 
-fn block_slot_insert(state: BlockState) -> usize {
+/// Claim a slot for a new parse and return the value `ctx.u["md"]` must
+/// carry. Slots whose parse has ended without the finish action (see the
+/// module docs) are freed first, so the slab never grows past the parses
+/// that are actually live on this thread.
+fn block_slot_insert(bp: BlockParser, keep_tree: bool) -> (usize, Value) {
     BLOCK_STATES.with(|cell| {
         let mut slab = cell.borrow_mut();
-        match slab.iter().position(Option::is_none) {
-            Some(i) => {
-                slab[i] = Some(state);
-                i
-            }
-            None => {
-                slab.push(Some(state));
-                slab.len() - 1
+        for entry in slab.iter_mut() {
+            if entry.as_ref().is_some_and(BlockState::stale) {
+                *entry = None;
             }
         }
+        let slot = slab.iter().position(Option::is_none).unwrap_or_else(|| {
+            slab.push(None);
+            slab.len() - 1
+        });
+        let lease = Arc::new(vec![Value::Number(slot as f64)]);
+        slab[slot] = Some(BlockState {
+            bp,
+            keep_tree,
+            lease: Arc::clone(&lease),
+        });
+        (slot, Value::Array(lease))
     })
+}
+
+/// How many slots hold a block state right now, stale ones included.
+#[cfg(test)]
+fn block_slots_held() -> usize {
+    BLOCK_STATES.with(|cell| cell.borrow().iter().filter(|s| s.is_some()).count())
 }
 
 fn block_slot_take(slot: usize) -> Option<BlockState> {
@@ -247,12 +286,8 @@ pub fn make_md_prepare(opts: Options) -> impl Fn(&mut Context) + Send + Sync + '
         if ctx.source.is_empty() {
             return;
         }
-        let slot = block_slot_insert(BlockState {
-            bp: BlockParser::new(opts),
-            keep_tree: keep_tree_requested(&ctx.meta),
-        });
-        ctx.u
-            .insert(MD_STATE_KEY.to_string(), Value::Number(slot as f64));
+        let (_, lease) = block_slot_insert(BlockParser::new(opts), keep_tree_requested(&ctx.meta));
+        ctx.u.insert(MD_STATE_KEY.to_string(), lease);
     }
 }
 
@@ -339,23 +374,59 @@ mod tests {
 
     #[test]
     fn slots_are_reused() {
-        let a = block_slot_insert(BlockState {
-            bp: BlockParser::new(Options::default()),
-            keep_tree: false,
-        });
-        let b = block_slot_insert(BlockState {
-            bp: BlockParser::new(Options::default()),
-            keep_tree: false,
-        });
+        // The leases stand in for the contexts that would hold them.
+        let (a, lease_a) = block_slot_insert(BlockParser::new(Options::default()), false);
+        let (b, lease_b) = block_slot_insert(BlockParser::new(Options::default()), false);
         assert_ne!(a, b);
         assert!(block_slot_take(a).is_some());
         assert!(block_slot_take(a).is_none());
-        let c = block_slot_insert(BlockState {
-            bp: BlockParser::new(Options::default()),
-            keep_tree: true,
-        });
+        let (c, lease_c) = block_slot_insert(BlockParser::new(Options::default()), true);
         assert_eq!(a, c);
         assert!(block_slot_take(b).is_some());
         assert!(block_slot_take(c).is_some_and(|s| s.keep_tree));
+        drop((lease_a, lease_b, lease_c));
+    }
+
+    /// A slot whose context is gone is freed by the next insert; one
+    /// whose context still lives is not.
+    #[test]
+    fn stale_slots_are_reclaimed_by_the_next_insert() {
+        let (a, lease_a) = block_slot_insert(BlockParser::new(Options::default()), false);
+        let (b, lease_b) = block_slot_insert(BlockParser::new(Options::default()), false);
+        drop(lease_a); // the engine dropped that parse's context
+        let (c, lease_c) = block_slot_insert(BlockParser::new(Options::default()), false);
+        assert_eq!(c, a, "the stale slot is the one reused");
+        assert_ne!(c, b, "the live slot is left alone");
+        assert!(block_slot_take(b).is_some());
+        assert!(block_slot_take(c).is_some());
+        drop((lease_b, lease_c));
+    }
+
+    /// Finding 2 of the review: an engine parse that aborts before the
+    /// finish action leaves its slot behind, and a worker fed such input
+    /// repeatedly must not accumulate them. A parse budget that cancels
+    /// after a few iterations is the aborted parse; the slab is read
+    /// after each one.
+    #[test]
+    fn aborted_parses_do_not_accumulate_slots() {
+        let mut tn = crate::make();
+        tn.parse_budget(1, |ctx| ctx.iteration < 4);
+        let src = "a\nb\nc\nd\ne\nf\ng\nh\n";
+        let mut held = 0;
+        for _ in 0..200 {
+            let error = tn.parse(src).expect_err("the budget cancels the parse");
+            assert_eq!(error.code, "cancel");
+            held = held.max(block_slots_held());
+        }
+        // At most the parse that just aborted, whose context is gone but
+        // which no prepare has run since.
+        assert!(held <= 1, "{held} slots held across 200 aborted parses");
+
+        // A parse that runs to completion on this thread frees it too.
+        let doc = crate::make()
+            .parse("ok")
+            .expect("a parse under no budget completes");
+        assert!(!doc.is_undefined());
+        assert_eq!(block_slots_held(), 0);
     }
 }
