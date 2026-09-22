@@ -131,6 +131,13 @@ fn strip_comments(src: &str) -> String {
             continue;
         }
         if starts(i, '/', '*') {
+            // A SPACE in its place. Rust treats a comment as a token
+            // separator, so `use tabnas/**/as/**/engine;` compiles --
+            // and deleting the comment outright produced
+            // `use tabnasasengine;`, which no scan below can see. A line
+            // comment needs no separator: its terminating newline is
+            // left in the stream and pushed as an ordinary character.
+            out.push(' ');
             depth += 1;
             i += 2;
             continue;
@@ -372,6 +379,11 @@ fn reexported_engine_names() -> BTreeSet<String> {
 /// * `use tabnas as engine;` -- every later `engine::Context` is invisible.
 /// * `use crate::Tabnas;` -- `lib.rs` re-exports engine types, so the
 ///   crate root is a second door into the same items.
+/// * `crate::engine_inline::make_inline_tn(..)` -- the DRIVER MODULES are
+///   allowed to name engine items, so calling into one reaches engine
+///   behaviour without naming an engine item at all. Their whole purpose
+///   is to be the boundary, which is exactly why crossing it from the
+///   other side has to be a finding.
 ///
 /// Both are REJECTED rather than resolved. Following an alias means
 /// tracking the local name through the file, and following a re-export
@@ -403,8 +415,18 @@ fn indirect_engine_refs(code: &str, reexports: &BTreeSet<String>) -> BTreeSet<St
     }
 
     // `crate::Name` / `super::Name`, for a name lib.rs re-exports from the
-    // engine. A brace list is expanded, so `use crate::{Tabnas, Tree}`
-    // reports only the engine half.
+    // engine, OR for one of the engine-facing driver modules. A brace
+    // list is expanded, so `use crate::{Tabnas, Tree}` reports only the
+    // engine half.
+    //
+    // The driver modules are named without their `.rs`, since that is how
+    // a path spells them: `crate::engine_inline::make_inline_tn(..)`.
+    let drivers: BTreeSet<String> = ENGINE_FILES
+        .iter()
+        .filter(|f| **f != "lib.rs")
+        .map(|f| f.trim_end_matches(".rs").to_string())
+        .collect();
+    let reachable = |name: &str| -> bool { reexports.contains(name) || drivers.contains(name) };
     for root in ["crate::", "super::"] {
         let mut rest = code;
         while let Some(at) = rest.find(root) {
@@ -414,7 +436,7 @@ fn indirect_engine_refs(code: &str, reexports: &BTreeSet<String>) -> BTreeSet<St
                 let end = inner.find('}').unwrap_or(inner.len());
                 for part in inner[..end].split(',') {
                     let name = part.split_whitespace().next().unwrap_or("");
-                    if reexports.contains(name) {
+                    if reachable(name) {
                         refs.insert(format!("{root}{name}"));
                     }
                 }
@@ -423,7 +445,7 @@ fn indirect_engine_refs(code: &str, reexports: &BTreeSet<String>) -> BTreeSet<St
                 let end = tail
                     .find(|c: char| !c.is_alphanumeric() && c != '_')
                     .unwrap_or(tail.len());
-                if end > 0 && reexports.contains(&tail[..end]) {
+                if end > 0 && reachable(&tail[..end]) {
                     refs.insert(format!("{root}{}", &tail[..end]));
                 }
                 consumed = end;
@@ -449,7 +471,12 @@ fn only_the_drivers_use_the_engine() {
         // An alias or a crate-relative re-export is an engine reference
         // too, and neither writes `tabnas::`. lib.rs is where both are
         // declared, so it is exempt from this half as it is from the rest.
-        if name != "lib.rs" {
+        // lib.rs declares the re-exports and the drivers are the engine
+        // boundary, so neither is measured against the indirect rule:
+        // engine_block.rs calling engine_inline.rs is the layering
+        // working, not a breach of it. Both are already exempt from the
+        // direct scan below for the same reason.
+        if !ENGINE_FILES.contains(&name.as_str()) {
             items.extend(indirect_engine_refs(&code, &reexports));
         }
 
@@ -608,6 +635,31 @@ fn an_alias_or_a_crate_reexport_counts_as_an_engine_reference() {
         innocent.is_empty(),
         "a non-engine import was flagged: {innocent:?}"
     );
+
+    // Reaching a DRIVER module is reaching the engine. Those modules are
+    // allowed to name engine items, so calling into one from an
+    // engine-free module gets engine behaviour without naming an engine
+    // item at all -- their whole purpose is to be the boundary.
+    for call in [
+        "crate::engine_inline::make_inline_tn(opts)",
+        "use crate::engine_block::something;",
+        "super::engine_inline::other()",
+        "use crate::{node, engine_inline};",
+    ] {
+        let refs = indirect_engine_refs(call, &reexports);
+        assert!(
+            !refs.is_empty(),
+            "{call:?} reached a driver module unnoticed: {refs:?}"
+        );
+    }
+
+    // lib.rs is NOT in that set: it is the crate root, and reaching a
+    // re-export through it is already covered by name above.
+    let root_only = indirect_engine_refs("use crate::lib::nothing;", &reexports);
+    assert!(
+        root_only.is_empty(),
+        "crate::lib was flagged: {root_only:?}"
+    );
 }
 
 /// Rust allows whitespace around `::` and around the `as` of a rename,
@@ -645,6 +697,27 @@ fn whitespace_in_a_path_is_not_a_way_past_the_gate() {
     assert!(
         refs.contains("crate::Tabnas"),
         "{spaced:?} hid a crate-relative re-export: {refs:?}"
+    );
+
+    // A BLOCK COMMENT is a token separator too. Deleting one outright
+    // welded the tokens either side together, so `use tabnas/**/as/**/
+    // engine;` -- which compiles -- became `use tabnasasengine;` and no
+    // scan could see it.
+    for commented in [
+        "use tabnas/**/as/**/engine;",
+        "use tabnas/* why */as/* not */engine;",
+    ] {
+        let refs = indirect_engine_refs(&normalise_paths(&strip_comments(commented)), &reexports);
+        assert!(
+            refs.contains("tabnas as engine"),
+            "{commented:?} hid an alias: {refs:?}"
+        );
+    }
+    let commented = "use tabnas/**/::/**/Context;";
+    let items = engine_items(&normalise_paths(&strip_comments(commented)));
+    assert!(
+        items.contains("Context"),
+        "{commented:?} hid an engine import: {items:?}"
     );
 
     // Normalising must not invent a path where none was written: an
