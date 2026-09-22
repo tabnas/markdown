@@ -226,6 +226,68 @@ fn is_char_literal(c: &[char], i: usize) -> bool {
     }
 }
 
+/// Collapse the whitespace Rust allows around `::` and around the `as`
+/// of a rename, so the searches below can stay exact-string.
+///
+/// `use tabnas :: Context;` compiles, and so does a path broken across
+/// lines. Every scan here looks for `tabnas::`, `crate::` or `super::`,
+/// and all three missed those spellings: an engine import written that
+/// way sat in an engine-free module with this gate green.
+///
+/// Normalising is the smaller answer than tokenising, because the thing
+/// being read is a path prefix rather than a program. It runs on code
+/// with the comments and literals already gone, so it cannot reach into
+/// either.
+fn normalise_paths(code: &str) -> String {
+    let mut out = String::with_capacity(code.len());
+    let c: Vec<char> = code.chars().collect();
+    let mut i = 0usize;
+    while i < c.len() {
+        // `  ::  `  ->  `::`
+        if c[i].is_whitespace() {
+            let mut j = i;
+            while j < c.len() && c[j].is_whitespace() {
+                j += 1;
+            }
+            if c.get(j) == Some(&':') && c.get(j + 1) == Some(&':') {
+                out.push_str("::");
+                i = j + 2;
+                while i < c.len() && c[i].is_whitespace() {
+                    i += 1;
+                }
+                continue;
+            }
+            // `  as  ` -> ` as ` (any run of whitespace, newlines included)
+            if c.get(j) == Some(&'a')
+                && c.get(j + 1) == Some(&'s')
+                && c.get(j + 2).is_some_and(|ch| ch.is_whitespace())
+            {
+                out.push_str(" as ");
+                i = j + 3;
+                while i < c.len() && c[i].is_whitespace() {
+                    i += 1;
+                }
+                continue;
+            }
+            out.push(' ');
+            i = j;
+            continue;
+        }
+        // `::  ` -> `::`
+        if c[i] == ':' && c.get(i + 1) == Some(&':') {
+            out.push_str("::");
+            i += 2;
+            while i < c.len() && c[i].is_whitespace() {
+                i += 1;
+            }
+            continue;
+        }
+        out.push(c[i]);
+        i += 1;
+    }
+    out
+}
+
 /// The engine items a file's CODE names: every `tabnas::Ident`, with a
 /// `use tabnas::{A, B}` brace list expanded to its members.
 fn engine_items(code: &str) -> BTreeSet<String> {
@@ -264,7 +326,9 @@ fn engine_items(code: &str) -> BTreeSet<String> {
 /// `MarkdownError` (from `pub use tabnas::TabnasError as MarkdownError`).
 fn reexported_engine_names() -> BTreeSet<String> {
     let lib = src_dir().join("lib.rs");
-    let code = strip_comments(&fs::read_to_string(&lib).expect("src/lib.rs is readable"));
+    let code = normalise_paths(&strip_comments(
+        &fs::read_to_string(&lib).expect("src/lib.rs is readable"),
+    ));
     let mut names = BTreeSet::new();
     for stmt in code.split(';') {
         let Some(at) = stmt.find("pub use tabnas::") else {
@@ -323,7 +387,10 @@ fn indirect_engine_refs(code: &str, reexports: &BTreeSet<String>) -> BTreeSet<St
             continue;
         };
         let tail = stmt[at + "tabnas".len()..].trim_start();
-        if let Some(rest) = tail.strip_prefix("as ") {
+        if let Some(rest) = tail
+            .strip_prefix("as ")
+            .or_else(|| tail.strip_prefix("as\t"))
+        {
             let alias: String = rest
                 .trim_start()
                 .chars()
@@ -375,7 +442,9 @@ fn only_the_drivers_use_the_engine() {
     let reexports = reexported_engine_names();
     let mut violations = Vec::new();
     for (name, path) in src_files() {
-        let code = strip_comments(&fs::read_to_string(&path).expect("a readable source file"));
+        let code = normalise_paths(&strip_comments(
+            &fs::read_to_string(&path).expect("a readable source file"),
+        ));
         let mut items = engine_items(&code);
         // An alias or a crate-relative re-export is an engine reference
         // too, and neither writes `tabnas::`. lib.rs is where both are
@@ -421,7 +490,9 @@ fn the_declared_engine_files_really_use_the_engine() {
             .iter()
             .find(|(name, _)| name == want)
             .unwrap_or_else(|| panic!("src/{want} is declared engine-facing but is not on disk"));
-        let code = strip_comments(&fs::read_to_string(path).expect("a readable source file"));
+        let code = normalise_paths(&strip_comments(
+            &fs::read_to_string(path).expect("a readable source file"),
+        ));
         let items = engine_items(&code);
         assert!(
             !items.is_empty(),
@@ -433,7 +504,9 @@ fn the_declared_engine_files_really_use_the_engine() {
             .iter()
             .find(|(name, _)| name == want)
             .unwrap_or_else(|| panic!("src/{want} is declared value-only but is not on disk"));
-        let code = strip_comments(&fs::read_to_string(path).expect("a readable source file"));
+        let code = normalise_paths(&strip_comments(
+            &fs::read_to_string(path).expect("a readable source file"),
+        ));
         assert!(
             engine_items(&code).contains(VALUE_ITEM),
             "src/{want} is declared value-only but does not name tabnas::{VALUE_ITEM}; drop it from VALUE_ONLY_FILES"
@@ -534,5 +607,52 @@ fn an_alias_or_a_crate_reexport_counts_as_an_engine_reference() {
     assert!(
         innocent.is_empty(),
         "a non-engine import was flagged: {innocent:?}"
+    );
+}
+
+/// Rust allows whitespace around `::` and around the `as` of a rename,
+/// and every scan in this file is an exact-string search for a path
+/// prefix. `use tabnas :: Context;` compiles and named no engine item;
+/// `use tabnas  as  engine;` was not read as an alias either. Both sat in
+/// an engine-free module with this gate green.
+#[test]
+fn whitespace_in_a_path_is_not_a_way_past_the_gate() {
+    let reexports = reexported_engine_names();
+
+    for spaced in [
+        "use tabnas :: Context;",
+        "use tabnas::  Context;",
+        "use  tabnas  ::  Context ;",
+        "use tabnas\n    ::Context;",
+    ] {
+        let items = engine_items(&normalise_paths(&strip_comments(spaced)));
+        assert!(
+            items.contains("Context"),
+            "{spaced:?} hid an engine import: {items:?}"
+        );
+    }
+
+    for spaced in ["use tabnas  as  engine;", "use tabnas\n    as engine;"] {
+        let refs = indirect_engine_refs(&normalise_paths(&strip_comments(spaced)), &reexports);
+        assert!(
+            refs.contains("tabnas as engine"),
+            "{spaced:?} hid an alias: {refs:?}"
+        );
+    }
+
+    let spaced = "use crate :: Tabnas;";
+    let refs = indirect_engine_refs(&normalise_paths(&strip_comments(spaced)), &reexports);
+    assert!(
+        refs.contains("crate::Tabnas"),
+        "{spaced:?} hid a crate-relative re-export: {refs:?}"
+    );
+
+    // Normalising must not invent a path where none was written: an
+    // ordinary identifier containing the crate name is left alone.
+    let innocent = normalise_paths("let has_tabnas = 1; fn tabnas_name() {}");
+    assert_eq!(innocent, "let has_tabnas = 1; fn tabnas_name() {}");
+    assert!(
+        engine_items(&innocent).is_empty(),
+        "invented an engine item"
     );
 }
