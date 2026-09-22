@@ -176,7 +176,7 @@ There are three implementations that must behave identically: TypeScript
 | [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/markdown` package. Depends on `@tabnas/parser` only, and only in `src/markdown.ts`. |
 | [`go/`](go/) | Go port — `github.com/tabnas/markdown/go`, package `tabnasmarkdown`. |
 | [`rs/`](rs/) | Rust port: the `tabnas-markdown` crate (library `tabnas_markdown`). Same file split as `go/` under `rs/src/`, plugin wiring in `src/lib.rs`, both HTML-corpus graders under `rs/tests/`. Depends on the `tabnas` crate via a `path` dependency (sibling checkout) and, dev-only, on `tabnas-support` for the fixture runner. Library only: no CLI. See [`rs/AGENTS.md`](rs/AGENTS.md). |
-| [`ci/`](ci/) | Workflows and scripts **staged** for promotion into `.github/workflows/` by someone whose credentials can write there: `ci/workflows/rust.yml` (the Rust gate), `ci/workflows/docs.yml` (the prose gate), `ci/rust/run.sh` (what the Rust gate runs). See [`ci/README.md`](ci/README.md). |
+| [`ci/`](ci/) | `ci/rust/run.sh`, the whole Rust gate, run by CI and runnable locally; plus `ci/workflows/`, the staging area for workflow changes, because session credentials cannot write `.github/workflows/*` (admin `DECISIONS.md` ADR-8). Nothing is staged today: the Rust and prose gates were promoted to `.github/workflows/{rust,docs}.yml`, and git tracks no empty directory, so `ci/workflows/` is absent until something is next staged there. See [`ci/README.md`](ci/README.md). |
 | [`test/spec/`](test/spec/) | 83 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) across 10 `*.tsv` files, auto-discovered and run by all three runtimes. The TS/Go/Rust parity contract. See `test/AGENTS.md`. |
 | [`test/spec/tree/`](test/spec/tree/) | Golden native-tree snapshots (`sourcepos` included), one per fixture file, generated from the canonical TypeScript and asserted by `ts/test/tree-golden.test.ts`, `go/tree_golden_test.go` and `rs/tests/tree_golden_test.rs`. |
 | [`test/commonmark/spec.json`](test/commonmark/) | Vendored CommonMark 0.31.2 suite, 652 examples of Markdown → expected **HTML**. The conformance contract for all three runtimes. See `test/AGENTS.md`. |
@@ -387,9 +387,12 @@ TS, Go and Rust sides (`make test-rs` is tests, doctests and clippy;
 `make version-rs V=x.y.z` bumps both Rust version sites and the lock);
 `make publish-go V=x.y.z` tags `go/vX.Y.Z`. CI is the org-standard
 `polyglot-ci` caller in `.github/workflows/ci.yml`; the Rust gate is
-staged as `ci/workflows/rust.yml` running `ci/rust/run.sh`, which is
-also the local full gate (fmt, build, tests, doctests, clippy, lockfile
-check).
+`.github/workflows/rust.yml`, which runs `ci/rust/run.sh`, and that
+script is also the local full gate (fmt, build, tests, doctests, clippy,
+lockfile check). The prose gate is `.github/workflows/docs.yml`, which
+runs Vale and `ts/scripts/vale-counts.cjs`. Both were promoted out of
+`ci/workflows/`, so that directory is not in the tree until something is
+staged there again.
 
 ## Verify your work
 

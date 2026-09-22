@@ -210,9 +210,9 @@ link from it to any `AGENTS.md`.
 
 It is listed in `ts/scripts/gated-docs.cjs`, so both halves of the gate
 already cover it: `ts/test/docs.test.js` runs inside `npm test` from
-`ts/`, and Vale runs over the same list in the staged
-`ci/workflows/docs.yml`. An earlier revision of this file said the page
-was not yet listed and asked for a hand check against `reject.txt`
+`ts/`, and Vale runs over the same list in
+`.github/workflows/docs.yml`. An earlier revision of this file said the
+page was not yet listed and asked for a hand check against `reject.txt`
 instead. Editing `README.md` and running only the Rust gate will not
 report a prose failure, because no Rust target reads the page as prose;
 run the TypeScript suite for that.
