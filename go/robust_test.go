@@ -303,9 +303,16 @@ func TestNestingIsUncapped(t *testing.T) {
 		return deepest(Parse(src, Options{}), want)
 	}
 
+	// One predicate per node type, never a union of two. A predicate that
+	// accepts either of a pair lets one stand in for the other, so a
+	// regression yielding 100 lists and no items, or 50 emph where the table
+	// records 50 strong, would keep these assertions green while the cell they
+	// claim to pin had changed. Each cell is asserted on its own.
 	isQuote := func(x NodeType) bool { return "block_quote" == x }
-	isList := func(x NodeType) bool { return "list" == x || "item" == x }
-	isWrapper := func(x NodeType) bool { return "emph" == x || "strong" == x }
+	isList := func(x NodeType) bool { return "list" == x }
+	isItem := func(x NodeType) bool { return "item" == x }
+	isEmph := func(x NodeType) bool { return "emph" == x }
+	isStrong := func(x NodeType) bool { return "strong" == x }
 
 	// Rows one and two: 100 markers nest 100 block quotes everywhere, and the
 	// 101st is where Rust stops and this port does not.
@@ -316,22 +323,35 @@ func TestNestingIsUncapped(t *testing.T) {
 		}
 	}
 
-	// Rows three and four. A list marker opens two containers, a list and its
-	// item, so 50 markers are the 100 the Rust cap allows and 51 the first past
-	// it.
-	for _, c := range []struct{ markers, want int }{{50, 100}, {51, 102}} {
-		src := strings.Repeat("- ", c.markers) + "x"
-		if got := depth(src, isList); got != c.want {
-			t.Errorf("%d list markers nested %d deep, want %d", c.markers, got, c.want)
+	// Rows three and four, which the table states as "N lists and items EACH" --
+	// so each half is asserted on its own. A list marker opens two containers, a
+	// list and its item, which is why 50 markers are the 100 the Rust cap allows
+	// and 51 the first past it.
+	for _, markers := range []int{50, 51} {
+		src := strings.Repeat("- ", markers) + "x"
+		for _, k := range []struct {
+			name string
+			want func(NodeType) bool
+		}{{"list", isList}, {"item", isItem}} {
+			if got := depth(src, k.want); got != markers {
+				t.Errorf("%d list markers nested %d %ss deep, want %d",
+					markers, got, k.name, markers)
+			}
 		}
 	}
 
 	// Rows five and six. A run of stars pairs up: 2n stars a side nest n strong
 	// wrappers, so 100 stars are the 50 Rust allows and 102 the first past it.
+	// The table names strong, so strong is what is counted -- and emph is
+	// pinned at zero, because a run of paired stars that came back as emphasis
+	// would be a different cell.
 	for _, c := range []struct{ stars, want int }{{100, 50}, {102, 51}} {
 		src := strings.Repeat("*", c.stars) + "x" + strings.Repeat("*", c.stars)
-		if got := depth(src, isWrapper); got != c.want {
-			t.Errorf("%d stars a side nested %d deep, want %d", c.stars, got, c.want)
+		if got := depth(src, isStrong); got != c.want {
+			t.Errorf("%d stars a side nested %d strong deep, want %d", c.stars, got, c.want)
+		}
+		if got := depth(src, isEmph); got != 0 {
+			t.Errorf("%d stars a side nested %d emph deep, want 0", c.stars, got)
 		}
 	}
 }

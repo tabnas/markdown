@@ -56,8 +56,15 @@ passed, while the recorded output had changed.
 `ts/test/divergence.test.ts` and
 `go/robust_test.go::TestNestingIsUncapped` pin the uncapped rows in the
 other two runtimes, at the same depths and with the same deepest-run
-count. A list marker counts twice in all three, because it opens a list
-and an item.
+count. Every count is over ONE node type. The cells above distinguish
+lists from items and `strong` from `emph`, so a predicate matching
+either of a pair would let one stand in for the other -- 100 lists and
+no items, or emphasis where the table records strong -- and leave the
+assertion green over a cell that had changed. So each of the three
+suites counts `list`, `item` and `strong` separately, and pins `emph` at
+zero where paired stars are the input. A list marker still opens two
+containers in all three runtimes, which is why the bound is reached at
+half as many markers as block quotes need.
 
 Splitting the register across three suites is what the absence of a
 `test/spec/divergent.tsv` row costs here, and it is the reason given

@@ -41,9 +41,16 @@ function deepest(node: MdNode, want: (t: string) => boolean): number {
   return here + below
 }
 
+// One predicate per node type, never a union of two. A predicate that
+// accepts either of a pair lets one stand in for the other, so a
+// regression yielding 100 lists and no items, or 50 `emph` where the
+// table records 50 `strong`, would keep these assertions green while the
+// cell they claim to pin had changed. Each cell is asserted on its own.
 const isQuote = (t: string) => 'block_quote' === t
-const isList = (t: string) => 'list' === t || 'item' === t
-const isWrapper = (t: string) => 'emph' === t || 'strong' === t
+const isList = (t: string) => 'list' === t
+const isItem = (t: string) => 'item' === t
+const isEmph = (t: string) => 'emph' === t
+const isStrong = (t: string) => 'strong' === t
 
 function depth(src: string, want: (t: string) => boolean): number {
   return deepest(parseTree(src, {}), want)
@@ -59,21 +66,29 @@ describe('divergence — nesting is uncapped here', () => {
     assert.equal(depth('> '.repeat(150) + 'x', isQuote), 150)
   })
 
-  // Rows three and four. A list marker opens two containers, a list and
-  // its item, so 50 markers are the 100 the Rust cap allows and 51 are
-  // the first past it.
+  // Rows three and four, which the table states as "N lists and items
+  // EACH" -- so each half is asserted on its own. A list marker opens two
+  // containers, a list and its item, which is why 50 markers are the 100
+  // the Rust cap allows and 51 are the first past it.
   test('list markers nest as deep as the markers go', () => {
-    assert.equal(depth('- '.repeat(50) + 'x', isList), 100)
-    assert.equal(depth('- '.repeat(51) + 'x', isList), 102)
+    for (const markers of [50, 51]) {
+      const src = '- '.repeat(markers) + 'x'
+      assert.equal(depth(src, isList), markers)
+      assert.equal(depth(src, isItem), markers)
+    }
   })
 
   // Rows five and six. A run of stars pairs up: 2n stars a side nest n
   // `strong` wrappers, so 100 stars are the 50 Rust allows and 102 are
-  // the first past it.
+  // the first past it. The table names `strong`, so `strong` is what is
+  // counted -- and `emph` is pinned at zero, because a run of paired
+  // stars that came back as emphasis would be a different cell.
   test('emphasis nests as deep as the delimiters go', () => {
     const stars = (n: number) => '*'.repeat(n) + 'x' + '*'.repeat(n)
-    assert.equal(depth(stars(100), isWrapper), 50)
-    assert.equal(depth(stars(102), isWrapper), 51)
+    for (const [side, want] of [[100, 50], [102, 51]] as const) {
+      assert.equal(depth(stars(side), isStrong), want)
+      assert.equal(depth(stars(side), isEmph), 0)
+    }
   })
 
   // The text a marker past a cap would have carried is never dropped in

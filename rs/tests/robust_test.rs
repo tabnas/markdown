@@ -403,34 +403,45 @@ fn nesting_is_capped_at_the_constants() {
     );
 
     // A list marker is two containers, the list and its item, so the
-    // bound is reached at half as many markers.
+    // bound is reached at half as many markers. Each container type is
+    // counted on its own, never as a union: the table's cell reads "50
+    // lists and items EACH", and a regression yielding 100 lists and no
+    // items would satisfy a combined count of 100 while changing exactly
+    // what the cell records.
     let items = |n: usize| format!("{}x", "- ".repeat(n));
-    let is_list = |t: NodeType| matches!(t, NodeType::List | NodeType::Item);
-    assert_eq!(
-        depth(items(MAX_CONTAINER_NESTING / 2), is_list),
-        MAX_CONTAINER_NESTING
-    );
-    assert_eq!(
-        depth(items(MAX_CONTAINER_NESTING), is_list),
-        MAX_CONTAINER_NESTING
-    );
+    let is_list = |t: NodeType| NodeType::List == t;
+    let is_item = |t: NodeType| NodeType::Item == t;
+    let half = MAX_CONTAINER_NESTING / 2;
+    for markers in [half, MAX_CONTAINER_NESTING] {
+        let src = items(markers);
+        assert_eq!(
+            depth(src.clone(), is_list),
+            half,
+            "{markers} markers, lists"
+        );
+        assert_eq!(depth(src, is_item), half, "{markers} markers, items");
+    }
 
     // A run of stars pairs up: `**` a side is one `strong`, so 2n stars
-    // a side nest n wrappers.
+    // a side nest n wrappers. The table names `strong`, so `strong` is
+    // what is counted -- and `emph` is pinned at zero beside it, because
+    // paired stars coming back as emphasis would be a different cell
+    // than the one recorded, and a union of the two would not notice.
     let stars = |n: usize| format!("{}x{}", "*".repeat(n), "*".repeat(n));
-    let is_wrapper = |t: NodeType| matches!(t, NodeType::Emph | NodeType::Strong);
-    assert_eq!(
-        depth(stars(2 * MAX_INLINE_NESTING), is_wrapper),
-        MAX_INLINE_NESTING
-    );
-    assert_eq!(
-        depth(stars(2 * MAX_INLINE_NESTING + 2), is_wrapper),
-        MAX_INLINE_NESTING
-    );
-    assert_eq!(
-        depth(stars(4 * MAX_INLINE_NESTING), is_wrapper),
-        MAX_INLINE_NESTING
-    );
+    let is_strong = |t: NodeType| NodeType::Strong == t;
+    let is_emph = |t: NodeType| NodeType::Emph == t;
+    for side in [
+        2 * MAX_INLINE_NESTING,
+        2 * MAX_INLINE_NESTING + 2,
+        4 * MAX_INLINE_NESTING,
+    ] {
+        assert_eq!(
+            depth(stars(side), is_strong),
+            MAX_INLINE_NESTING,
+            "{side} stars"
+        );
+        assert_eq!(depth(stars(side), is_emph), 0, "{side} stars");
+    }
 
     // Nothing the reader wrote disappears: the markers past the bound
     // stay in the output AS TEXT, which is the half of the DIVERGENCE.md
