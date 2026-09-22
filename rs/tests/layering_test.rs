@@ -303,7 +303,7 @@ fn engine_items(code: &str) -> BTreeSet<String> {
     while let Some(at) = rest.find("tabnas::") {
         let tail = &rest[at + "tabnas::".len()..];
         if let Some(inner) = tail.strip_prefix('{') {
-            let end = inner.find('}').unwrap_or(inner.len());
+            let end = group_end(inner);
             for part in inner[..end].split(',') {
                 // `X as Y` records X: the engine item, not the local name.
                 let name = part.split_whitespace().next().unwrap_or("");
@@ -424,6 +424,85 @@ fn reexported_engine_names() -> BTreeSet<String> {
     names
 }
 
+/// The offset of the `}` closing the group `inner` opens, counting
+/// nested groups. `find('}')` stopped at the FIRST one, so
+/// `use crate::{engine_inline::{make_inline_tn}, node::Tree}` was read as
+/// the single member `engine_inline::{make_inline_tn` -- which is not a
+/// name any scan recognises, so a nested group imported the driver in
+/// silence.
+fn group_end(inner: &str) -> usize {
+    let mut depth = 0usize;
+    for (at, c) in inner.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' if 0 == depth => return at,
+            '}' => depth -= 1,
+            _ => {}
+        }
+    }
+    inner.len()
+}
+
+/// The members of a brace group, split at TOP-LEVEL commas only, each cut
+/// back to its LEADING path segment. `engine_inline::{a, b}` is one
+/// member and its leading segment is `engine_inline`, which is the name
+/// the classification below is about.
+fn group_members(inner: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    let push = |part: &str, out: &mut Vec<String>| {
+        let part = part.trim();
+        let head = part.split("::").next().unwrap_or("").trim();
+        let head: String = head
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !head.is_empty() {
+            out.push(head);
+        }
+    };
+    for (at, c) in inner.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ',' if 0 == depth => {
+                push(&inner[start..at], &mut out);
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    push(&inner[start..], &mut out);
+    out
+}
+
+/// A module pulled in by FILENAME, which is module inclusion the scans
+/// cannot follow: `#[path = "engine_inline.rs"] mod borrowed_engine;`
+/// puts a driver's whole body under a name in an engine-free module, and
+/// every later `borrowed_engine::…` writes none of the roots this file
+/// watches. The driver is still exempt under its own filename, so
+/// nothing reports it.
+///
+/// Rejected rather than followed, like the aliases: an engine-free module
+/// has no reason to include a file by path, and resolving one means
+/// re-implementing module resolution. Read from the RAW source, because
+/// the comment stripper drops string contents and the filename is a
+/// string.
+fn path_attribute_modules(raw: &str) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    let mut rest = raw;
+    while let Some(at) = rest.find("#[path") {
+        let tail = &rest[at + "#[path".len()..];
+        let Some(open) = tail.find('"') else { break };
+        let after = &tail[open + 1..];
+        let Some(close) = after.find('"') else { break };
+        found.insert(format!("#[path = {:?}]", &after[..close]));
+        rest = &after[close + 1..];
+    }
+    found
+}
+
 /// The ways a file reaches the engine WITHOUT writing `tabnas::`, which
 /// the literal scan above cannot see:
 ///
@@ -509,9 +588,9 @@ fn indirect_engine_refs(code: &str, reexports: &BTreeSet<String>) -> BTreeSet<St
             let tail = &rest[at + root.len()..];
             let consumed;
             if let Some(inner) = tail.strip_prefix('{') {
-                let end = inner.find('}').unwrap_or(inner.len());
-                for part in inner[..end].split(',') {
-                    let name = part.split_whitespace().next().unwrap_or("");
+                let end = group_end(inner);
+                for name in group_members(&inner[..end]) {
+                    let name = name.as_str();
                     // `use crate::{self as markdown}` aliases the ROOT from
                     // inside a group. The word scan above cannot see it --
                     // it reads `crate::{self`, not `crate` -- and
@@ -558,9 +637,8 @@ fn only_the_drivers_use_the_engine() {
     let reexports = reexported_engine_names();
     let mut violations = Vec::new();
     for (name, path) in src_files() {
-        let code = normalise_paths(&strip_comments(
-            &fs::read_to_string(&path).expect("a readable source file"),
-        ));
+        let raw = fs::read_to_string(&path).expect("a readable source file");
+        let code = normalise_paths(&strip_comments(&raw));
         let mut items = engine_items(&code);
         // An alias or a crate-relative re-export is an engine reference
         // too, and neither writes `tabnas::`. lib.rs is where both are
@@ -572,6 +650,13 @@ fn only_the_drivers_use_the_engine() {
         // direct scan below for the same reason.
         if !ENGINE_FILES.contains(&name.as_str()) {
             items.extend(indirect_engine_refs(&code, &reexports));
+            // From the RAW source: the comment stripper drops string
+            // contents, and the filename a `#[path]` attribute names is a
+            // string. A driver included this way carries its whole body
+            // into an engine-free module under a new name, and every
+            // later call through that name writes none of the roots the
+            // scans watch.
+            items.extend(path_attribute_modules(&raw));
         }
 
         if ENGINE_FILES.contains(&name.as_str()) {
@@ -830,6 +915,33 @@ fn an_alias_or_a_crate_reexport_counts_as_an_engine_reference() {
         );
     }
 
+    // A NESTED group. `find('}')` stopped at the inner brace, so the
+    // member read as `engine_inline::{make_inline_tn` -- not a name any
+    // classification recognises -- and the driver was imported in
+    // silence.
+    for nested in [
+        "use crate::{engine_inline::{make_inline_tn, parse_inlines_engine}, node::Tree};",
+        "use crate::{node::Tree, engine_block::{x}};",
+        "use super::{a::{b}, engine_inline::c};",
+    ] {
+        let refs = indirect_engine_refs(&normalise_paths(nested), &reexports);
+        assert!(
+            !refs.is_empty(),
+            "{nested:?} hid a driver inside a nested group: {refs:?}"
+        );
+    }
+
+    // And a nested group of innocent modules stays silent, so this is not
+    // a new source of false findings.
+    let innocent_nested = indirect_engine_refs(
+        &normalise_paths("use crate::{node::{Tree, Kind}, html::render};"),
+        &reexports,
+    );
+    assert!(
+        innocent_nested.is_empty(),
+        "an engine-free nested group was flagged: {innocent_nested:?}"
+    );
+
     // lib.rs is NOT in that set: it is the crate root, and reaching a
     // re-export through it is already covered by name above.
     let root_only = indirect_engine_refs("use crate::lib::nothing;", &reexports);
@@ -895,6 +1007,20 @@ fn whitespace_in_a_path_is_not_a_way_past_the_gate() {
     assert!(
         items.contains("Context"),
         "{commented:?} hid an engine import: {items:?}"
+    );
+
+    // A `#[path]` attribute, read from RAW source: the stripper drops
+    // string contents, so the filename is invisible to every other scan.
+    let pathed = path_attribute_modules(
+        "#[path = \"engine_inline.rs\"]\nmod borrowed_engine;\nfn f() { borrowed_engine::x(); }",
+    );
+    assert!(
+        pathed.contains("#[path = \"engine_inline.rs\"]"),
+        "a path-attributed module was not reported: {pathed:?}"
+    );
+    assert!(
+        path_attribute_modules("mod node;\nmod html;").is_empty(),
+        "an ordinary mod declaration was read as a path attribute"
     );
 
     // A GLOB names no item, so the identifier scan found nothing after the
