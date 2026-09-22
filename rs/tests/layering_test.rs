@@ -397,7 +397,11 @@ fn reexported_engine_names() -> BTreeSet<String> {
     markers.extend(names.iter().cloned());
 
     let mut entries = BTreeSet::new();
-    for at in (0..code.len()).filter(|i| code[*i..].starts_with("pub fn ")) {
+    // `match_indices`, not a byte range: `0..code.len()` visits offsets
+    // INSIDE a multibyte character, and slicing there panics. A single
+    // non-ASCII identifier in lib.rs -- `pub fn caf\u{e9}()` is a legal one --
+    // would have crashed this gate before it could classify anything.
+    for (at, _) in code.match_indices("pub fn ") {
         let tail = &code[at + "pub fn ".len()..];
         let name: String = tail
             .chars()
@@ -491,14 +495,75 @@ fn group_members(inner: &str) -> Vec<String> {
 /// string.
 fn path_attribute_modules(raw: &str) -> BTreeSet<String> {
     let mut found = BTreeSet::new();
-    let mut rest = raw;
-    while let Some(at) = rest.find("#[path") {
-        let tail = &rest[at + "#[path".len()..];
-        let Some(open) = tail.find('"') else { break };
-        let after = &tail[open + 1..];
-        let Some(close) = after.find('"') else { break };
-        found.insert(format!("#[path = {:?}]", &after[..close]));
-        rest = &after[close + 1..];
+    for (start, _) in raw.match_indices("#[") {
+        found.extend(path_values(attribute_body(raw, start)));
+    }
+    found
+}
+
+/// One attribute's body: what sits between `#[` and its matching `]`,
+/// counting nesting and ignoring brackets inside string literals, so a
+/// `cfg_attr` predicate carrying either does not end the span early.
+fn attribute_body(raw: &str, start: usize) -> &str {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (at, c) in raw[start + 1..].char_indices() {
+        if in_string {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if 0 == depth {
+                    return &raw[start + 2..start + 1 + at];
+                }
+            }
+            _ => {}
+        }
+    }
+    &raw[start + 2..]
+}
+
+/// The `path = "<file>"` items of one attribute body.
+///
+/// `#[path = "engine_inline.rs"]` and
+/// `#[cfg_attr(all(), path = "engine_inline.rs")]` are the SAME include
+/// with a predicate in front of the second, and rustfmt leaves both
+/// alone, so a scan for the literal `#[path` sees only one of them.
+///
+/// An item named `path`, not the word: what precedes it is the start of
+/// the attribute or an item separator, and what follows is `= "<file>"`.
+/// That is what keeps `#[doc = "path = \"x\""]` out, where the word is
+/// inside a string and is preceded by a quote.
+fn path_values(body: &str) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    let mut rest = body;
+    while let Some(at) = rest.find("path") {
+        let before = rest[..at].chars().rev().find(|c| !c.is_whitespace());
+        let after = &rest[at + "path".len()..];
+        rest = after;
+        if !matches!(before, None | Some('(') | Some(',')) {
+            continue;
+        }
+        let Some(tail) = after.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let Some(tail) = tail.trim_start().strip_prefix('"') else {
+            continue;
+        };
+        let Some(close) = tail.find('"') else {
+            continue;
+        };
+        found.insert(format!("#[path = {:?}]", &tail[..close]));
     }
     found
 }
@@ -566,6 +631,23 @@ fn indirect_engine_refs(code: &str, reexports: &BTreeSet<String>) -> BTreeSet<St
             .collect();
         if !alias.is_empty() {
             refs.insert(format!("{} as {}", w[1], alias));
+        }
+    }
+
+    // `extern crate self as markdown;` -- the same crate-root alias by a
+    // spelling the `use` scan cannot see, and rustfmt-clean. After it,
+    // `markdown::engine_inline::make_inline_tn(..)` reaches a driver
+    // without containing any watched prefix.
+    for w in words.windows(5) {
+        if "extern" != w[0] || "crate" != w[1] || "self" != w[2] || "as" != w[3] {
+            continue;
+        }
+        let alias: String = w[4]
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !alias.is_empty() {
+            refs.insert(format!("extern crate self as {alias}"));
         }
     }
 
@@ -700,9 +782,26 @@ fn the_declared_engine_files_really_use_the_engine() {
             &fs::read_to_string(path).expect("a readable source file"),
         ));
         let items = engine_items(&code);
+        // At least one item that is NOT `Value`. This file classifies
+        // `Value` as a type rather than as engine behaviour -- that is
+        // what VALUE_ONLY_FILES is for -- so a file that has lost its
+        // engine calls while still naming `tabnas::Value` is stale here
+        // and belongs there. Asking only that `items` is non-empty let
+        // such a file keep an UNRESTRICTED ENGINE_FILES entry, so the
+        // layering gate stopped checking it and said nothing.
+        let behaviour: Vec<&String> = items
+            .iter()
+            .filter(|item| item.as_str() != VALUE_ITEM)
+            .collect();
         assert!(
-            !items.is_empty(),
-            "src/{want} is declared engine-facing but names no engine item; drop it from ENGINE_FILES"
+            !behaviour.is_empty(),
+            "src/{want} is declared engine-facing but names {}; drop it from ENGINE_FILES \
+             (a file naming only tabnas::{VALUE_ITEM} belongs in VALUE_ONLY_FILES)",
+            if items.is_empty() {
+                "no engine item".to_string()
+            } else {
+                format!("only tabnas::{VALUE_ITEM}")
+            }
         );
     }
     for want in VALUE_ONLY_FILES {
@@ -1044,5 +1143,77 @@ fn whitespace_in_a_path_is_not_a_way_past_the_gate() {
     assert!(
         engine_items(&innocent).is_empty(),
         "invented an engine item"
+    );
+}
+
+/// A `#[path]` attribute does not have to be spelled `#[path]`.
+///
+/// `#[cfg_attr(all(), path = "engine_inline.rs")]` is the same include
+/// with a predicate in front of it, rustfmt leaves it alone, and a scan
+/// for the literal `#[path` records nothing. Every later call through
+/// the local module name is then an ordinary path with no watched prefix
+/// in it, which is the shape this gate cannot recover from once the file
+/// is in.
+#[test]
+fn a_path_attribute_is_seen_through_cfg_attr() {
+    for spelling in [
+        r#"#[path = "engine_inline.rs"] mod borrowed;"#,
+        r#"#[cfg_attr(all(), path = "engine_inline.rs")] mod borrowed;"#,
+        r#"#[cfg_attr(unix, path = "engine_inline.rs")] mod borrowed;"#,
+        r#"#[cfg_attr(not(feature = "x"), path="engine_inline.rs")] mod borrowed;"#,
+        "#[cfg_attr(\n    all(),\n    path = \"engine_inline.rs\"\n)]\nmod borrowed;",
+    ] {
+        let found = path_attribute_modules(spelling);
+        assert!(
+            found.contains(r#"#[path = "engine_inline.rs"]"#),
+            "{spelling:?} hid a module pulled in by filename: {found:?}"
+        );
+    }
+
+    // And the negatives, so this does not become a source of false
+    // findings. Declaring a module is not naming a file, and the word
+    // `path` inside a string is not an attribute item.
+    for quiet in [
+        "mod node;",
+        "pub mod html;",
+        r#"#[doc = "path = \"engine_inline.rs\""] pub fn f() {}"#,
+        r#"let path = "engine_inline.rs";"#,
+        r#"#[cfg(feature = "path")] mod node;"#,
+    ] {
+        let found = path_attribute_modules(quiet);
+        assert!(found.is_empty(), "{quiet:?} was flagged: {found:?}");
+    }
+}
+
+/// The crate root can be aliased without a `use` statement at all.
+///
+/// `extern crate self as markdown;` is accepted in an edition-2018 crate
+/// and is rustfmt-clean, and after it `markdown::engine_inline::…`
+/// reaches a driver module by a name the `use … as …` token scan never
+/// sees.
+#[test]
+fn extern_crate_self_is_a_crate_root_alias() {
+    let reexports = reexported_engine_names();
+
+    for spelling in [
+        "extern crate self as markdown;",
+        "pub extern crate self as markdown;",
+        "extern  crate\n    self  as  markdown ;",
+    ] {
+        let refs = indirect_engine_refs(&normalise_paths(&strip_comments(spelling)), &reexports);
+        assert!(
+            refs.contains("extern crate self as markdown"),
+            "{spelling:?} hid a crate-root alias: {refs:?}"
+        );
+    }
+
+    // An ordinary extern crate of ANOTHER crate is not a root alias.
+    let other = indirect_engine_refs(
+        &normalise_paths(&strip_comments("extern crate serde_json as sj;")),
+        &reexports,
+    );
+    assert!(
+        !other.iter().any(|r| r.starts_with("extern crate self")),
+        "an unrelated extern crate was read as a root alias: {other:?}"
     );
 }
