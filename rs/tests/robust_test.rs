@@ -411,8 +411,12 @@ fn nesting_is_capped_at_the_constants() {
     let items = |n: usize| format!("{}x", "- ".repeat(n));
     let is_list = |t: NodeType| NodeType::List == t;
     let is_item = |t: NodeType| NodeType::Item == t;
+    // `half + 1` is the row DIVERGENCE.md actually records as the first
+    // past the bound -- 51 markers, 50 each. Measuring only `half` and
+    // twice it left that row pinned by the HTML check alone, which says
+    // `- x` appears inside some item and not that the tree stopped at 50.
     let half = MAX_CONTAINER_NESTING / 2;
-    for markers in [half, MAX_CONTAINER_NESTING] {
+    for markers in [half, half + 1, MAX_CONTAINER_NESTING] {
         let src = items(markers);
         assert_eq!(
             depth(src.clone(), is_list),

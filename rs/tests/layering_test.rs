@@ -384,6 +384,10 @@ fn reexported_engine_names() -> BTreeSet<String> {
 ///   behaviour without naming an engine item at all. Their whole purpose
 ///   is to be the boundary, which is exactly why crossing it from the
 ///   other side has to be a finding.
+/// * `use crate as markdown;` -- an alias of the CRATE ROOT. Every later
+///   `markdown::engine_inline::…` then contains none of `tabnas::`,
+///   `crate::` or `super::`, so it reopens both of the doors above at
+///   once. `self` and `super` alias the same way.
 ///
 /// Both are REJECTED rather than resolved. Following an alias means
 /// tracking the local name through the file, and following a re-export
@@ -411,6 +415,27 @@ fn indirect_engine_refs(code: &str, reexports: &BTreeSet<String>) -> BTreeSet<St
             if !alias.is_empty() {
                 refs.insert(format!("tabnas as {alias}"));
             }
+        }
+    }
+
+    // `use crate as X;` -- the crate root under another name, which is a
+    // door to lib.rs's re-exports AND to every driver module, and which
+    // no scan below can see. `self` and `super` are the same root.
+    //
+    // A token scan rather than a substring one: `use`, the root and `as`
+    // may be separated by any whitespace including a newline, and a
+    // preceding `pub` or `pub(crate)` must not hide the statement.
+    let words: Vec<&str> = code.split_whitespace().collect();
+    for w in words.windows(4) {
+        if "use" != w[0] || "as" != w[2] || !["crate", "self", "super"].contains(&w[1]) {
+            continue;
+        }
+        let alias: String = w[3]
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !alias.is_empty() {
+            refs.insert(format!("{} as {}", w[1], alias));
         }
     }
 
@@ -652,6 +677,29 @@ fn an_alias_or_a_crate_reexport_counts_as_an_engine_reference() {
             "{call:?} reached a driver module unnoticed: {refs:?}"
         );
     }
+
+    // An alias of the CRATE ROOT reopens both doors at once, and writes
+    // none of the three roots the scans look for.
+    for aliased in [
+        "use crate as markdown;",
+        "pub use crate as md;",
+        "use self as here;",
+        "use\n  super\n  as\n  up;",
+    ] {
+        let refs = indirect_engine_refs(&normalise_paths(aliased), &reexports);
+        assert!(
+            !refs.is_empty(),
+            "{aliased:?} aliased the crate root unnoticed: {refs:?}"
+        );
+    }
+
+    // But `use crate::thing as name;` is NOT a root alias -- it renames one
+    // item, and whether it is a finding is the re-export question above.
+    let item = indirect_engine_refs(&normalise_paths("use crate::node as n;"), &reexports);
+    assert!(
+        item.is_empty(),
+        "an ordinary rename was read as a root alias: {item:?}"
+    );
 
     // lib.rs is NOT in that set: it is the crate root, and reaching a
     // re-export through it is already covered by name above.
