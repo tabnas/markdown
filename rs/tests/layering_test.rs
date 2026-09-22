@@ -43,21 +43,39 @@ fn src_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
-/// Every `.rs` file directly under `src/`, by file name.
+/// Every `.rs` file under `src/`, RECURSIVELY, keyed by its path relative
+/// to `src/` with `/` separators.
+///
+/// The walk is recursive and the key is the relative path, because both
+/// classifications below name root files. A module in the standard nested
+/// layout -- `src/foo/mod.rs`, `src/foo/bar.rs` -- is as reachable as any
+/// other, and a flat `read_dir` never saw it: an engine import there left
+/// this gate green. There is no such directory today, which is exactly
+/// when to fix it, rather than when someone adds one.
 fn src_files() -> Vec<(String, PathBuf)> {
-    let mut out: Vec<(String, PathBuf)> = fs::read_dir(src_dir())
-        .expect("src/ is readable")
-        .map(|entry| entry.expect("a readable directory entry").path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
-        .map(|path| {
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, PathBuf)>) {
+        let entries = fs::read_dir(dir).expect("a readable directory under src/");
+        for entry in entries {
+            let path = entry.expect("a readable directory entry").path();
             let name = path
                 .file_name()
                 .expect("a file name")
                 .to_string_lossy()
                 .into_owned();
-            (name, path)
-        })
-        .collect();
+            let key = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            if path.is_dir() {
+                walk(&path, &key, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push((key, path));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&src_dir(), "", &mut out);
     out.sort();
     assert!(
         !out.is_empty(),
@@ -71,45 +89,141 @@ fn src_files() -> Vec<(String, PathBuf)> {
 /// with them, which is the point: the prose that explains why a cap
 /// exists is not an engine reference.
 ///
-/// This is deliberately not a Rust lexer. It does not know string
-/// literals, so a `"tabnas::Value"` inside one would be read as code.
-/// That errs towards reporting, which is the right direction for a gate,
-/// and no file here has such a literal.
+/// String, byte-string, raw-string and character literals are recognised
+/// and their CONTENTS dropped, for two reasons that pull the same way. A
+/// literal cannot import anything, so its text is data and not code. And
+/// a stripper that does not know them produces false NEGATIVES, not only
+/// the false positives an earlier comment here claimed were the whole
+/// risk: a `"/*"` inside a literal opens a block comment that never
+/// closes, and every `use tabnas::…` after it disappears from the scan
+/// while this gate stays green.
+///
+/// It walks `char`s rather than bytes. The byte walk it replaces mapped
+/// each byte to its own `char`, so a multi-byte character -- six files
+/// under `src/` carry them -- could put a later slice off a character
+/// boundary and panic.
+///
+/// A `'` is a lifetime unless a closing `'` follows within one character
+/// or one escape, which is what distinguishes `&'a str` from `'\n'`.
 fn strip_comments(src: &str) -> String {
-    let bytes = src.as_bytes();
+    let c: Vec<char> = src.chars().collect();
     let mut out = String::with_capacity(src.len());
-    let mut i = 0;
+    let mut i = 0usize;
     let mut depth = 0usize;
-    while i < bytes.len() {
+    let at = |i: usize| -> Option<char> { c.get(i).copied() };
+    let starts = |i: usize, a: char, b: char| at(i) == Some(a) && at(i + 1) == Some(b);
+
+    while i < c.len() {
         if depth > 0 {
-            if bytes[i..].starts_with(b"*/") {
+            if starts(i, '*', '/') {
                 depth -= 1;
                 i += 2;
-            } else if bytes[i..].starts_with(b"/*") {
+            } else if starts(i, '/', '*') {
                 depth += 1;
                 i += 2;
             } else {
                 // Keep newlines so line structure survives.
-                if bytes[i] == b'\n' {
+                if c[i] == '\n' {
                     out.push('\n');
                 }
                 i += 1;
             }
             continue;
         }
-        if bytes[i..].starts_with(b"/*") {
+        if starts(i, '/', '*') {
             depth += 1;
             i += 2;
-        } else if bytes[i..].starts_with(b"//") {
-            while i < bytes.len() && bytes[i] != b'\n' {
+            continue;
+        }
+        if starts(i, '/', '/') {
+            while i < c.len() && c[i] != '\n' {
                 i += 1;
             }
-        } else {
-            out.push(bytes[i] as char);
-            i += 1;
+            continue;
         }
+        // A raw string: r"…", r#"…"#, br##"…"##. The hash count closes it.
+        if let Some(open) = raw_string_open(&c, i) {
+            i = skip_raw_string(&c, open.0, open.1);
+            continue;
+        }
+        // An ordinary string or byte string.
+        if c[i] == '"' || (c[i] == 'b' && at(i + 1) == Some('"')) {
+            i = skip_quoted(&c, if c[i] == '"' { i } else { i + 1 }, '"');
+            continue;
+        }
+        // A character literal, but not a lifetime.
+        if c[i] == '\'' && is_char_literal(&c, i) {
+            i = skip_quoted(&c, i, '\'');
+            continue;
+        }
+        out.push(c[i]);
+        i += 1;
     }
     out
+}
+
+/// `Some((quote_index, hash_count))` when a raw string starts at `i`.
+fn raw_string_open(c: &[char], i: usize) -> Option<(usize, usize)> {
+    let mut j = i;
+    if c.get(j) == Some(&'b') {
+        j += 1;
+    }
+    if c.get(j) != Some(&'r') {
+        return None;
+    }
+    j += 1;
+    let hashes = {
+        let start = j;
+        while c.get(j) == Some(&'#') {
+            j += 1;
+        }
+        j - start
+    };
+    if c.get(j) == Some(&'"') {
+        Some((j, hashes))
+    } else {
+        None
+    }
+}
+
+/// Past the closing `"` + `hashes` of a raw string opened at `quote`.
+fn skip_raw_string(c: &[char], quote: usize, hashes: usize) -> usize {
+    let mut i = quote + 1;
+    while i < c.len() {
+        if c[i] == '"' {
+            let closed = (1..=hashes).all(|k| c.get(i + k) == Some(&'#'));
+            if closed {
+                return i + 1 + hashes;
+            }
+        }
+        i += 1;
+    }
+    c.len()
+}
+
+/// Past the closing `end` of a `\`-escaped literal opened at `i`.
+fn skip_quoted(c: &[char], i: usize, end: char) -> usize {
+    let mut j = i + 1;
+    while j < c.len() {
+        if c[j] == '\\' {
+            j += 2;
+            continue;
+        }
+        if c[j] == end {
+            return j + 1;
+        }
+        j += 1;
+    }
+    c.len()
+}
+
+/// A `'` at `i` opens a character literal rather than a lifetime.
+fn is_char_literal(c: &[char], i: usize) -> bool {
+    match c.get(i + 1) {
+        Some('\\') => true,                     // '\n', '\'', '\u{1F600}'
+        Some(_) => c.get(i + 2) == Some(&'\''), // 'x'
+        None => false,
+    }
 }
 
 /// The engine items a file's CODE names: every `tabnas::Ident`, with a
@@ -142,15 +256,133 @@ fn engine_items(code: &str) -> BTreeSet<String> {
     items
 }
 
+/// The engine names `lib.rs` re-exports, by the LOCAL name a sibling
+/// module writes after `crate::`. Read from `lib.rs` rather than listed,
+/// so adding a re-export widens the check instead of quietly narrowing it.
+///
+/// Today that is `Tabnas` (from `pub use tabnas::Tabnas`) and
+/// `MarkdownError` (from `pub use tabnas::TabnasError as MarkdownError`).
+fn reexported_engine_names() -> BTreeSet<String> {
+    let lib = src_dir().join("lib.rs");
+    let code = strip_comments(&fs::read_to_string(&lib).expect("src/lib.rs is readable"));
+    let mut names = BTreeSet::new();
+    for stmt in code.split(';') {
+        let Some(at) = stmt.find("pub use tabnas::") else {
+            continue;
+        };
+        let tail = &stmt[at + "pub use tabnas::".len()..];
+        let parts: Vec<&str> = if let Some(inner) = tail.trim_start().strip_prefix('{') {
+            let end = inner.find('}').unwrap_or(inner.len());
+            inner[..end].split(',').collect()
+        } else {
+            vec![tail]
+        };
+        for part in parts {
+            // `X as Y` re-exports as Y: the LOCAL name is what a sibling
+            // writes, which is the opposite of engine_items above.
+            let words: Vec<&str> = part.split_whitespace().collect();
+            let local = match words.as_slice() {
+                [_, "as", y, ..] => *y,
+                [x, ..] => *x,
+                [] => continue,
+            };
+            let local: String = local
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !local.is_empty() {
+                names.insert(local);
+            }
+        }
+    }
+    assert!(
+        !names.is_empty(),
+        "src/lib.rs re-exports no engine name; the crate-relative half of this gate would check nothing"
+    );
+    names
+}
+
+/// The ways a file reaches the engine WITHOUT writing `tabnas::`, which
+/// the literal scan above cannot see:
+///
+/// * `use tabnas as engine;` -- every later `engine::Context` is invisible.
+/// * `use crate::Tabnas;` -- `lib.rs` re-exports engine types, so the
+///   crate root is a second door into the same items.
+///
+/// Both are REJECTED rather than resolved. Following an alias means
+/// tracking the local name through the file, and following a re-export
+/// means resolving paths; a gate that says "do not do this here" is
+/// smaller than either and just as sound, because both forms are
+/// unnecessary in an engine-free module by definition.
+fn indirect_engine_refs(code: &str, reexports: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut refs = BTreeSet::new();
+
+    // `use tabnas as X;` / `use ::tabnas as X;`
+    for stmt in code.split(';') {
+        let Some(at) = stmt.find("tabnas") else {
+            continue;
+        };
+        let tail = stmt[at + "tabnas".len()..].trim_start();
+        if let Some(rest) = tail.strip_prefix("as ") {
+            let alias: String = rest
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !alias.is_empty() {
+                refs.insert(format!("tabnas as {alias}"));
+            }
+        }
+    }
+
+    // `crate::Name` / `super::Name`, for a name lib.rs re-exports from the
+    // engine. A brace list is expanded, so `use crate::{Tabnas, Tree}`
+    // reports only the engine half.
+    for root in ["crate::", "super::"] {
+        let mut rest = code;
+        while let Some(at) = rest.find(root) {
+            let tail = &rest[at + root.len()..];
+            let consumed;
+            if let Some(inner) = tail.strip_prefix('{') {
+                let end = inner.find('}').unwrap_or(inner.len());
+                for part in inner[..end].split(',') {
+                    let name = part.split_whitespace().next().unwrap_or("");
+                    if reexports.contains(name) {
+                        refs.insert(format!("{root}{name}"));
+                    }
+                }
+                consumed = end.min(tail.len());
+            } else {
+                let end = tail
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .unwrap_or(tail.len());
+                if end > 0 && reexports.contains(&tail[..end]) {
+                    refs.insert(format!("{root}{}", &tail[..end]));
+                }
+                consumed = end;
+            }
+            rest = &tail[consumed..];
+        }
+    }
+    refs
+}
+
 /// Nothing reachable from `commonmark.rs` names an engine item. The
 /// phase modules, the renderer, the node tree, the character helpers and
 /// the generated entity table are all engine-free code.
 #[test]
 fn only_the_drivers_use_the_engine() {
+    let reexports = reexported_engine_names();
     let mut violations = Vec::new();
     for (name, path) in src_files() {
         let code = strip_comments(&fs::read_to_string(&path).expect("a readable source file"));
-        let items = engine_items(&code);
+        let mut items = engine_items(&code);
+        // An alias or a crate-relative re-export is an engine reference
+        // too, and neither writes `tabnas::`. lib.rs is where both are
+        // declared, so it is exempt from this half as it is from the rest.
+        if name != "lib.rs" {
+            items.extend(indirect_engine_refs(&code, &reexports));
+        }
 
         if ENGINE_FILES.contains(&name.as_str()) {
             continue;
@@ -234,4 +466,73 @@ let v: tabnas::Tin = tabnas::Value::Bool(true);
         .map(|s| s.to_string())
         .collect();
     assert_eq!(items, want, "the scan lost or invented an engine item");
+}
+
+/// A literal is data, and the failure it used to cause was a FALSE
+/// NEGATIVE: an unclosed `/*` inside a string swallowed the rest of the
+/// file, so a real import after it left the gate green.
+#[test]
+fn the_comment_stripper_knows_literals() {
+    // The first line is the trap: a block-comment opener inside a string.
+    let src = r###"
+let trap = "/* not a comment";
+let name = "tabnas::NotCode";
+let raw = r#"/* also not */ tabnas::AlsoNotCode"#;
+let byte = b"/* nor this */";
+let quote = '"';
+let tick = '''; let esc = '
+';
+let lt: &'a str = "x";
+use tabnas::Context;
+"###;
+    let code = strip_comments(src);
+    assert!(
+        code.contains("use tabnas::Context"),
+        "a literal swallowed the code after it: {code:?}"
+    );
+    let items = engine_items(&code);
+    assert!(
+        !items.contains("NotCode") && !items.contains("AlsoNotCode"),
+        "a string literal was read as code: {items:?}"
+    );
+    assert!(items.contains("Context"), "the real import was lost");
+    // `&'a str` is a lifetime, not an unterminated character literal.
+    assert!(code.contains("&'a str"), "a lifetime was eaten: {code:?}");
+}
+
+/// The two indirect doors, each rejected by name.
+#[test]
+fn an_alias_or_a_crate_reexport_counts_as_an_engine_reference() {
+    let reexports = reexported_engine_names();
+    assert!(
+        reexports.contains("Tabnas"),
+        "lib.rs no longer re-exports Tabnas; the fixtures below need rewriting: {reexports:?}"
+    );
+
+    let aliased =
+        indirect_engine_refs("use tabnas as engine;\nengine::Context::new();", &reexports);
+    assert!(
+        aliased.contains("tabnas as engine"),
+        "an aliased engine import went unseen: {aliased:?}"
+    );
+
+    let relative = indirect_engine_refs("use crate::Tabnas;", &reexports);
+    assert!(
+        relative.contains("crate::Tabnas"),
+        "a crate-relative engine re-export went unseen: {relative:?}"
+    );
+
+    let braced = indirect_engine_refs("use crate::{Tree, Tabnas};", &reexports);
+    assert_eq!(
+        braced.iter().collect::<Vec<_>>(),
+        vec!["crate::Tabnas"],
+        "the brace list reported the wrong half"
+    );
+
+    // An engine-free crate-relative import is not a finding.
+    let innocent = indirect_engine_refs("use crate::node::Tree;", &reexports);
+    assert!(
+        innocent.is_empty(),
+        "a non-engine import was flagged: {innocent:?}"
+    );
 }

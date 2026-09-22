@@ -433,14 +433,50 @@ fn nesting_is_capped_at_the_constants() {
     );
 
     // Nothing the reader wrote disappears: the markers past the bound
-    // stay in the output as text.
-    for src in [
-        quotes(MAX_CONTAINER_NESTING + 3),
-        stars(2 * MAX_INLINE_NESTING + 4),
-    ] {
-        assert!(
-            to_html(&src, &opts).contains('x'),
-            "{src:.20}: content survives"
-        );
-    }
+    // stay in the output AS TEXT, which is the half of the DIVERGENCE.md
+    // table that `contains('x')` never checked. A capped path that kept
+    // the content and dropped the overflow markers passed that, while the
+    // recorded output had changed.
+    //
+    // Every string below was read off this port before being pinned.
+
+    // One marker past the bound: the `> ` reaches the innermost paragraph
+    // as literal text, escaped as `&gt;` like any other `>`.
+    assert!(
+        to_html(&quotes(MAX_CONTAINER_NESTING + 1), &opts).contains("<p>&gt; x</p>"),
+        "the overflow block-quote marker did not stay literal"
+    );
+    // Three past: all three, in order, in the one paragraph.
+    assert!(
+        to_html(&quotes(MAX_CONTAINER_NESTING + 3), &opts).contains("<p>&gt; &gt; &gt; x</p>"),
+        "the three overflow block-quote markers did not stay literal"
+    );
+
+    // A list marker is not escaped, so the whole `- ` survives verbatim
+    // inside the innermost item.
+    assert!(
+        to_html(&items(MAX_CONTAINER_NESTING / 2 + 1), &opts).contains("<li>- x</li>"),
+        "the overflow list marker did not stay literal"
+    );
+
+    // The extra stars surface OUTSIDE the wrapper run rather than beside
+    // the content, which is why a scan around the `x` would have missed
+    // them: the opener that cannot pair is left where it was written.
+    let over = to_html(&stars(2 * MAX_INLINE_NESTING + 2), &opts);
+    assert!(
+        over.starts_with("<p>**<strong>"),
+        "the overflow emphasis stars did not stay literal: {:.40}",
+        over
+    );
+    assert!(
+        over.ends_with("</strong>**</p>\n"),
+        "the closing overflow stars did not stay literal: {:.40}",
+        &over[over.len().saturating_sub(40)..]
+    );
+    assert_eq!(
+        over.matches("<strong>").count(),
+        MAX_INLINE_NESTING,
+        "the wrapper count moved"
+    );
+    assert_eq!(over.matches('*').count(), 4, "the literal star count moved");
 }

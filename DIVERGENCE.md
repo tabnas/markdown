@@ -43,9 +43,17 @@ link destination), which CommonMark itself allows and all three apply.
 link and image wrappers at `MAX_INLINE_NESTING` (50). A marker past
 either bound stays literal text, as an unpaired marker does, so the text
 the document carries is never dropped: only its nesting stops.
-Every column of the table above is asserted, not described.
+Every column of the table above is asserted, not described, and that
+includes the half the Rust cells state in words: **the overflow markers
+stay literal**.
 `rs/tests/robust_test.rs::nesting_is_capped_at_the_constants` pins both
-Rust boundaries; `ts/test/divergence.test.ts` and
+Rust boundaries and the text they produce past them -- `<p>&gt; x</p>`
+one marker over, `<li>- x</li>` for a list, and `<p>**<strong>` …
+`</strong>**</p>` for the stars, with the wrapper and star counts pinned
+exactly. It used to check only the depth and that the content survived,
+which a port that kept `x` and dropped the markers would also have
+passed, while the recorded output had changed.
+`ts/test/divergence.test.ts` and
 `go/robust_test.go::TestNestingIsUncapped` pin the uncapped rows in the
 other two runtimes, at the same depths and with the same deepest-run
 count. A list marker counts twice in all three, because it opens a list
