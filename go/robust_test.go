@@ -262,3 +262,76 @@ func TestDestinationsDecodedInAST(t *testing.T) {
 		}
 	}
 }
+
+// TestNestingIsUncapped pins the Go column of the nesting table in
+// ../DIVERGENCE.md.
+//
+// The Rust port caps container nesting at MAX_CONTAINER_NESTING (100) and
+// inline nesting at MAX_INLINE_NESTING (50), and markers past either bound
+// stay literal text. This port has no such cap, and neither does the canonical
+// TypeScript. rs/tests/robust_test.rs::nesting_is_capped_at_the_constants pins
+// the Rust side at both bounds; this test and ts/test/divergence.test.ts pin
+// the other two, so every column of that table is asserted somewhere rather
+// than described.
+//
+// Without it, a cap introduced here would turn a recorded divergence into
+// agreement and no suite would report it: the shared fixtures carry no
+// document anywhere near these depths, and both HTML corpora are shallow.
+//
+// The depths are small on purpose. TestNoPanicOnAdversarialInput covers the
+// deep end; what this one checks is the boundary the table names.
+func TestNestingIsUncapped(t *testing.T) {
+	// The deepest run of matching nodes anywhere in the tree. Past a cap the
+	// wrappers that do form sit beside the literal text rather than above it,
+	// so counting the root's own chain would miss it. The Rust test counts the
+	// same way.
+	var deepest func(*MdNode, func(NodeType) bool) int
+	deepest = func(n *MdNode, want func(NodeType) bool) int {
+		here := 0
+		if want(n.Type) {
+			here = 1
+		}
+		below := 0
+		for c := n.FirstChild; c != nil; c = c.Next {
+			if d := deepest(c, want); d > below {
+				below = d
+			}
+		}
+		return here + below
+	}
+	depth := func(src string, want func(NodeType) bool) int {
+		return deepest(Parse(src, Options{}), want)
+	}
+
+	isQuote := func(x NodeType) bool { return "block_quote" == x }
+	isList := func(x NodeType) bool { return "list" == x || "item" == x }
+	isWrapper := func(x NodeType) bool { return "emph" == x || "strong" == x }
+
+	// Rows one and two: 100 markers nest 100 block quotes everywhere, and the
+	// 101st is where Rust stops and this port does not.
+	for _, n := range []int{100, 101, 150} {
+		src := strings.Repeat("> ", n) + "x"
+		if got := depth(src, isQuote); got != n {
+			t.Errorf("%d block quote markers nested %d deep, want %d", n, got, n)
+		}
+	}
+
+	// Rows three and four. A list marker opens two containers, a list and its
+	// item, so 50 markers are the 100 the Rust cap allows and 51 the first past
+	// it.
+	for _, c := range []struct{ markers, want int }{{50, 100}, {51, 102}} {
+		src := strings.Repeat("- ", c.markers) + "x"
+		if got := depth(src, isList); got != c.want {
+			t.Errorf("%d list markers nested %d deep, want %d", c.markers, got, c.want)
+		}
+	}
+
+	// Rows five and six. A run of stars pairs up: 2n stars a side nest n strong
+	// wrappers, so 100 stars are the 50 Rust allows and 102 the first past it.
+	for _, c := range []struct{ stars, want int }{{100, 50}, {102, 51}} {
+		src := strings.Repeat("*", c.stars) + "x" + strings.Repeat("*", c.stars)
+		if got := depth(src, isWrapper); got != c.want {
+			t.Errorf("%d stars a side nested %d deep, want %d", c.stars, got, c.want)
+		}
+	}
+}
