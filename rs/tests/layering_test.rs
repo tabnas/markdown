@@ -312,6 +312,14 @@ fn engine_items(code: &str) -> BTreeSet<String> {
                 }
             }
             rest = &tail[end.min(tail.len())..];
+        } else if let Some(after) = tail.strip_prefix('*') {
+            // `use tabnas::*;` imports EVERY engine item and names none,
+            // so the identifier scan below found nothing after the path
+            // and recorded nothing. A glob is the broadest engine
+            // reference there is, and every later unqualified use of what
+            // it brought in is invisible to this file.
+            items.insert("*".to_string());
+            rest = after;
         } else {
             let end = tail
                 .find(|c: char| !c.is_alphanumeric() && c != '_')
@@ -325,12 +333,22 @@ fn engine_items(code: &str) -> BTreeSet<String> {
     items
 }
 
-/// The engine names `lib.rs` re-exports, by the LOCAL name a sibling
-/// module writes after `crate::`. Read from `lib.rs` rather than listed,
-/// so adding a re-export widens the check instead of quietly narrowing it.
+/// Everything a sibling module can write after `crate::` that reaches
+/// the engine, by the LOCAL name it writes. Read from `lib.rs` rather
+/// than listed, so adding one widens the check instead of quietly
+/// narrowing it.
 ///
-/// Today that is `Tabnas` (from `pub use tabnas::Tabnas`) and
-/// `MarkdownError` (from `pub use tabnas::TabnasError as MarkdownError`).
+/// TWO KINDS, and the second is easy to miss. The re-exported TYPES --
+/// today `Tabnas` (from `pub use tabnas::Tabnas`) and `MarkdownError`
+/// (from `pub use tabnas::TabnasError as MarkdownError`). And the
+/// engine-facing FUNCTIONS: `crate::make()` hands back a built parser
+/// without naming a single engine type at the call site, which is engine
+/// behaviour reached from a module the rule calls engine-free.
+///
+/// A `pub fn` counts when its SIGNATURE names an engine type imported by
+/// `lib.rs`. `Value` is excluded, for the same reason `VALUE_ONLY_FILES`
+/// exists: the engine's value type is a type, not the engine, so
+/// `to_html` and `parse_document` are ordinary crate API.
 fn reexported_engine_names() -> BTreeSet<String> {
     let lib = src_dir().join("lib.rs");
     let code = normalise_paths(&strip_comments(
@@ -370,6 +388,39 @@ fn reexported_engine_names() -> BTreeSet<String> {
         !names.is_empty(),
         "src/lib.rs re-exports no engine name; the crate-relative half of this gate would check nothing"
     );
+
+    // The engine types lib.rs imports, which is what makes a signature
+    // engine-facing. Derived from its own `use tabnas::…`, minus the
+    // value type.
+    let mut markers: BTreeSet<String> = engine_items(&code);
+    markers.remove("Value");
+    markers.extend(names.iter().cloned());
+
+    let mut entries = BTreeSet::new();
+    for at in (0..code.len()).filter(|i| code[*i..].starts_with("pub fn ")) {
+        let tail = &code[at + "pub fn ".len()..];
+        let name: String = tail
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() {
+            continue;
+        }
+        // The signature is everything up to the body.
+        let sig = &tail[..tail.find('{').unwrap_or(tail.len())];
+        if markers.iter().any(|m| {
+            sig.split(|c: char| !c.is_alphanumeric() && c != '_')
+                .any(|word| word == m)
+        }) {
+            entries.insert(name);
+        }
+    }
+    assert!(
+        entries.contains("make") && entries.contains("plugin"),
+        "lib.rs no longer exposes make/plugin as engine-facing; \
+         the entry-point half of this gate would check less than it says: {entries:?}"
+    );
+    names.extend(entries);
     names
 }
 
@@ -461,6 +512,14 @@ fn indirect_engine_refs(code: &str, reexports: &BTreeSet<String>) -> BTreeSet<St
                 let end = inner.find('}').unwrap_or(inner.len());
                 for part in inner[..end].split(',') {
                     let name = part.split_whitespace().next().unwrap_or("");
+                    // `use crate::{self as markdown}` aliases the ROOT from
+                    // inside a group. The word scan above cannot see it --
+                    // it reads `crate::{self`, not `crate` -- and
+                    // `reachable` takes `self` for an ordinary module name.
+                    if "self" == name {
+                        refs.insert(format!("{root}{{self}}"));
+                        continue;
+                    }
                     if reachable(name) {
                         refs.insert(format!("{root}{name}"));
                     }
@@ -470,10 +529,20 @@ fn indirect_engine_refs(code: &str, reexports: &BTreeSet<String>) -> BTreeSet<St
                 let end = tail
                     .find(|c: char| !c.is_alphanumeric() && c != '_')
                     .unwrap_or(tail.len());
-                if end > 0 && reachable(&tail[..end]) {
-                    refs.insert(format!("{root}{}", &tail[..end]));
+                // `super::super::engine_inline::…` is valid Rust. Consuming
+                // the first `super` left the scan past the second `super::`,
+                // so the driver behind it was never read. A root keyword
+                // consumes nothing, and the next turn of this loop finds the
+                // inner path. It still terminates: `rest` shrinks by the
+                // root prefix every time.
+                if matches!(&tail[..end], "super" | "crate" | "self") {
+                    consumed = 0;
+                } else {
+                    if end > 0 && reachable(&tail[..end]) {
+                        refs.insert(format!("{root}{}", &tail[..end]));
+                    }
+                    consumed = end;
                 }
-                consumed = end;
             }
             rest = &tail[consumed..];
         }
@@ -701,6 +770,66 @@ fn an_alias_or_a_crate_reexport_counts_as_an_engine_reference() {
         "an ordinary rename was read as a root alias: {item:?}"
     );
 
+    // A grouped root alias: `use crate::{self as markdown};` is valid and
+    // the word scan reads `crate::{self`, not `crate`.
+    for grouped in [
+        "use crate::{self as markdown};",
+        "use super::{self as up};",
+        "use crate::{node, self as md};",
+    ] {
+        let refs = indirect_engine_refs(&normalise_paths(grouped), &reexports);
+        assert!(
+            !refs.is_empty(),
+            "{grouped:?} aliased the root from inside a group unnoticed: {refs:?}"
+        );
+    }
+
+    // A REPEATED root: consuming the first `super` used to leave the scan
+    // past the second, so the driver behind it was never read.
+    for repeated in [
+        "super::super::engine_inline::make_inline_tn(o)",
+        "use super::super::super::engine_block::x;",
+        "crate::super_helper(o)",
+    ] {
+        let refs = indirect_engine_refs(&normalise_paths(repeated), &reexports);
+        let want = !repeated.contains("super_helper");
+        assert_eq!(
+            !refs.is_empty(),
+            want,
+            "{repeated:?} gave {refs:?}, want {}",
+            if want { "a finding" } else { "nothing" }
+        );
+    }
+
+    // The crate root's engine-facing ENTRY POINTS. `crate::make()` hands
+    // back a built parser while naming no engine type at the call site.
+    for entry in [
+        "let mut tn = crate::make();",
+        "crate::plugin()",
+        "crate::markdown(&mut tn, &opts)",
+        "super::make_with(&opts)",
+    ] {
+        let refs = indirect_engine_refs(&normalise_paths(entry), &reexports);
+        assert!(
+            !refs.is_empty(),
+            "{entry:?} reached an engine entry point unnoticed: {refs:?}"
+        );
+    }
+
+    // And the ones that are NOT engine-facing stay silent: their
+    // signatures name only the engine's VALUE type, which VALUE_ONLY_FILES
+    // already rules is a type rather than the engine.
+    for ordinary in [
+        "crate::to_html(src, &opts)",
+        "crate::parse_document(src, &opts)",
+    ] {
+        let refs = indirect_engine_refs(&normalise_paths(ordinary), &reexports);
+        assert!(
+            refs.is_empty(),
+            "{ordinary:?} was read as an engine entry point: {refs:?}"
+        );
+    }
+
     // lib.rs is NOT in that set: it is the crate root, and reaching a
     // re-export through it is already covered by name above.
     let root_only = indirect_engine_refs("use crate::lib::nothing;", &reexports);
@@ -766,6 +895,20 @@ fn whitespace_in_a_path_is_not_a_way_past_the_gate() {
     assert!(
         items.contains("Context"),
         "{commented:?} hid an engine import: {items:?}"
+    );
+
+    // A GLOB names no item, so the identifier scan found nothing after the
+    // path and reported nothing -- while importing every engine item there
+    // is, and making every later unqualified use of one invisible.
+    let glob = engine_items(&normalise_paths("use tabnas::*;"));
+    assert!(
+        glob.contains("*"),
+        "a glob import was not read as one: {glob:?}"
+    );
+    let both = engine_items(&normalise_paths("use tabnas::*; use tabnas::Context;"));
+    assert!(
+        both.contains("*") && both.contains("Context"),
+        "a glob swallowed the import after it: {both:?}"
     );
 
     // Normalising must not invent a path where none was written: an
