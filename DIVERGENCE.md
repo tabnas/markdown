@@ -43,9 +43,18 @@ link destination), which CommonMark itself allows and all three apply.
 link and image wrappers at `MAX_INLINE_NESTING` (50). A marker past
 either bound stays literal text, as an unpaired marker does, so the text
 the document carries is never dropped: only its nesting stops.
+Every column of the table above is asserted, not described.
 `rs/tests/robust_test.rs::nesting_is_capped_at_the_constants` pins both
-boundaries, and a list marker counts twice because it opens a list and
-an item.
+Rust boundaries; `ts/test/divergence.test.ts` and
+`go/robust_test.go::TestNestingIsUncapped` pin the uncapped rows in the
+other two runtimes, at the same depths and with the same deepest-run
+count. A list marker counts twice in all three, because it opens a list
+and an item.
+
+Splitting the register across three suites is what the absence of a
+`test/spec/divergent.tsv` row costs here, and it is the reason given
+above: a fixture row states one expected value per input. Repairing the
+divergence means deleting all three assertions along with this section.
 
 The cap is there for the caller's stack, not the parser's. Every phase
 of the Rust port is iterative, and a document of 8,000 nested block

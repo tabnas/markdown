@@ -135,6 +135,14 @@ way (one is invisible to the AST, the other needs a document larger than
 a fixture cell). A divergence that a row CAN express belongs in a
 register, with a `rust` column, per [`../AGENTS.md`](../AGENTS.md).
 
+Without that file, the per-runtime tests ARE the register, so all three
+columns have to be asserted or the record is prose again. The nesting
+cap is pinned here by `tests/robust_test.rs::nesting_is_capped_at_the_constants`
+and, on the uncapped side, by `../ts/test/divergence.test.ts` and
+`../go/robust_test.go::TestNestingIsUncapped`. Changing either constant
+means updating all three and the table in `../DIVERGENCE.md`; removing
+the caps means deleting all three.
+
 ## Deep nesting: the crate is off the stack, the AST type is not
 
 `block.rs`, `inline.rs`, `html.rs` and `ast.rs` never recurse on the
