@@ -118,6 +118,31 @@ fixture runner compares numerically. Do not "fix" this in the
 projection: it is the engine's value type, and every other Rust port
 has the same shape.
 
+## Two things TypeScript has that this crate does not
+
+Neither is a parity gap, and neither belongs in `../DIVERGENCE.md`: no
+input parses differently because of them. Both are recorded so the
+absence reads as a decision rather than an oversight.
+
+**Token descriptions.** `ts/src/markdown.ts` and
+`ts/src/engine-inline.ts` register a `config.modify` hook that hangs a
+human description on `#LB` and on the inline tokens, which
+`@tabnas/railroad` reads off a live instance to label the diagrams in
+`ts/doc/`. There is no counterpart here, and none is available: the Rust
+engine has a `config_modify` hook but no `token_desc` field for one to
+write to, and neither has the Go engine. Porting it is an engine change
+in `tabnas/parser`, for a TypeScript documentation tool, so it is left
+where it is. Go is in the same position, for the same reason.
+
+**A debug composition test.** `ts/test/debug-model.test.ts` layers
+`@tabnas/debug` over the plugin and inspects the serialized model.
+`tabnas-debug` does have a Rust crate with a `model()`, so the test is
+writable, but taking it would add a third sibling path dependency, and
+`../ci/rust/run.sh` checks for exactly two siblings and exempts exactly
+two crates from its lockfile comparison. Go carries no such test either.
+Adding it means widening that gate first, deliberately, rather than as a
+side effect of a test.
+
 ## The divergences
 
 Token columns after an astral character: TypeScript counts UTF-16
