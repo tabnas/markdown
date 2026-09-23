@@ -295,18 +295,60 @@ fn normalise_paths(code: &str) -> String {
     out
 }
 
+/// The first offset at or after `from` where `word` begins at an
+/// identifier boundary in `code`: the character before it, if there is
+/// one, is not one an identifier continues with.
+///
+/// A plain substring search read `local_tabnas::Context` -- the path to
+/// an engine-free module's own `mod local_tabnas` -- as the engine, and
+/// reported a file that never touched it. That is the unactionable noise
+/// this gate was written to replace. The `#` of a raw identifier is not an
+/// identifier character, so `r#tabnas::` is still the engine.
+fn find_word(code: &str, from: usize, word: &str) -> Option<usize> {
+    let mut from = from;
+    while let Some(rel) = code[from..].find(word) {
+        let at = from + rel;
+        let joined = code[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        if !joined {
+            return Some(at);
+        }
+        from = at + word.len();
+    }
+    None
+}
+
+/// The identifier `s` starts with, and how many bytes it spans. A raw
+/// identifier's `r#` is spanned but is not part of the name, because Rust
+/// accepts the raw form of any ordinary name: `crate::r#engine_inline` IS
+/// `crate::engine_inline`. Reading up to the first non-identifier
+/// character saw only `r` there, and the driver behind it went unseen.
+fn leading_ident(s: &str) -> (&str, usize) {
+    let body = s.strip_prefix("r#").unwrap_or(s);
+    let skip = s.len() - body.len();
+    let end = body
+        .find(|c: char| !c.is_alphanumeric() && c != '_')
+        .unwrap_or(body.len());
+    (&body[..end], skip + end)
+}
+
 /// The engine items a file's CODE names: every `tabnas::Ident`, with a
 /// `use tabnas::{A, B}` brace list expanded to its members.
 fn engine_items(code: &str) -> BTreeSet<String> {
     let mut items = BTreeSet::new();
     let mut rest = code;
-    while let Some(at) = rest.find("tabnas::") {
-        let tail = &rest[at + "tabnas::".len()..];
+    // `rest` is always a suffix of `code`, so the search can look at the
+    // character BEFORE a match, which a search of `rest` alone cannot.
+    while let Some(at) = find_word(code, code.len() - rest.len(), "tabnas::") {
+        let tail = &code[at + "tabnas::".len()..];
         if let Some(inner) = tail.strip_prefix('{') {
             let end = group_end(inner);
             for part in inner[..end].split(',') {
                 // `X as Y` records X: the engine item, not the local name.
                 let name = part.split_whitespace().next().unwrap_or("");
+                let name = name.strip_prefix("r#").unwrap_or(name);
                 if !name.is_empty() {
                     items.insert(name.to_string());
                 }
@@ -321,13 +363,11 @@ fn engine_items(code: &str) -> BTreeSet<String> {
             items.insert("*".to_string());
             rest = after;
         } else {
-            let end = tail
-                .find(|c: char| !c.is_alphanumeric() && c != '_')
-                .unwrap_or(tail.len());
-            if end > 0 {
-                items.insert(tail[..end].to_string());
+            let (name, span) = leading_ident(tail);
+            if !name.is_empty() {
+                items.insert(name.to_string());
             }
-            rest = &tail[end..];
+            rest = &tail[span..];
         }
     }
     items
@@ -447,37 +487,49 @@ fn group_end(inner: &str) -> usize {
     inner.len()
 }
 
-/// The members of a brace group, split at TOP-LEVEL commas only, each cut
-/// back to its LEADING path segment. `engine_inline::{a, b}` is one
-/// member and its leading segment is `engine_inline`, which is the name
-/// the classification below is about.
-fn group_members(inner: &str) -> Vec<String> {
+/// A brace group's members, split at TOP-LEVEL commas only, so
+/// `engine_inline::{a, b}` stays one member.
+fn top_level_parts(inner: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut depth = 0usize;
     let mut start = 0usize;
-    let push = |part: &str, out: &mut Vec<String>| {
-        let part = part.trim();
-        let head = part.split("::").next().unwrap_or("").trim();
-        let head: String = head
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
-        if !head.is_empty() {
-            out.push(head);
-        }
-    };
     for (at, c) in inner.char_indices() {
         match c {
             '{' => depth += 1,
             '}' => depth = depth.saturating_sub(1),
             ',' if 0 == depth => {
-                push(&inner[start..at], &mut out);
+                out.push(&inner[start..at]);
                 start = at + 1;
             }
             _ => {}
         }
     }
-    push(&inner[start..], &mut out);
+    out.push(&inner[start..]);
+    out
+}
+
+/// The members of a brace group, each cut back to its LEADING path
+/// segment. `engine_inline::{a, b}` is one member and its leading segment
+/// is `engine_inline`, which is the name the classification below is
+/// about.
+///
+/// A member that is itself a bare group is read through: rustc accepts
+/// `use crate::{{engine_inline}};`, and its leading segment is `{`, which
+/// named nothing, so the driver inside was imported in silence.
+fn group_members(inner: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for part in top_level_parts(inner) {
+        let part = part.trim();
+        if let Some(nested) = part.strip_prefix('{') {
+            out.extend(group_members(&nested[..group_end(nested)]));
+            continue;
+        }
+        let head = part.split("::").next().unwrap_or("").trim();
+        let (head, _) = leading_ident(head);
+        if !head.is_empty() {
+            out.push(head.to_string());
+        }
+    }
     out
 }
 
@@ -582,7 +634,8 @@ fn path_values(body: &str) -> BTreeSet<String> {
 /// * `use crate as markdown;` -- an alias of the CRATE ROOT. Every later
 ///   `markdown::engine_inline::…` then contains none of `tabnas::`,
 ///   `crate::` or `super::`, so it reopens both of the doors above at
-///   once. `self` and `super` alias the same way.
+///   once. `self` and `super` alias the same way, and so does a
+///   prefix-less group: `use {crate as markdown};`.
 ///
 /// Both are REJECTED rather than resolved. Following an alias means
 /// tracking the local name through the file, and following a re-export
@@ -593,22 +646,28 @@ fn indirect_engine_refs(code: &str, reexports: &BTreeSet<String>) -> BTreeSet<St
     let mut refs = BTreeSet::new();
 
     // `use tabnas as X;` / `use ::tabnas as X;`
+    //
+    // Every WHOLE-WORD `tabnas` in the statement, not the first substring:
+    // `use local_tabnas as lt;` renames an engine-free module, and reading
+    // only the first match would also let one such name hide a real alias
+    // later in the same statement.
     for stmt in code.split(';') {
-        let Some(at) = stmt.find("tabnas") else {
-            continue;
-        };
-        let tail = stmt[at + "tabnas".len()..].trim_start();
-        if let Some(rest) = tail
-            .strip_prefix("as ")
-            .or_else(|| tail.strip_prefix("as\t"))
-        {
-            let alias: String = rest
-                .trim_start()
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            if !alias.is_empty() {
-                refs.insert(format!("tabnas as {alias}"));
+        let mut from = 0;
+        while let Some(at) = find_word(stmt, from, "tabnas") {
+            from = at + "tabnas".len();
+            let tail = stmt[from..].trim_start();
+            if let Some(rest) = tail
+                .strip_prefix("as ")
+                .or_else(|| tail.strip_prefix("as\t"))
+            {
+                let alias: String = rest
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !alias.is_empty() {
+                    refs.insert(format!("tabnas as {alias}"));
+                }
             }
         }
     }
@@ -651,6 +710,28 @@ fn indirect_engine_refs(code: &str, reexports: &BTreeSet<String>) -> BTreeSet<St
         }
     }
 
+    // `use {crate as markdown};` -- the same root alias from inside a
+    // group with no prefix. rustc accepts it alone, nested as
+    // `use {{crate as md}};`, or beside other members as
+    // `use {node::Tree, crate as md};`. The word scan above reads
+    // `{crate`, not `crate`, and the `crate::` scan below finds no
+    // `crate::` at all. rustc refuses a bare `self` or `super` in that
+    // position (E0431, E0432); they are matched with `crate` anyway, as
+    // in the word scan, so the two scans stay one rule about the root.
+    for stmt in code.split(';') {
+        let mut from = 0;
+        while let Some(at) = find_word(stmt, from, "use") {
+            from = at + "use".len();
+            let after = &stmt[from..];
+            if after.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+                continue;
+            }
+            if let Some(inner) = after.trim_start().strip_prefix('{') {
+                grouped_root_aliases(inner, &mut refs);
+            }
+        }
+    }
+
     // `crate::Name` / `super::Name`, for a name lib.rs re-exports from the
     // engine, OR for one of the engine-facing driver modules. A brace
     // list is expanded, so `use crate::{Tabnas, Tree}` reports only the
@@ -687,28 +768,46 @@ fn indirect_engine_refs(code: &str, reexports: &BTreeSet<String>) -> BTreeSet<St
                 }
                 consumed = end.min(tail.len());
             } else {
-                let end = tail
-                    .find(|c: char| !c.is_alphanumeric() && c != '_')
-                    .unwrap_or(tail.len());
+                // `crate::r#engine_inline` is `crate::engine_inline`, so the
+                // name is read past a raw identifier's `r#`.
+                let (name, span) = leading_ident(tail);
                 // `super::super::engine_inline::…` is valid Rust. Consuming
                 // the first `super` left the scan past the second `super::`,
                 // so the driver behind it was never read. A root keyword
                 // consumes nothing, and the next turn of this loop finds the
                 // inner path. It still terminates: `rest` shrinks by the
                 // root prefix every time.
-                if matches!(&tail[..end], "super" | "crate" | "self") {
+                if matches!(name, "super" | "crate" | "self") {
                     consumed = 0;
                 } else {
-                    if end > 0 && reachable(&tail[..end]) {
-                        refs.insert(format!("{root}{}", &tail[..end]));
+                    if !name.is_empty() && reachable(name) {
+                        refs.insert(format!("{root}{name}"));
                     }
-                    consumed = end;
+                    consumed = span;
                 }
             }
             rest = &tail[consumed..];
         }
     }
     refs
+}
+
+/// The crate-root aliases in a prefix-less `use` group: every top-level
+/// member of the form `crate as X` (or `self` / `super`, as above), and
+/// the same inside a bare nested group.
+fn grouped_root_aliases(inner: &str, refs: &mut BTreeSet<String>) {
+    for part in top_level_parts(&inner[..group_end(inner)]) {
+        let part = part.trim();
+        if let Some(nested) = part.strip_prefix('{') {
+            grouped_root_aliases(nested, refs);
+            continue;
+        }
+        if let [root, "as", alias] = part.split_whitespace().collect::<Vec<_>>().as_slice() {
+            if ["crate", "self", "super"].contains(root) {
+                refs.insert(format!("use {{{root} as {alias}}}"));
+            }
+        }
+    }
 }
 
 /// Nothing reachable from `commonmark.rs` names an engine item. The
@@ -923,6 +1022,12 @@ fn an_alias_or_a_crate_reexport_counts_as_an_engine_reference() {
         "use crate::engine_block::something;",
         "super::engine_inline::other()",
         "use crate::{node, engine_inline};",
+        // A raw identifier is the same name: the scan used to stop at the
+        // `#` and read the module as `r`.
+        "crate::r#engine_inline::make_inline_tn(opts)",
+        "use crate::{node, r#engine_block::x};",
+        // A bare group inside a group, which rustc accepts.
+        "use crate::{{engine_inline}};",
     ] {
         let refs = indirect_engine_refs(call, &reexports);
         assert!(
@@ -960,12 +1065,34 @@ fn an_alias_or_a_crate_reexport_counts_as_an_engine_reference() {
         "use crate::{self as markdown};",
         "use super::{self as up};",
         "use crate::{node, self as md};",
+        // And from a group with NO prefix, which the word scan reads as
+        // `{crate` and the `crate::` scan never reaches.
+        "use {crate as markdown};",
+        "pub use {node::Tree, crate as md};",
+        "use {{crate as md}};",
+        "use{crate  as\n md};",
     ] {
         let refs = indirect_engine_refs(&normalise_paths(grouped), &reexports);
         assert!(
             !refs.is_empty(),
             "{grouped:?} aliased the root from inside a group unnoticed: {refs:?}"
         );
+    }
+
+    // The lookalikes stay silent: a raw identifier naming an engine-free
+    // module, a module whose name merely STARTS like a driver's, and a
+    // prefix-less group that renames ordinary paths, one of them through
+    // the crate root.
+    for quiet in [
+        "use crate::r#node::Tree;",
+        "crate::engine_inline_notes::x()",
+        "use {std::fmt as f, core as c};",
+        "use {crate::node as crate_node};",
+        "use crate::{{node::Tree}, html};",
+        "fn reuse() {} let used = {1};",
+    ] {
+        let refs = indirect_engine_refs(&normalise_paths(quiet), &reexports);
+        assert!(refs.is_empty(), "{quiet:?} was flagged: {refs:?}");
     }
 
     // A REPEATED root: consuming the first `super` used to leave the scan
@@ -1143,6 +1270,47 @@ fn whitespace_in_a_path_is_not_a_way_past_the_gate() {
     assert!(
         engine_items(&innocent).is_empty(),
         "invented an engine item"
+    );
+
+    // A path whose first segment only ENDS in the crate name is not the
+    // engine. `local_tabnas::Context` names an engine-free module's own
+    // `mod local_tabnas`, and a substring search reported it.
+    for quiet in [
+        "mod local_tabnas { pub struct Context; } fn f() -> local_tabnas::Context { todo!() }",
+        "use my_tabnas::{Context, Lexer};",
+        "use local_tabnas as lt;",
+    ] {
+        let code = normalise_paths(&strip_comments(quiet));
+        let items = engine_items(&code);
+        let refs = indirect_engine_refs(&code, &reexports);
+        assert!(
+            items.is_empty() && refs.is_empty(),
+            "{quiet:?} was read as the engine: {items:?} {refs:?}"
+        );
+    }
+
+    // While the crate name after any other punctuation is still the
+    // engine, and a lookalike earlier in a statement does not hide a real
+    // alias later in it.
+    for real in [
+        "fn f() -> ::tabnas::Context { todo!() }",
+        "let v: Vec<tabnas::Context> = vec![];",
+        "fn f(_: &tabnas::Context) {}",
+    ] {
+        let items = engine_items(&normalise_paths(&strip_comments(real)));
+        assert!(
+            items.contains("Context"),
+            "{real:?} hid an engine item: {items:?}"
+        );
+    }
+    let both = indirect_engine_refs(
+        &normalise_paths("use {local_tabnas as lt, tabnas as engine};"),
+        &reexports,
+    );
+    assert_eq!(
+        both.iter().collect::<Vec<_>>(),
+        vec!["tabnas as engine"],
+        "the lookalike and the real alias were not told apart"
     );
 }
 
