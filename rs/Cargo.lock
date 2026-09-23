@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "tabnas-markdown"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "indexmap",
  "regex",
@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "tabnas-support"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "serde_json",
 ]
