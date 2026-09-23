@@ -176,7 +176,7 @@ There are three implementations that must behave identically: TypeScript
 | [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/markdown` package. Depends on `@tabnas/parser` only, and only in `src/markdown.ts`. |
 | [`go/`](go/) | Go port — `github.com/tabnas/markdown/go`, package `tabnasmarkdown`. |
 | [`rs/`](rs/) | Rust port: the `tabnas-markdown` crate (library `tabnas_markdown`). Same file split as `go/` under `rs/src/`, plugin wiring in `src/lib.rs`, both HTML-corpus graders under `rs/tests/`. Depends on the `tabnas` crate via a `path` dependency (sibling checkout) and, dev-only, on `tabnas-support` for the fixture runner. Library only: no CLI. See [`rs/AGENTS.md`](rs/AGENTS.md). |
-| [`ci/`](ci/) | Workflows and scripts **staged** for promotion into `.github/workflows/` by someone whose credentials can write there: `ci/workflows/rust.yml` (the Rust gate), `ci/workflows/docs.yml` (the prose gate), `ci/rust/run.sh` (what the Rust gate runs). See [`ci/README.md`](ci/README.md). |
+| [`ci/`](ci/) | `ci/rust/run.sh`, the whole Rust gate, run by CI and runnable locally; plus `ci/workflows/`, the staging area for workflow changes, because session credentials cannot write `.github/workflows/*` (admin `DECISIONS.md` ADR-8). Nothing is staged today: the Rust and prose gates were promoted to `.github/workflows/{rust,docs}.yml`, and git tracks no empty directory, so `ci/workflows/` is absent until something is next staged there. See [`ci/README.md`](ci/README.md). |
 | [`test/spec/`](test/spec/) | 83 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) across 10 `*.tsv` files, auto-discovered and run by all three runtimes. The TS/Go/Rust parity contract. See `test/AGENTS.md`. |
 | [`test/spec/tree/`](test/spec/tree/) | Golden native-tree snapshots (`sourcepos` included), one per fixture file, generated from the canonical TypeScript and asserted by `ts/test/tree-golden.test.ts`, `go/tree_golden_test.go` and `rs/tests/tree_golden_test.rs`. |
 | [`test/commonmark/spec.json`](test/commonmark/) | Vendored CommonMark 0.31.2 suite, 652 examples of Markdown → expected **HTML**. The conformance contract for all three runtimes. See `test/AGENTS.md`. |
@@ -186,6 +186,7 @@ There are three implementations that must behave identically: TypeScript
 | [`ts/tools/gfm-conformance.mjs`](ts/tools/gfm-conformance.mjs) | Runs the 24-example GFM corpus the same way, with `gfm:true`. `node tools/gfm-conformance.mjs`. |
 | [`ts/tools/check-doc-examples.mjs`](ts/tools/check-doc-examples.mjs) | Runs the `// =>` assertions in the docs without the engine, using a stand-in for it. The CI equivalent is `ts/test/doc-examples.test.ts`. |
 | `ts/doc/{tutorial,guide,reference,concepts}.md`, `go/doc/{tutorial,guide,reference,concepts}.md` | Per-runtime Diátaxis docs. Keep the four modes distinct — see "Documentation rules". |
+| [`DIVERGENCE.md`](DIVERGENCE.md) | The parity record: where a runtime produces a different result for the same input, and why it is allowed to stand. Two entries, each asserted in all three runtimes. See "Authority and alignment rules". |
 | `dx-report.md` | Running design notes. **Append-only**: new dated entries at the bottom, corrections to earlier sections stated as corrections in the new entry, never as edits to the original text. |
 
 Source files, mirrored name for name across the two runtimes:
@@ -293,15 +294,31 @@ entity table and uses the `regex` crate's Unicode tables for punctuation,
 noted in `rs/src/common.rs`), and the observable behaviour is still
 identical. If a port cannot match, document the gap here and in the
 relevant `go/doc/*.md` or `rs/README.md`; a same-input-different-result
-gap is a divergence and also belongs in a `DIVERGENCE.md` and the
-executable register `test/spec/divergent.tsv`, per the org rule (neither
-exists here yet, because there is nothing to record). The one
-engine-level divergence this repo inherits is token column positions
-after an astral character (TypeScript counts UTF-16 units, Go and Rust
-count characters); it is recorded in `parser/DIVERGENCE.md` and cited,
-not re-adjudicated, by `go/enginecol_test.go` and
-`rs/tests/engine_columns_test.rs`. It never reaches the AST or the
-native tree.
+gap is a divergence and also belongs in
+[`DIVERGENCE.md`](DIVERGENCE.md) and the executable register
+`test/spec/divergent.tsv`, per the org rule. `DIVERGENCE.md` exists and
+carries two entries. `test/spec/divergent.tsv` does not, because neither
+entry can be written as a fixture row, and `DIVERGENCE.md` states that
+reason at the top rather than leaving it to be rediscovered.
+
+Every column of both entries is asserted, which is the whole point of a
+register: prose alone cannot report a divergence that quietly turns into
+agreement.
+
+* **Token columns after an astral character.** TypeScript counts UTF-16
+  units; Go and Rust count characters. It is inherited from the engine,
+  recorded in `parser/DIVERGENCE.md`, and cited rather than
+  re-adjudicated by `go/enginecol_test.go` and
+  `rs/tests/engine_columns_test.rs`. It never reaches the AST or the
+  native tree.
+* **Nesting is capped in the Rust port**, at
+  `block::MAX_CONTAINER_NESTING` (100) and `inline::MAX_INLINE_NESTING`
+  (50), where TypeScript and Go carry no cap.
+  `rs/tests/robust_test.rs::nesting_is_capped_at_the_constants` pins the
+  Rust column; `ts/test/divergence.test.ts` and
+  `go/robust_test.go::TestNestingIsUncapped` pin the other two, at the
+  same depths. Moving a constant means updating all three and the table
+  in `DIVERGENCE.md`; repairing the divergence means deleting all three.
 
 The AST comparison alone is not a complete parity check: `sourcepos` is
 not projected into the public AST, so a divergence there is invisible to
@@ -370,9 +387,12 @@ TS, Go and Rust sides (`make test-rs` is tests, doctests and clippy;
 `make version-rs V=x.y.z` bumps both Rust version sites and the lock);
 `make publish-go V=x.y.z` tags `go/vX.Y.Z`. CI is the org-standard
 `polyglot-ci` caller in `.github/workflows/ci.yml`; the Rust gate is
-staged as `ci/workflows/rust.yml` running `ci/rust/run.sh`, which is
-also the local full gate (fmt, build, tests, doctests, clippy, lockfile
-check).
+`.github/workflows/rust.yml`, which runs `ci/rust/run.sh`, and that
+script is also the local full gate (fmt, build, tests, doctests, clippy,
+lockfile check). The prose gate is `.github/workflows/docs.yml`, which
+runs Vale and `ts/scripts/vale-counts.cjs`. Both were promoted out of
+`ci/workflows/`, so that directory is not in the tree until something is
+staged there again.
 
 ## Verify your work
 

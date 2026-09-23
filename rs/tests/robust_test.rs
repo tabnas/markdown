@@ -403,44 +403,95 @@ fn nesting_is_capped_at_the_constants() {
     );
 
     // A list marker is two containers, the list and its item, so the
-    // bound is reached at half as many markers.
+    // bound is reached at half as many markers. Each container type is
+    // counted on its own, never as a union: the table's cell reads "50
+    // lists and items EACH", and a regression yielding 100 lists and no
+    // items would satisfy a combined count of 100 while changing exactly
+    // what the cell records.
     let items = |n: usize| format!("{}x", "- ".repeat(n));
-    let is_list = |t: NodeType| matches!(t, NodeType::List | NodeType::Item);
-    assert_eq!(
-        depth(items(MAX_CONTAINER_NESTING / 2), is_list),
-        MAX_CONTAINER_NESTING
-    );
-    assert_eq!(
-        depth(items(MAX_CONTAINER_NESTING), is_list),
-        MAX_CONTAINER_NESTING
-    );
+    let is_list = |t: NodeType| NodeType::List == t;
+    let is_item = |t: NodeType| NodeType::Item == t;
+    // `half + 1` is the row DIVERGENCE.md actually records as the first
+    // past the bound -- 51 markers, 50 each. Measuring only `half` and
+    // twice it left that row pinned by the HTML check alone, which says
+    // `- x` appears inside some item and not that the tree stopped at 50.
+    let half = MAX_CONTAINER_NESTING / 2;
+    for markers in [half, half + 1, MAX_CONTAINER_NESTING] {
+        let src = items(markers);
+        assert_eq!(
+            depth(src.clone(), is_list),
+            half,
+            "{markers} markers, lists"
+        );
+        assert_eq!(depth(src, is_item), half, "{markers} markers, items");
+    }
 
     // A run of stars pairs up: `**` a side is one `strong`, so 2n stars
-    // a side nest n wrappers.
+    // a side nest n wrappers. The table names `strong`, so `strong` is
+    // what is counted -- and `emph` is pinned at zero beside it, because
+    // paired stars coming back as emphasis would be a different cell
+    // than the one recorded, and a union of the two would not notice.
     let stars = |n: usize| format!("{}x{}", "*".repeat(n), "*".repeat(n));
-    let is_wrapper = |t: NodeType| matches!(t, NodeType::Emph | NodeType::Strong);
-    assert_eq!(
-        depth(stars(2 * MAX_INLINE_NESTING), is_wrapper),
-        MAX_INLINE_NESTING
-    );
-    assert_eq!(
-        depth(stars(2 * MAX_INLINE_NESTING + 2), is_wrapper),
-        MAX_INLINE_NESTING
-    );
-    assert_eq!(
-        depth(stars(4 * MAX_INLINE_NESTING), is_wrapper),
-        MAX_INLINE_NESTING
-    );
+    let is_strong = |t: NodeType| NodeType::Strong == t;
+    let is_emph = |t: NodeType| NodeType::Emph == t;
+    for side in [
+        2 * MAX_INLINE_NESTING,
+        2 * MAX_INLINE_NESTING + 2,
+        4 * MAX_INLINE_NESTING,
+    ] {
+        assert_eq!(
+            depth(stars(side), is_strong),
+            MAX_INLINE_NESTING,
+            "{side} stars"
+        );
+        assert_eq!(depth(stars(side), is_emph), 0, "{side} stars");
+    }
 
     // Nothing the reader wrote disappears: the markers past the bound
-    // stay in the output as text.
-    for src in [
-        quotes(MAX_CONTAINER_NESTING + 3),
-        stars(2 * MAX_INLINE_NESTING + 4),
-    ] {
-        assert!(
-            to_html(&src, &opts).contains('x'),
-            "{src:.20}: content survives"
-        );
-    }
+    // stay in the output AS TEXT, which is the half of the DIVERGENCE.md
+    // table that `contains('x')` never checked. A capped path that kept
+    // the content and dropped the overflow markers passed that, while the
+    // recorded output had changed.
+    //
+    // Every string below was read off this port before being pinned.
+
+    // One marker past the bound: the `> ` reaches the innermost paragraph
+    // as literal text, escaped as `&gt;` like any other `>`.
+    assert!(
+        to_html(&quotes(MAX_CONTAINER_NESTING + 1), &opts).contains("<p>&gt; x</p>"),
+        "the overflow block-quote marker did not stay literal"
+    );
+    // Three past: all three, in order, in the one paragraph.
+    assert!(
+        to_html(&quotes(MAX_CONTAINER_NESTING + 3), &opts).contains("<p>&gt; &gt; &gt; x</p>"),
+        "the three overflow block-quote markers did not stay literal"
+    );
+
+    // A list marker is not escaped, so the whole `- ` survives verbatim
+    // inside the innermost item.
+    assert!(
+        to_html(&items(MAX_CONTAINER_NESTING / 2 + 1), &opts).contains("<li>- x</li>"),
+        "the overflow list marker did not stay literal"
+    );
+
+    // The extra stars surface OUTSIDE the wrapper run rather than beside
+    // the content, which is why a scan around the `x` would have missed
+    // them: the opener that cannot pair is left where it was written.
+    let over = to_html(&stars(2 * MAX_INLINE_NESTING + 2), &opts);
+    assert!(
+        over.starts_with("<p>**<strong>"),
+        "the overflow emphasis stars did not stay literal: {:.40}",
+        over
+    );
+    assert!(
+        over.ends_with("</strong>**</p>\n"),
+        "the closing overflow stars did not stay literal: {:.40}",
+        &over[over.len().saturating_sub(40)..]
+    );
+    assert_eq!(
+        over.matches("<strong>").count(),
+        MAX_INLINE_NESTING,
+        "the wrapper count moved"
+    );
+    assert_eq!(over.matches('*').count(), 4, "the literal star count moved");
 }

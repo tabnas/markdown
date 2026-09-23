@@ -43,9 +43,33 @@ link destination), which CommonMark itself allows and all three apply.
 link and image wrappers at `MAX_INLINE_NESTING` (50). A marker past
 either bound stays literal text, as an unpaired marker does, so the text
 the document carries is never dropped: only its nesting stops.
+Every column of the table above is asserted, not described, and that
+includes the half the Rust cells state in words: **the overflow markers
+stay literal**.
 `rs/tests/robust_test.rs::nesting_is_capped_at_the_constants` pins both
-boundaries, and a list marker counts twice because it opens a list and
-an item.
+Rust boundaries and the text they produce past them -- `<p>&gt; x</p>`
+one marker over, `<li>- x</li>` for a list, and `<p>**<strong>` …
+`</strong>**</p>` for the stars, with the wrapper and star counts pinned
+exactly. It used to check only the depth and that the content survived,
+which a port that kept `x` and dropped the markers would also have
+passed, while the recorded output had changed.
+`ts/test/divergence.test.ts` and
+`go/robust_test.go::TestNestingIsUncapped` pin the uncapped rows in the
+other two runtimes, at the same depths and with the same deepest-run
+count. Every count is over ONE node type. The cells above distinguish
+lists from items and `strong` from `emph`, so a predicate matching
+either of a pair would let one stand in for the other -- 100 lists and
+no items, or emphasis where the table records strong -- and leave the
+assertion green over a cell that had changed. So each of the three
+suites counts `list`, `item` and `strong` separately, and pins `emph` at
+zero where paired stars are the input. A list marker still opens two
+containers in all three runtimes, which is why the bound is reached at
+half as many markers as block quotes need.
+
+Splitting the register across three suites is what the absence of a
+`test/spec/divergent.tsv` row costs here, and it is the reason given
+above: a fixture row states one expected value per input. Repairing the
+divergence means deleting all three assertions along with this section.
 
 The cap is there for the caller's stack, not the parser's. Every phase
 of the Rust port is iterative, and a document of 8,000 nested block
