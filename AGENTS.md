@@ -382,7 +382,7 @@ TypeScript (from `ts/`):
 
 ```bash
 npm install            # resolves file: siblings
-npm run build          # tsc --build src test
+npm run build          # tsc --build src && tsc --build test
 npm test               # node --test over dist-test/*.test.js
 npm run conformance    # 652-example suite off src/*.ts — no build, no engine
 node tools/gfm-conformance.mjs             # the 24-example GFM corpus, gfm:true
