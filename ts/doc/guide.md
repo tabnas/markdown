@@ -20,7 +20,7 @@ runtime. The suite is vendored in this repository, so the claim is checkable:
 [Check conformance yourself](#check-conformance-yourself).
 
 On top of CommonMark it implements the complete set of five GFM extensions:
-tables, task list items, autolink literals, strikethrough and the
+tables, task list items, autolink literals, strikethrough, and the
 disallowed-raw-HTML filter. That is 24/24 on the vendored GFM extension suite,
 which `npm run conformance-gfm` runs. All five are gated on the `gfm` option,
 default `true`.

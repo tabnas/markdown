@@ -321,7 +321,7 @@ behaviour under a shared host.
 
 The cost is that the plugin cannot use the engine's lexer for anything. It reads the raw
 source through `ctx.Src` and consumes the token stream only to satisfy the engine's
-trailing-content check. It also has to switch off the string, comment, number and value
+trailing-content check. It also has to switch off the string, comment, number, and value
 lexers first, because they would otherwise mangle Markdown before the parser sees it:
 backticks lex as unterminated strings, `# heading` as a comment, `1. list` as a number.
 
@@ -353,7 +353,7 @@ about attributes or `javascript:` destinations.
 ## What is and is not GFM
 
 The package parses CommonMark, with the complete set of five GFM extensions: tables,
-strikethrough, task list items, autolink literals and disallowed raw HTML. `GFM` gates the
+strikethrough, task list items, autolink literals, and disallowed raw HTML. `GFM` gates the
 five as a single switch rather than as five flags: a document is either GitHub-flavoured
 or it is not, and a per-extension matrix is configuration surface nobody asked for. The
 switch is also what makes `GFM: false` mean something exact: pure CommonMark, byte for
@@ -365,7 +365,7 @@ emphasis or code spans changes. Task list markers are consumed in the block phas
 paragraph's raw text, before the inline scanner sees brackets at all; autolink literals are
 a post-pass over the finished inline tree; the raw-HTML filter is a rendering step. Only
 strikethrough is in the scanner, on the delimiter stack the emphasis algorithm already
-needs. That keeps the scanner that decides code spans, raw HTML, emphasis and links exactly
+needs. That keeps the scanner that decides code spans, raw HTML, emphasis, and links exactly
 as CommonMark specifies it, and the consequence is that `GFM: false` is not an
 approximation of CommonMark but the same parse: byte-identical output over 1430 checked
 records, not a resemblance.

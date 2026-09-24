@@ -12,7 +12,7 @@ and prints the score. The Markdown you learn here is the whole language, not a
 subset of it.
 
 On top of that the package implements the complete set of five GFM extensions
-(tables, task list items, autolink literals, strikethrough and disallowed raw
+(tables, task list items, autolink literals, strikethrough, and disallowed raw
 HTML) and they are on by default. The vendored GFM extension suite is 24
 examples, and `go test -run TestGFMSpec -v ./...` runs that one.
 

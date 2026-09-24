@@ -38,12 +38,12 @@ drift from the other:
 |---|---|---|
 | `make prose` (Vale) | `.github/workflows/docs.yml` | spelling, Google's conventions, and the banned list, at the levels set in `.vale.ini` |
 | `ts/test/docs.test.js` | `make test` | the banned list again, the no-em-dash rule, the first-person rules, the exclamation ration, and no emoji |
-| `ts/scripts/vale-counts.cjs` | `make prose` | that every count in `.vale.ini`, and the total below, are what Vale reports |
+| `ts/scripts/vale-counts.cjs` | `make prose`, `.github/workflows/docs.yml` | that every count in `.vale.ini`, and the total below, are what Vale reports |
 
-The gated set is the reader-facing one: the language-neutral pages under
-`doc/`, the four Diátaxis kinds under `ts/doc/` and `go/doc/`, and the
-four package READMEs. The Rust-port series, the feasibility reports and
-the defect ledgers are working documents, and they are out.
+The gated set is the reader-facing one: the four Diátaxis kinds under
+`ts/doc/` and `go/doc/`, the repository README, and the READMEs of the
+TypeScript, Go, and Rust packages. `AGENTS.md`, `DIVERGENCE.md`,
+`dx-report.md`, and this guide are working documents, and they are out.
 
 **Four checks live in the local gate rather than in Vale, and the reason
 is capability, not preference.**
@@ -66,7 +66,7 @@ is capability, not preference.**
 
 **A Google rule sitting below error level was tried at error first and
 found wrong for these pages.** `.vale.ini` records what each produced on
-a clean run over the gated set: 914 alerts across 12 files. Those
+a clean run over the gated set: 1112 alerts across 12 files. Those
 numbers were written by hand once, and this sentence and the one in
 `.vale.ini` drifted apart from each other and from a run.
 `node ts/scripts/vale-counts.cjs` now reads both against a live Vale run
@@ -102,10 +102,10 @@ explanation) but the normative statement lives in the reference and
 everything else links to it.
 
 **The two runtimes carry the same set.** A page present under `ts/doc/`
-and missing under `go/doc/` is a gap, and `gated-docs.cjs` filters to
-what is on disk so the gap shows up as a missing gate rather than a
-crash. A page only one port has is a deliberate exception and says so in
-its own opening lines.
+and missing under `go/doc/` is a gap. `gated-docs.cjs` names each page,
+and throws when a named page is not on disk, so a page renamed or
+deleted fails the gate rather than leaving it. A page only one port has
+is a deliberate exception and says so in its own opening lines.
 
 ## The published set cites nothing internal
 
@@ -165,7 +165,7 @@ phrases. Ten habits, with the register they apply in:
    ABNF, skip to the reference"). "We" appears only in tutorials, walking
    through code together. "I" appears nowhere.
 8. **Show that the code is real.** Every fenced example carrying a `// =>`
-   assertion is executed by `ts/test/doc-examples.test.js`; when a page
+   assertion is executed by `ts/test/doc-examples.test.ts`; when a page
    says the output is the engine's, that is what it means.
 9. **Jokes are self-directed or about the industry's mundanity, and the
    register goes fully serious the moment correctness or safety is on the
@@ -312,7 +312,7 @@ that names a thing.
 ## Code snippets
 
 A fenced JavaScript or Go example that states a result carries that
-result as a `// =>` comment, and `ts/test/doc-examples.test.js` executes
+result as a `// =>` comment, and `ts/test/doc-examples.test.ts` executes
 it. A snippet that cannot be executed says why in one sentence rather
 than being left to look executable.
 
@@ -373,12 +373,16 @@ notations" is. A rule demoted without that note reads later as an
 oversight, and gets re-promoted by somebody repeating the work.
 
 To accept a word the spelling gate does not know, add it to `accept.txt`
-in the same directory, one stem at a time. Never add a suffix pattern:
-`\w+ise` accepts `madeupise` too, and punches a hole through the gate the
-file exists to make usable. Write a case pair as one regular expression
-(`[Tt]abnas`), because two plain lines make Vale enforce one spelling
-over the other, and it will then report the directory `ts/` as a
-misspelling of `TS`.
+in the same directory, one word at a time. An entry matches a whole
+word, so `[Ee]nder` does not accept `enders`: a plural or a possessive
+is an entry of its own. Never add a suffix pattern: `\w+ise` accepts
+`madeupise` too, and punches a hole through the gate the file exists to
+make usable. Write a case pair as one regular expression (`[Tt]abnas`),
+because two plain lines make Vale enforce one spelling over the other. A
+name also written in lower case, as a package name is, puts its capitals
+in the same entry (`(?:[Jj]son|JSON)`); a name with one correct case is
+one exact entry (`TS`, `DOMPurify`), so Vale reports any other case of
+it.
 
 ## The fleet
 

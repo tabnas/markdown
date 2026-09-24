@@ -1,6 +1,6 @@
 # Reference: @tabnas/markdown (TypeScript)
 
-Complete, dry reference for the public API, every option, the AST, the native tree and the
+Complete, dry reference for the public API, every option, the AST, the native tree, and the
 HTML output rules. For a guided introduction start with the [tutorial](tutorial.md); for
 task recipes see the [how-to guide](guide.md); for design rationale see
 [concepts](concepts.md).
@@ -419,7 +419,7 @@ Recognition rules:
 | `type` | `'delete'` | |
 | `children` | `Inline[]` | |
 
-**`html`**. A raw inline tag, comment, processing instruction, declaration or CDATA
+**`html`**. A raw inline tag, comment, processing instruction, declaration, or CDATA
 section. One node per tag, not per element.
 
 | Field | Type | Notes |
@@ -635,7 +635,7 @@ None is performed. `html_block` and `html_inline` literals are written verbatim,
 from GFM's disallowed-raw-HTML filter: with `gfm` on, the leading `<` of `title`,
 `textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext`,
 opening or closing, any case, followed by whitespace, `/`, `>` or the end of the text, is
-written as `&lt;`. That is nine tag names; every other tag, every attribute and every link
+written as `&lt;`. That is nine tag names; every other tag, every attribute, and every link
 destination is untouched. Untrusted Markdown requires a sanitizer downstream of this
 renderer.
 
@@ -729,7 +729,7 @@ space or tab) is a task list item. The marker is consumed, `listItem.checked` be
 domain is segments of alphanumerics, `_` and `-` separated by `.`, with at least one `.`
 and no `_` in either of the last two segments; trailing `?`, `!`, `.`, `,`, `:`, `*`,
 `_`, `~`, unbalanced `)` and a trailing entity-like `&…;` are excluded from the link.
-Never produced inside a link, a code span, raw HTML or an image description.
+Never produced inside a link, a code span, raw HTML, or an image description.
 
 **Disallowed raw HTML.** In `html` block and inline output the leading `<` of `title`,
 `textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext`,
