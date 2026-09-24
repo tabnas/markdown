@@ -231,7 +231,7 @@ There are three implementations that must behave identically: TypeScript
 | [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/markdown` package. Depends on `@tabnas/parser` only, and only in `src/markdown.ts`. |
 | [`go/`](go/) | Go port — `github.com/tabnas/markdown/go`, package `tabnasmarkdown`. |
 | [`rs/`](rs/) | Rust port: the `tabnas-markdown` crate (library `tabnas_markdown`). Same file split as `go/` under `rs/src/`, plugin wiring in `src/lib.rs`, both HTML-corpus graders under `rs/tests/`. Depends on the `tabnas` crate via a `path` dependency (sibling checkout) and, dev-only, on `tabnas-support` for the fixture runner. Library only: no CLI. See [`rs/AGENTS.md`](rs/AGENTS.md). |
-| [`ci/`](ci/) | `ci/rust/run.sh`, the whole Rust gate, run by CI and runnable locally; plus `ci/workflows/`, the staging area for workflow changes, because session credentials cannot write `.github/workflows/*` (admin `DECISIONS.md` ADR-8). Nothing is staged today: the Rust and prose gates were promoted to `.github/workflows/{rust,docs}.yml`, and git tracks no empty directory, so `ci/workflows/` is absent until something is next staged there. See [`ci/README.md`](ci/README.md). |
+| [`ci/`](ci/) | `ci/rust/run.sh`, the whole Rust gate, run by CI and runnable locally. The Rust and prose gates once staged under `ci/workflows/` were promoted to `.github/workflows/{rust,docs}.yml`, and that directory is not in the tree. To change CI, edit `.github/workflows/` in a reviewed pull request and mirror the edit in the workflow's admin template where it has one (admin `DECISIONS.md` ADR-8, as amended 2026-09-24). See [`ci/README.md`](ci/README.md). |
 | [`test/spec/`](test/spec/) | 83 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) across 10 `*.tsv` files, auto-discovered and run by all three runtimes. The TS/Go/Rust parity contract. See `test/AGENTS.md`. |
 | [`test/spec/tree/`](test/spec/tree/) | Golden native-tree snapshots (`sourcepos` included), one per fixture file, generated from the canonical TypeScript and asserted by `ts/test/tree-golden.test.ts`, `go/tree_golden_test.go` and `rs/tests/tree_golden_test.rs`. |
 | [`test/commonmark/spec.json`](test/commonmark/) | Vendored CommonMark 0.31.2 suite, 652 examples of Markdown → expected **HTML**. The conformance contract for all three runtimes. See `test/AGENTS.md`. |
@@ -446,8 +446,11 @@ TS, Go and Rust sides (`make test-rs` is tests, doctests and clippy;
 script is also the local full gate (fmt, build, tests, doctests, clippy,
 lockfile check). The prose gate is `.github/workflows/docs.yml`, which
 runs Vale and `ts/scripts/vale-counts.cjs`. Both were promoted out of
-`ci/workflows/`, so that directory is not in the tree until something is
-staged there again.
+`ci/workflows/`; a workflow change now goes straight into
+`.github/workflows/`, in a reviewed pull request, and is mirrored in the
+workflow's admin template where it has one (`ci/README.md` says how to
+tell, and how the stamped `clib.yml` and `clib-release.yml` change
+instead).
 
 ## Verify your work
 
@@ -598,7 +601,8 @@ The steps, in order:
    workflow **has no test step** — it reads `main`, builds against
    already-published dependencies, publishes and tags. The bump commit's
    own CI is the only gate there is, and after the merge that is
-   `ci.yml` alone.
+   `ci.yml` and `rust.yml`: the bump touches `rs/`, so the Rust gate runs
+   on it too.
 
    An npm version is immutable, and a Go module tag is worse: proxy.golang.org caches module versions permanently,
    so a `go/vX.Y.Z` naming the wrong commit cannot be moved, only
