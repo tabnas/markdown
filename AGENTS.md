@@ -600,9 +600,9 @@ The steps, in order:
 4. **Wait for `main` CI to go green on the bump commit.** The release
    workflow **has no test step** — it reads `main`, builds against
    already-published dependencies, publishes and tags. The bump commit's
-   own CI is the only gate there is, and after the merge that is
-   `ci.yml` and `rust.yml`: the bump touches `rs/`, so the Rust gate runs
-   on it too.
+   own CI is the only gate there is, and after the merge that is `ci.yml`,
+   `deps-gate.yml` and `rust.yml`: the bump touches `rs/`, so the Rust gate
+   runs on it too.
 
    An npm version is immutable, and a Go module tag is worse: proxy.golang.org caches module versions permanently,
    so a `go/vX.Y.Z` naming the wrong commit cannot be moved, only
