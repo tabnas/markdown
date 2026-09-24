@@ -300,8 +300,8 @@ checkouts, so there is nothing to fetch:
 cargo test --all-targets && cargo test --doc
 ```
 
-Or, from the repository root, `make test-rs`, which adds clippy. For
-what CI would say, including formatting and the lockfile check, run
+Or, from the repository root, `make test-rs`, which adds `cargo clippy`.
+For what CI would say, including formatting and the lockfile check, run
 `ci/rust/run.sh`.
 
 The suite runs the shared `../test/spec/*.tsv` AST fixtures (83 rows in
