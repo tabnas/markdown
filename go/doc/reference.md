@@ -274,7 +274,7 @@ inline phase internally.
 ## AST
 
 Every node is a `map[string]any`. Values are `string`, `int`, `bool`, `[]any`,
-`map[string]any` or `nil`. There are no structs, no cycles, no parent pointers and no
+`map[string]any` or `nil`. There are no structs, no cycles, no parent pointers, and no
 positions. `document` is the root.
 
 Two properties matter for `encoding/json` interop:
@@ -436,7 +436,7 @@ fmt.Println(string(b))
 | `type` | `string` | `"inlineCode"` |
 | `value` | `string` | Line endings converted to spaces; one leading and one trailing space stripped when the content is not all spaces. Escapes and entities are *not* resolved inside a code span. |
 
-**`link`**. Inline, reference, collapsed, shortcut and autolink forms all produce this
+**`link`**. Inline, reference, collapsed, shortcut, and autolink forms all produce this
 node.
 
 | Key | Go type | Notes |
@@ -468,7 +468,7 @@ node.
 | `type` | `string` | `"delete"` |
 | `children` | `[]any` | Non-nil. |
 
-**`html`**. A raw inline tag, comment, processing instruction, declaration or CDATA
+**`html`**. A raw inline tag, comment, processing instruction, declaration, or CDATA
 section. One node per tag, not per element.
 
 | Key | Go type | Notes |
@@ -831,7 +831,7 @@ space or tab) is a task list item. The marker is consumed, `checked` becomes
 domain is segments of alphanumerics, `_` and `-` separated by `.`, with at least one `.`
 and no `_` in either of the last two segments; trailing `?`, `!`, `.`, `,`, `:`, `*`,
 `_`, `~`, unbalanced `)` and a trailing entity-like `&…;` are excluded from the link.
-Never produced inside a link, a code span, raw HTML or an image description.
+Never produced inside a link, a code span, raw HTML, or an image description.
 
 **Disallowed raw HTML.** In `html` block and inline output the leading `<` of `title`,
 `textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script` and `plaintext`,

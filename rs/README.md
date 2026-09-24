@@ -25,7 +25,7 @@ cd rs && cargo test --test gfm_test gfm_spec -- --nocapture   # 24/24
 This is the Rust port of the canonical TypeScript implementation in
 [`../ts`](../ts); the TypeScript version is authoritative and this crate
 tracks it, as the Go port in [`../go`](../go) does. All three runtimes
-run the same shared AST fixtures, the same two HTML corpora and the same
+run the same shared AST fixtures, the same two HTML corpora, and the same
 native-tree goldens, so they are held to one standard rather than to
 each other.
 
@@ -280,7 +280,7 @@ output:
   native tree, whose `sourcepos` matches the TypeScript goldens.
 - **Nesting is capped.** A document may nest
   `MAX_CONTAINER_NESTING` (100) block quotes, lists and list items, and
-  `MAX_INLINE_NESTING` (50) emphasis, link and image wrappers. Deeper
+  `MAX_INLINE_NESTING` (50) emphasis, link, and image wrappers. Deeper
   markers stay literal text. The canonical TypeScript has no such cap,
   so a document nested past either bound parses to a different tree
   here; `DIVERGENCE.md` records it and `tests/robust_test.rs` pins the

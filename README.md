@@ -23,7 +23,7 @@ cd rs && cargo test --test commonmark_test      # 652/652
 ```
 
 On top of CommonMark it implements **five GFM extensions**: tables, task list items,
-autolink literals, strikethrough and disallowed raw HTML. That is the complete GFM
+autolink literals, strikethrough, and disallowed raw HTML. That is the complete GFM
 extension set: 24/24 on the vendored GFM corpus.
 
 The parser itself is engine-free; the Tabnas plugin is wiring around it.
@@ -259,7 +259,7 @@ quadrant, per language.
 
 Per-language hubs: [ts/README.md](ts/README.md) · [go/README.md](go/README.md) ·
 [rs/README.md](rs/README.md). The Rust crate has no Diátaxis set of its own yet; its
-README covers use, install and the differences from the TypeScript.
+README covers use, install, and the differences from the TypeScript.
 
 ## Repository layout
 

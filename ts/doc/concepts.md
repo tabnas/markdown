@@ -139,7 +139,7 @@ Internally the parse produces a native CommonMark node tree. The public AST is a
 projection of that tree, built by `ast.ts`. Having two representations is a real cost,
 one more thing to keep in step, so it is worth being clear about what each is for.
 
-The native tree is **linked**: parent, first child, last child, previous and next
+The native tree is **linked**: parent, first child, last child, and previous and next
 siblings, with no children array anywhere. This is not stylistic. Both phases splice nodes
 mid-walk. The block phase opens and closes blocks from the tail of a spine while it is
 walking that spine; the inline phase's delimiter resolution removes matched delimiters and
@@ -240,7 +240,7 @@ ASTs and both HTML outputs.
 
 The cost is that the plugin cannot use the engine's lexer for anything. It reads the raw
 source through `ctx.src()` and consumes the token stream only to satisfy the engine's
-trailing-content check. It also has to switch off the string, comment, number and value
+trailing-content check. It also has to switch off the string, comment, number, and value
 lexers first, because they would otherwise mangle Markdown before the parser sees it:
 backticks lex as unterminated strings, `# heading` as a comment, `1. list` as a number.
 
@@ -273,7 +273,7 @@ about attributes or `javascript:` destinations.
 ## What is and is not GFM
 
 The package parses CommonMark, with the complete set of five GFM extensions: tables, task
-list items, autolink literals, strikethrough and disallowed raw HTML. That is 24/24 on the
+list items, autolink literals, strikethrough, and disallowed raw HTML. That is 24/24 on the
 GFM specification's extension corpus, and the set is closed: there is no sixth extension
 in the specification waiting to be written. `gfm` gates the five as a single switch rather
 than as five flags: a document is either GitHub-flavoured or it is not, and a
@@ -287,7 +287,7 @@ all; autolink literals are a post-pass over the finished inline tree; the raw-HT
 is a rendering step. Only strikethrough is a genuine addition to the scanner, and it is
 one delimiter character the scanner previously ignored.
 
-That keeps the machinery that decides code spans, raw HTML, emphasis and links exactly as
+That keeps the machinery that decides code spans, raw HTML, emphasis, and links exactly as
 CommonMark specifies it, and the consequence is that `gfm: false` is not an approximation
 of CommonMark but the same parse: byte-identical output over 1430 checked records, not a
 resemblance. Turning the extensions on does move nine of the 652 spec examples: six in
