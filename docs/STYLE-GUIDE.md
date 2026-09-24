@@ -2,7 +2,7 @@
 
 How the tabnas documentation is written. Adapted from
 [aontu](https://github.com/aontu-lang/aontu)'s `docs/STYLE-GUIDE.md`,
-with tabnas's terminology, two-runtime file layout, and executable-example
+with tabnas's terminology, per-runtime file layout, and executable-example
 conventions. This guide is normative for every page
 `ts/scripts/gated-docs.cjs` lists, which is the reader-facing set: 12
 pages in this repository. It exists so that a page written next year
@@ -101,11 +101,14 @@ tutorial, used in a guide, specified in the reference, argued in the
 explanation) but the normative statement lives in the reference and
 everything else links to it.
 
-**The two runtimes carry the same set.** A page present under `ts/doc/`
-and missing under `go/doc/` is a gap. `gated-docs.cjs` names each page,
-and throws when a named page is not on disk, so a page renamed or
-deleted fails the gate rather than leaving it. A page only one port has
-is a deliberate exception and says so in its own opening lines.
+**The two documented runtimes carry the same set.** This repository has
+three runtimes, but only TypeScript and Go have a `doc/` directory; the
+Rust port is documented by `rs/README.md`, which is gated with the other
+READMEs. A page present under `ts/doc/` and missing under `go/doc/` is a
+gap. `gated-docs.cjs` names each page, and throws when a named page is
+not on disk, so a page renamed or deleted fails the gate rather than
+leaving it. A page only one port has is a deliberate exception and
+says so in its own opening lines.
 
 ## The published set cites nothing internal
 
@@ -164,8 +167,9 @@ phrases. Ten habits, with the register they apply in:
 7. **Talk to the reader as "you", and route them** ("If you already know
    ABNF, skip to the reference"). "We" appears only in tutorials, walking
    through code together. "I" appears nowhere.
-8. **Show that the code is real.** Every fenced example carrying a `// =>`
-   assertion is executed by `ts/test/doc-examples.test.ts`; when a page
+8. **Show that the code is real.** A fenced JavaScript example carrying
+   a `// =>` assertion, on a page `ts/test/doc-examples.test.ts` reads,
+   is executed by it ("Code snippets" names those pages); when a page
    says the output is the engine's, that is what it means.
 9. **Jokes are self-directed or about the industry's mundanity, and the
    register goes fully serious the moment correctness or safety is on the
@@ -312,9 +316,15 @@ that names a thing.
 ## Code snippets
 
 A fenced JavaScript or Go example that states a result carries that
-result as a `// =>` comment, and `ts/test/doc-examples.test.ts` executes
-it. A snippet that cannot be executed says why in one sentence rather
-than being left to look executable.
+result as a `// =>` comment. `ts/test/doc-examples.test.ts` executes the
+JavaScript ones on the pages it reads: `README.md`, `ts/README.md`,
+`go/README.md`, and every page under `ts/doc/` and `docs/`. It reads no
+Go fence. It does not read `go/doc/` or `rs/README.md` either, although
+both are gated, so nothing checks a JavaScript `// =>` result placed on
+one of them. The Rust examples in `rs/README.md` run as doctests
+instead, through `cargo test --doc` in `ci/rust/run.sh`. A snippet that
+cannot be executed says why in one sentence rather than being left to
+look executable.
 
 ## Terminology
 
