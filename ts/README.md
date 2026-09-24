@@ -14,7 +14,7 @@ vendored GFM corpus, via `npm run conformance-gfm`.
 This is the canonical implementation; [`go/`](../go/README.md) is a port of it.
 
 [![npm version](https://img.shields.io/npm/v/@tabnas/markdown.svg)](https://npmjs.com/package/@tabnas/markdown)
-[![build](https://github.com/tabnas/markdown/actions/workflows/build.yml/badge.svg)](https://github.com/tabnas/markdown/actions/workflows/build.yml)
+[![CI](https://github.com/tabnas/markdown/actions/workflows/ci.yml/badge.svg)](https://github.com/tabnas/markdown/actions/workflows/ci.yml)
 
 | ![Voxgig](https://www.voxgig.com/res/img/vgt01r.png) | This open source module is sponsored and supported by [Voxgig](https://www.voxgig.com). |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------- |

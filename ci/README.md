@@ -1,14 +1,28 @@
 # ci/
 
-The scripts CI runs, and the staging area for workflow changes.
+The scripts CI runs.
 
-The staging half exists because session credentials cannot write
-`.github/workflows/*` — see admin `DECISIONS.md` ADR-8. To change CI:
+To change CI, edit `.github/workflows/` in a reviewed pull request.
+Session credentials push workflow files (admin `DECISIONS.md` ADR-8, as
+amended 2026-09-24), so staging a workflow under `ci/workflows/` first
+for a maintainer to promote is optional. Sessions still cannot push
+tags, so a maintainer pushes any tag that a tag-triggered workflow
+needs.
 
-1. Put the intended workflow file in `workflows/`, creating the
-   directory if a previous promotion emptied it.
-2. A maintainer promotes it with the admin `rollout/apply-ci-folders.sh`
-   script.
+The amendment also asks for the same change in `tabnas/admin` wherever
+admin keeps a copy of the workflow:
+
+- If admin's `rollout/workflows/` holds a `markdown__<file>.yml`
+  template for the workflow you changed, make the same edit there.
+  Admin `scripts/verify.sh` compares each template with its deployed
+  copy, and a maintainer's `rollout/apply-workflows.sh --apply` would
+  push the older text back over yours.
+- `clib.yml` and `clib-release.yml` are stamped from admin
+  `tasks/clib-template/` and carry a `tabnas-clib-template` marker.
+  Change the template, then restamp with admin `tasks/adopt-clib.sh`
+  and move the `ci/clib*.yml` it writes over the copies in
+  `.github/workflows/`, leaving no `ci/*.yml` behind. Never edit the
+  copies here.
 
 Nothing is staged today. Both workflows that used to sit here have been
 promoted, and what remains under `ci/` is the Rust gate script.
