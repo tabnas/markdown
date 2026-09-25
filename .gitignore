@@ -44,3 +44,5 @@ yarn.lock
 
 # Cargo's build output for the Rust crate in rs/.
 target/
+
+.DS_Store
