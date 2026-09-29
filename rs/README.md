@@ -221,7 +221,7 @@ them:
 ```toml
 [dependencies]
 tabnas-markdown = { path = "../markdown/rs" }
-tabnas = { path = "../parser/rs" }
+tabnas = { package = "tabnas-parser", path = "../parser/rs" }
 ```
 
 The first entry is enough for the examples above: the crate re-exports

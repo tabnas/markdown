@@ -282,7 +282,7 @@ Both runtimes depend on the **bare engine**, not jsonic:
 
 - TypeScript: `@tabnas/parser` is a `peerDependency` (`>=0`) and a `file:../../parser/ts` devDependency. `@tabnas/debug`, `@tabnas/railroad` and `@tabnas/jsonic` are dev-only (debug for `debug-model.test.ts`, railroad for `ts/doc/grammar.{svg,txt}`). `engines.node` is `>=24`.
 - Go: `go/go.mod` requires `github.com/tabnas/parser/go` and **nothing else** — no jsonic, no indirect requirements. Earlier revisions of this file claimed that while `go.mod` said otherwise; it is now true. Keep it true: a new direct requirement in `go/go.mod` needs a reason stated here.
-- Rust: `tabnas = { path = "../../parser/rs" }` in `rs/Cargo.toml` is the crate's only runtime tabnas dependency; `tabnas-support = { path = "../../support/rs" }` (the shared fixture runner) is dev-only. Neither crate is published, so both are sibling checkouts and `rs/Cargo.lock` records a resolution naming them, which is why `ci/rust/run.sh` runs cargo **without** `--locked` and checks the lockfile by diffing it instead, exempting both siblings' recorded versions.
+- Rust: `tabnas = { package = "tabnas-parser", path = "../../parser/rs" }` in `rs/Cargo.toml` is the crate's only runtime tabnas dependency; `tabnas-support = { path = "../../support/rs" }` (the shared fixture runner) is dev-only. Neither crate is published, so both are sibling checkouts and `rs/Cargo.lock` records a resolution naming them, which is why `ci/rust/run.sh` runs cargo **without** `--locked` and checks the lockfile by diffing it instead, exempting both siblings' recorded versions.
 
 Development uses `replace github.com/tabnas/parser/go => ../../parser/go`
 (via the repo-set `go.work`, not checked in). Clone `parser` (plus
