@@ -22,7 +22,7 @@ path = "src/lib.rs"
 # version to fall back on. It is the only runtime tabnas dependency, and
 # only src/lib.rs, src/engine_block.rs and src/engine_inline.rs import
 # it: everything reachable from src/commonmark.rs is engine-free.
-tabnas = { path = "../../parser/rs" }
+tabnas = { package = "tabnas-parser", path = "../../parser/rs" }
 indexmap = { version = "2.2", features = ["serde"] }
 regex = "1.10"
 serde_json = { version = "1.0", features = ["preserve_order"] }
