@@ -26,6 +26,8 @@ on:
     branches: [ '**' ]
     paths:
       - 'rs/**'
+      - 'tabnas.plugin.json'
+      - 'alchemy/**'
       - 'test/spec/**'
       - 'test/commonmark/**'
       - 'test/gfm/**'
@@ -36,6 +38,8 @@ on:
   pull_request:
     paths:
       - 'rs/**'
+      - 'tabnas.plugin.json'
+      - 'alchemy/**'
       - 'test/spec/**'
       - 'test/commonmark/**'
       - 'test/gfm/**'
