@@ -18,7 +18,10 @@
 ; space, since a row is one line. No other character is escaped: the
 ; render cannot look at one (alchemy has no character test), so a cell
 ; is plain text, and text that spells inline markup reads back as that
-; markup. Alignment is not written: every column's delimiter is `---`.
+; markup. A U+0000 in a cell is written as it is for the same reason,
+; and the reader replaces it with U+FFFD, as CommonMark asks of every
+; reader; the loss declaration says so. Alignment is not written: every
+; column's delimiter is `---`.
 ;
 ; The state is one marker: `:start` before the schema, the schema's
 ; width (a number) while rows may follow, and `:ended` after

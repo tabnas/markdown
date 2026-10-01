@@ -8,15 +8,17 @@
 ;
 ; The reader's tree is mdast's shape: a `document` whose `children` are
 ; blocks, a `table` among them whose `children` are `tableRow`s of
-; `tableCell`s, and each cell's `children` the inline nodes of its text,
-; `text` and `inlineCode` with a `value`, `emphasis`, `strong`, `link`
-; and the rest with `children` of their own. `type` is each node's
-; first member. The lift takes the first row's cells as the column
-; labels and every later row as a record, and reads nothing else of the
-; document: not the blocks around the table, and not the table's
-; `align`. A cell is the text under it, so inline markup is flattened
-; to its text, and every cell is a string, as the CSV reader's records
-; are: an empty cell is "", and a cell of one run of text is that run.
+; `tableCell`s, and each cell's `children` the inline nodes of its text:
+; `text`, `inlineCode` and `html` with a `value`, `image` with an `alt`,
+; and `emphasis`, `strong`, `link` and the rest with `children` of their
+; own. `type` is each node's first member. The lift takes the first
+; row's cells as the column labels and every later row as a record, and
+; reads nothing else of the document: not the blocks around the table,
+; and not the table's `align`. A cell is the text under it, every
+; `value` and every image's `alt` in order, so inline markup is
+; flattened to its text and an image to its alt text, and every cell is
+; a string, as the CSV reader's records are: an empty cell is "", and a
+; cell of one run of text is that run.
 ; A cell of several runs (text beside inline markup, `Bob *b*`) cannot
 ; be joined into one string, since alchemy has no operator that joins
 ; strings into a string (`concat` and `join` answer a text, which a cell
@@ -34,9 +36,9 @@
 ;            one, so that its end is known when its object ends;
 ;   phase    `:before` the table, `:header` inside it until its first
 ;            row ends, `:body` once the schema is written, `:after` it;
-;   seen     what the last key was, `:type`, `:value` or `:other`, so
-;            that the scalar that follows it is classified;
-;   in-cell  whether a cell is open, so that a `value` under it is text;
+;   seen     what the last key was, `:type`, `:text` (a `value` or an
+;            `alt`) or `:other`, so that the scalar after it is classified;
+;   in-cell  whether a cell is open, so that text under it is the cell's;
 ;   runs     the open cell's runs of text, in order;
 ;   cells    the open row's cells, as wide as one row.
 ; It grows with the document's nesting and with one row's width, never
@@ -57,18 +59,21 @@ def markdown-cell-text [runs]
     case 1 (top runs)
     case _ (fail "a cell holds several runs of text beside inline markup, which cannot be joined into one string: alchemy has no operator that joins strings into a string")
 
-; A `value` under a cell, which the reader's tree makes a string.
+; A `value` or an image's `alt` under a cell, which the reader's tree
+; makes a string.
 def markdown-run [value]
   match (kind value)
     case :string value
-    case _ (fail "a node's value under a table cell is not a string, which the reader's tree never has")
+    case _ (fail "a node's value or alt under a table cell is not a string, which the reader's tree never has")
 
 ; What the scalar after a key is: the one after `type` names the node,
-; the one after `value` is text, any other is neither.
+; the one after `value` (a text, code or HTML node's text) or `alt` (an
+; image's alt text) is a run of text, any other is neither.
 def markdown-seen [name]
   match name
     case "type" :type
-    case "value" :value
+    case "value" :text
+    case "alt" :text
     case _ :other
 
 ; The top marker, or `:none` with nothing open.
@@ -137,7 +142,7 @@ def markdown-event [stack phase seen in-cell runs cells event]
     case (scalar value)
       match seen
         case :type (markdown-node value stack phase in-cell runs cells)
-        case :value
+        case :text
           if in-cell
             transition [stack phase :other in-cell (push (markdown-run value) runs) cells] []
             transition [stack phase :other in-cell runs cells] []
