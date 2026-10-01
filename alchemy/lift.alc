@@ -1,0 +1,169 @@
+; Markdown's lift: a document's events, as the reader builds them, read
+; as a table's records: the TableRows protocol the standard library's
+; `table-from-json` answers, one `schema`, a `row` per record and
+; `table-end`. This is a library of definitions, each named
+; `markdown-...`, which a host links with its own program (alchemy's
+; `compile_sources`); its entry point is `markdown-lift`, and nothing
+; else here is the host's to call.
+;
+; The reader's tree is mdast's shape: a `document` whose `children` are
+; blocks, a `table` among them whose `children` are `tableRow`s of
+; `tableCell`s, and each cell's `children` the inline nodes of its text,
+; `text` and `inlineCode` with a `value`, `emphasis`, `strong`, `link`
+; and the rest with `children` of their own. `type` is each node's
+; first member. The lift takes the first row's cells as the column
+; labels and every later row as a record, and reads nothing else of the
+; document: not the blocks around the table, and not the table's
+; `align`. A cell is the text under it, so inline markup is flattened
+; to its text, and every cell is a string, as the CSV reader's records
+; are: an empty cell is "", and a cell of one run of text is that run.
+; A cell of several runs (text beside inline markup, `Bob *b*`) cannot
+; be joined into one string, since alchemy has no operator that joins
+; strings into a string (`concat` and `join` answer a text, which a cell
+; may not be), and is refused with INPUT_INVALID, saying so, until it has
+; one; `markdown-cell-text` is the one definition that changes then.
+;
+; The document must hold exactly one table: a second table, or none by
+; the end, is a failure (INPUT_INVALID) that says so, since a Markdown
+; document is read as records through its table and nothing else.
+;
+; The state is one vector, [stack phase seen in-cell runs cells]:
+;   stack    the open containers, one marker each: `:array`, `:node` for
+;            an object whose type is not known yet or is any other node,
+;            and `:table`, `:row` or `:cell` once its `type` has named
+;            one, so that its end is known when its object ends;
+;   phase    `:before` the table, `:header` inside it until its first
+;            row ends, `:body` once the schema is written, `:after` it;
+;   seen     what the last key was, `:type`, `:value` or `:other`, so
+;            that the scalar that follows it is classified;
+;   in-cell  whether a cell is open, so that a `value` under it is text;
+;   runs     the open cell's runs of text, in order;
+;   cells    the open row's cells, as wide as one row.
+; It grows with the document's nesting and with one row's width, never
+; with the table's length: a row is emitted when its object ends and
+; dropped. Events no tree has (a key outside an object, an end with
+; nothing open) fail with INPUT_INVALID, saying so.
+
+; A column record of the TableRows protocol, as the standard library's
+; `public-column` makes one.
+def markdown-column [label]
+  record
+    entry :label label
+
+; A cell's text from its runs: see the header for the cell of several.
+def markdown-cell-text [runs]
+  match (count runs)
+    case 0 ""
+    case 1 (top runs)
+    case _ (fail "a cell holds several runs of text beside inline markup, which cannot be joined into one string: alchemy has no operator that joins strings into a string")
+
+; A `value` under a cell, which the reader's tree makes a string.
+def markdown-run [value]
+  match (kind value)
+    case :string value
+    case _ (fail "a node's value under a table cell is not a string, which the reader's tree never has")
+
+; What the scalar after a key is: the one after `type` names the node,
+; the one after `value` is text, any other is neither.
+def markdown-seen [name]
+  match name
+    case "type" :type
+    case "value" :value
+    case _ :other
+
+; The top marker, or `:none` with nothing open.
+def markdown-top [stack]
+  match (count stack)
+    case 0 :none
+    case _ (top stack)
+
+; The open object's marker, once its `type` has named it.
+def markdown-mark [marker stack]
+  push marker (pop stack)
+
+; The scalar after `type`: the three nodes the lift reads leave their
+; marker on the stack and move the phase; any other node is `:node`.
+def markdown-node [name stack phase in-cell runs cells]
+  match name
+    case "table"
+      match phase
+        case :before (transition [(markdown-mark :table stack) :header :other in-cell runs cells] [])
+        case :after (fail "the document holds a second table, and only a document of one table is read as records")
+        case _ (fail "the events hold a table inside a table, which the reader's tree never has")
+    case "tableRow"
+      match phase
+        case :before (fail "the events hold a table row outside a table, which the reader's tree never has")
+        case :after (fail "the events hold a table row outside a table, which the reader's tree never has")
+        case _ (transition [(markdown-mark :row stack) phase :other in-cell runs []] [])
+    case "tableCell"
+      match phase
+        case :before (fail "the events hold a table cell outside a table, which the reader's tree never has")
+        case :after (fail "the events hold a table cell outside a table, which the reader's tree never has")
+        case _
+          if in-cell
+            fail "the events hold a table cell inside a cell, which the reader's tree never has"
+            transition [(markdown-mark :cell stack) phase :other true [] cells] []
+    case _ (transition [stack phase :other in-cell runs cells] [])
+
+; An object's end: a cell joins its row, a row is the schema or a
+; record, the table is done, and any other node is dropped.
+def markdown-close [stack phase in-cell runs cells]
+  match (markdown-top stack)
+    case :cell
+      transition [(pop stack) phase :other false [] (push (markdown-cell-text runs) cells)] []
+    case :row
+      match phase
+        case :header
+          transition [(pop stack) :body :other in-cell runs []] [(schema (map markdown-column cells))]
+        case _
+          transition [(pop stack) phase :other in-cell runs []] [(row cells)]
+    case :table
+      transition [(pop stack) :after :other in-cell runs cells] []
+    case :node
+      transition [(pop stack) phase :other in-cell runs cells] []
+    case _ (fail "the events end an object that is not open, which a tree's never do")
+
+def markdown-event [stack phase seen in-cell runs cells event]
+  match event
+    case object-start
+      transition [(push :node stack) phase :other in-cell runs cells] []
+    case array-start
+      transition [(push :array stack) phase :other in-cell runs cells] []
+    case (key name)
+      match (markdown-top stack)
+        case :none (fail "the events hold a key outside an object, which a tree's never do")
+        case :array (fail "the events hold a key inside an array, which a tree's never do")
+        case _ (transition [stack phase (markdown-seen name) in-cell runs cells] [])
+    case (scalar value)
+      match seen
+        case :type (markdown-node value stack phase in-cell runs cells)
+        case :value
+          if in-cell
+            transition [stack phase :other in-cell (push (markdown-run value) runs) cells] []
+            transition [stack phase :other in-cell runs cells] []
+        case _ (transition [stack phase :other in-cell runs cells] [])
+    case object-end (markdown-close stack phase in-cell runs cells)
+    case array-end
+      match (markdown-top stack)
+        case :array (transition [(pop stack) phase :other in-cell runs cells] [])
+        case _ (fail "the events end an array that is not open, which a tree's never do")
+
+def markdown-lift-step [s event]
+  match s
+    case [stack phase seen in-cell runs cells]
+      markdown-event stack phase seen in-cell runs cells event
+
+def markdown-lift-finish [s]
+  match s
+    case [stack phase seen in-cell runs cells]
+      match phase
+        case :after
+          match (count stack)
+            case 0 [table-end]
+            case _ (fail "the events ended inside a container, which a tree's never do")
+        case :before (fail "the document holds no table, and only a document of one table is read as records")
+        case _ (fail "the events ended inside the table, which a tree's never do")
+
+; The lift: the document's events in, the table's records out.
+def markdown-lift [input]
+  scan-emit [[] :before :other false [] []] markdown-lift-step markdown-lift-finish (events input)
