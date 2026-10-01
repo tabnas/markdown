@@ -349,3 +349,48 @@ pub fn parse_keep_tree(tn: &Tabnas, src: &str) -> Result<(Value, Option<Tree>), 
     let ast = tn.parse_with_meta(src, Value::object(meta))?;
     Ok((ast, engine_block::take_kept_tree()))
 }
+
+/// The plugin's manifest, `tabnas.plugin.json`, as the repository carries
+/// it. Its `translate` object is what a host that translates reads: the
+/// shapes Markdown is read as (`records`, through the lift, then `tree`)
+/// and written from (`records`), the files that hold the lift and the
+/// render, and the sentences that say what a translation does not keep.
+/// The crate embeds its own copy, `translate/manifest.json`, since a
+/// packaged crate holds nothing outside `rs/`; `tests/translate_test.rs`
+/// holds the copy to the file.
+///
+/// ```
+/// assert!(tabnas_markdown::manifest_text().contains("\"translate\""));
+/// ```
+pub fn manifest_text() -> &'static str {
+    include_str!("../translate/manifest.json")
+}
+
+/// Markdown's lift, `alchemy/lift.alc`, the file the manifest's
+/// `translate.lift` names: a library of alchemy definitions, with no
+/// `export`, whose entry point `markdown-lift` reads a document's events
+/// as a table's records, the first row's cells as the column labels and
+/// every later row as a record. A host links it with its own program.
+/// The crate embeds its own copy, `translate/lift.alc`, held to the file
+/// as the manifest's is.
+///
+/// ```
+/// assert!(tabnas_markdown::lift_text().contains("def markdown-lift [input]"));
+/// ```
+pub fn lift_text() -> &'static str {
+    include_str!("../translate/lift.alc")
+}
+
+/// Markdown's render, `alchemy/render.alc`, the file the manifest's
+/// `translate.render` names: a library of alchemy definitions, with no
+/// `export`, whose entry point `markdown-render` writes a table's records
+/// as one GFM pipe table. A host links it with its own program. The
+/// crate embeds its own copy, `translate/render.alc`, held to the file as
+/// the manifest's is.
+///
+/// ```
+/// assert!(tabnas_markdown::render_text().contains("def markdown-render [input]"));
+/// ```
+pub fn render_text() -> &'static str {
+    include_str!("../translate/render.alc")
+}

@@ -24,6 +24,7 @@ this crate.
 | `tests/markdown_test.rs` | the plugin surface end to end, and the shared default instance across threads |
 | `tests/recognizer_test.rs`, `tests/entities_test.rs`, `tests/robust_test.rs`, `tests/engine_columns_test.rs`, `tests/engine_inline_test.rs`, `tests/perf_test.rs`, `tests/version_test.rs` | the Go test files of the same names, ported |
 | `tests/layering_test.rs` | the layering rule below, asserted over `src/*.rs` with comments stripped |
+| `translate/`, `tests/translate_test.rs` | the crate's copies of `../tabnas.plugin.json`, `../alchemy/lift.alc` and `../alchemy/render.alc`, embedded by `src/lib.rs` as `manifest_text()`, `lift_text()` and `render_text()` (a packaged crate holds nothing outside `rs/`); the test holds each copy to its file, the manifest's `translate` object to its shape, and every definition of the two parts to the `markdown-` prefix, with no name defined in both |
 | `tests/common/mod.rs` | the corpus loaders (which FAIL on a missing or short corpus), the `to_json` number normaliser, the fuzz generator |
 | `README.md` | the crate front page, doctested |
 
