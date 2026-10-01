@@ -15,15 +15,13 @@
 ; row's cells as the column labels and every later row as a record, and
 ; reads nothing else of the document: not the blocks around the table,
 ; and not the table's `align`. A cell is the text under it, every
-; `value` and every image's `alt` in order, so inline markup is
+; `value` and every image's `alt` in order, joined into one string
+; (`string-join`, which alchemy has for this lift: `concat` and `join`
+; answer a text, which a cell may not be), so inline markup is
 ; flattened to its text and an image to its alt text, and every cell is
 ; a string, as the CSV reader's records are: an empty cell is "", and a
-; cell of one run of text is that run.
-; A cell of several runs (text beside inline markup, `Bob *b*`) cannot
-; be joined into one string, since alchemy has no operator that joins
-; strings into a string (`concat` and `join` answer a text, which a cell
-; may not be), and is refused with INPUT_INVALID, saying so, until it has
-; one; `markdown-cell-text` is the one definition that changes then.
+; cell of text beside emphasis, a link, an image, inline HTML or an
+; autolink is their texts run together, `Bob *b*` as `Bob b`.
 ;
 ; The document must hold exactly one table: a second table, or none by
 ; the end, is a failure (INPUT_INVALID) that says so, since a Markdown
@@ -52,12 +50,9 @@ def markdown-column [label]
   record
     entry :label label
 
-; A cell's text from its runs: see the header for the cell of several.
+; A cell's text: its runs, in order, as one string.
 def markdown-cell-text [runs]
-  match (count runs)
-    case 0 ""
-    case 1 (top runs)
-    case _ (fail "a cell holds several runs of text beside inline markup, which cannot be joined into one string: alchemy has no operator that joins strings into a string")
+  string-join "" runs
 
 ; A `value` or an image's `alt` under a cell, which the reader's tree
 ; makes a string.
