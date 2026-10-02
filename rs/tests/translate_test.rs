@@ -76,6 +76,18 @@ fn the_render_the_manifest_names_is_the_one_the_crate_embeds() {
     );
 }
 
+#[test]
+fn the_structural_interface_names_both_entries() {
+    let parts = tabnas_markdown::translate().expect("Markdown carries translation parts");
+    assert_eq!(parts.manifest, tabnas_markdown::manifest_text());
+    let lift = parts.lift.expect("Markdown carries a lift");
+    assert_eq!(lift.entry, "markdown-lift");
+    assert_eq!(lift.source, Some(tabnas_markdown::lift_text()));
+    let render = parts.render.expect("Markdown carries a render");
+    assert_eq!(render.entry, "markdown-render");
+    assert_eq!(render.source, Some(tabnas_markdown::render_text()));
+}
+
 /// A Markdown table is read as records first, through the lift, and as
 /// the document's tree second; it is written from records, as a table.
 /// The manifest carries the languageId the host keys its registry by.
