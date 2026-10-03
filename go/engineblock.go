@@ -50,6 +50,18 @@ type mdParseState struct {
 	meta map[string]any
 }
 
+// mdASTFields is a topological ordering of every member in the public AST.
+// A node only contains the fields for its own type, so one list preserves the
+// canonical TypeScript insertion order for every node: for example a heading
+// is type/depth/children, a code block is type/lang/meta/value, and a table is
+// type/align/children. The Go AST uses plain maps, which cannot carry that
+// order themselves; ParserSource reads this declaration from ctx.Meta when it
+// turns the parsed value into structural events.
+var mdASTFields = []any{
+	"type", "align", "depth", "lang", "meta", "value", "url", "title", "alt",
+	"ordered", "start", "spread", "checked", "children",
+}
+
 // makeMdLineMatcher builds the `mdLine` matcher: each invocation consumes
 // one physical line — terminator included — and emits a single `#LB` token
 // carrying the line as a LineInfo. The matcher owns the engine's point: SI
@@ -105,6 +117,7 @@ func makeMdLineMatcher(lbTin parser.Tin) parser.MakeLexMatcher {
 // parse, with the parse's meta captured for the keepTree handshake.
 func mdPrepare(opts Options) func(ctx *parser.Context) {
 	return func(ctx *parser.Context) {
+		ctx.Meta["fields"] = mdASTFields
 		ctx.U["md"] = &mdParseState{bp: newBlockParser(opts), meta: ctx.Meta}
 	}
 }

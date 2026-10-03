@@ -59,6 +59,20 @@ func TestEngineCommonMarkSpec(t *testing.T) {
 	}
 }
 
+func TestEngineDeclaresASTFieldOrder(t *testing.T) {
+	meta := map[string]any{}
+	if _, err := Make().ParseMeta("# heading", meta); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := meta["fields"].([]any)
+	if !ok {
+		t.Fatalf("fields metadata is %T", meta["fields"])
+	}
+	if !reflect.DeepEqual(got, mdASTFields) {
+		t.Fatalf("fields metadata = %#v, want %#v", got, mdASTFields)
+	}
+}
+
 func TestEngineGFMSpec(t *testing.T) {
 	cases := loadGFMCases(t)
 	j := Make()
