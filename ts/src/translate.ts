@@ -19,6 +19,7 @@ const TRANSLATION: TranslationParts = Object.freeze({
   "$schema": "https://tabnas.dev/schema/plugin.schema.json",
   "name": "@tabnas/markdown",
   "go": "github.com/tabnas/markdown/go",
+  "rust": "tabnas-markdown",
   "description": "CommonMark and GFM Markdown parsing for the tabnas engine.",
   "engine": "@tabnas/parser",
   "extensions": [
