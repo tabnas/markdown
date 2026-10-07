@@ -6,8 +6,9 @@
 # The engine is a PATH DEPENDENCY on the sibling checkout
 # (rs/Cargo.toml: `tabnas = { package = "tabnas-parser", path = "../../parser/rs" }`), and so is the
 # test-support crate (`tabnas-support = { path = "../../support/rs" }`,
-# dev-only). Neither is published, so there is no registry version to
-# fall back on. Clone https://github.com/tabnas/parser and
+# dev-only). Both are on crates.io, but the committed manifest names them
+# by path alone, so there is no registry version to fall back on. Clone
+# https://github.com/tabnas/parser and
 # https://github.com/tabnas/support next to this repo before running.
 set -euo pipefail
 

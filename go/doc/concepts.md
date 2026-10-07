@@ -415,7 +415,7 @@ instance (`markdown.go`, `engineblock.go`), and the `inline` rule with its
 twelve-matcher token alphabet on the nested inline instance
 (`engineinline.go`). The railroad diagrams in `ts/doc/grammar.svg` and
 `ts/doc/grammar-inline.svg` are drawn from live TypeScript instances, and
-the two runtimes register the same rules, name for name.
+all three runtimes register the same rules, name for name.
 
 An earlier revision shipped an inert `markdown-grammar.jsonic` file whose
 single rule merely drained the token stream while a `BO` action bypassed
@@ -572,10 +572,10 @@ fixture reaches it.
 
 ## The parity contract, stated exactly
 
-The two runtimes are held to one standard rather than to each other: both run the vendored
-CommonMark 0.31.2 suite, and both score 652/652 across all 26 sections. That is the primary
+The three runtimes are held to one standard rather than to each other: each runs the vendored
+CommonMark 0.31.2 suite, and each scores 652/652 across all 26 sections. That is the primary
 guarantee, and it is a byte-for-byte HTML comparison against the specification's own
-expected output. Both also run the vendored GFM extension suite, and both score 24/24
+expected output. Each also runs the vendored GFM extension suite, and each scores 24/24
 across its five sections, the same way.
 
 Cross-runtime agreement is checked on top of that, and it is worth being precise about what
@@ -585,8 +585,9 @@ each check does and does not cover, because an earlier version of this document 
 
 What `test/spec/*.tsv` actually guarantees: 75 hand-written cases, each an input plus the
 expected AST as JSON plus an optional options map, run through the **plugin** path
-(`j.Parse`) by `go/parity_test.go` here and `ts/test/parity.test.ts` there, and auto-
-discovered so adding a `.tsv` runs it in both. They are a regression net for the AST shapes
+(`j.Parse`) by `go/parity_test.go` here and by `ts/test/parity.test.ts` and
+`rs/tests/parity_test.rs`, and auto-discovered so adding a `.tsv` runs it in all three.
+They are a regression net for the AST shapes
 someone thought worth pinning, and they are the file you add to when you change behaviour
 deliberately. They are not a proof of equivalence, they cover only the option combinations
 their own rows name, and they say nothing about HTML.

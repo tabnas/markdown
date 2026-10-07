@@ -10,8 +10,9 @@ package tabnasmarkdown
 // gated on the single GFM option.
 //
 // The corpus is test/gfm/spec.json, the same 24 extension examples
-// ts/tools/gfm-conformance.mjs reports on, so the two runtimes are held to one
-// standard rather than to each other. Run just the table with:
+// ts/tools/gfm-conformance.mjs and rs/tests/gfm_test.rs report on, so the
+// runtimes are held to one standard rather than to each other. Run just the
+// table with:
 //
 //	go test -run TestGFMSpec -v ./...
 

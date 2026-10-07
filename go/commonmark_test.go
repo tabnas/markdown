@@ -3,8 +3,9 @@
 package tabnasmarkdown
 
 // CommonMark 0.31.2 conformance, over the vendored 652-example suite in
-// test/commonmark/spec.json — the same corpus ts/test/commonmark.test.ts runs,
-// so the two runtimes are held to one standard rather than to each other.
+// test/commonmark/spec.json — the same corpus ts/test/commonmark.test.ts and
+// rs/tests/commonmark_test.rs run, so the runtimes are held to one standard
+// rather than to each other.
 //
 // The suite is pure CommonMark, so GFM must be off: strikethrough changes the
 // expected output for several examples.

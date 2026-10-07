@@ -7,10 +7,10 @@
 // invisible to them. This suite pins the NATIVE tree instead: every fixture
 // input is parsed with `parseTree` and serialized to a canonical JSON shape
 // (see `serializeTree`), and the result is compared byte-for-values against
-// `test/spec/tree/<name>.json`. `go/tree_golden_test.go` asserts the same
-// files with the same serializer, so the two runtimes cannot drift on
-// anything the native tree carries — sourcepos included — without one of
-// them going red.
+// `test/spec/tree/<name>.json`. `go/tree_golden_test.go` and
+// `rs/tests/tree_golden_test.rs` assert the same files with the same
+// serializer, so the runtimes cannot drift on anything the native tree
+// carries — sourcepos included — without one of them going red.
 //
 // Regenerate after an intentional tree change (TypeScript is canonical):
 //
@@ -42,7 +42,7 @@ const LITERAL_TYPES: Record<string, true> = {
 }
 
 /**
- * The canonical serialization both runtimes produce. Field-for-field it
+ * The canonical serialization every runtime produces. Field-for-field it
  * carries: `type` and `sourcepos` always; `literal` for the types above;
  * `level` for headings; `destination` (and `title` when present) for links
  * and images; fence data for fenced code; `listData`, `tableAlign`,
@@ -91,7 +91,7 @@ for (const spec of loadSpecDir(specDir)) {
       const opts = '' === optsRaw.trim() ? {} : JSON.parse(optsRaw)
       return {
         // The input is stored in its escaped fixture form so the golden
-        // files stay single-line; both runtimes unescape with the shared
+        // files stay single-line; every runtime unescapes with the shared
         // fixture codec before parsing.
         input: row.named('input'),
         opts: optsRaw,

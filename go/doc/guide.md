@@ -14,8 +14,8 @@ Two answers first, because most of these recipes depend on them:
   [Render untrusted Markdown safely](#render-untrusted-markdown-safely).
 
 **The parser is conformant to CommonMark 0.31.2**: 652/652 examples of the
-specification's own suite, all 26 sections, in both the Go and the TypeScript
-runtime. The suite is vendored in this repository, so the claim is checkable:
+specification's own suite, all 26 sections, in this runtime and in the other two.
+The suite is vendored in this repository, so the claim is checkable:
 `go test -run TestCommonMarkSpec -v ./...` runs it; see
 [Check conformance yourself](#check-conformance-yourself).
 
@@ -655,8 +655,8 @@ Autolinks 11, Task list items 2, Strikethrough 2, Disallowed Raw HTML 1. Every
 vendored section passes, and every one is asserted. The TypeScript twin is
 `npm run conformance-gfm`.
 
-Everything, including the shared `test/spec/*.tsv` fixtures that both runtimes
-assert:
+Everything, including the shared `test/spec/*.tsv` fixtures that every runtime
+asserts:
 
 ```bash
 cd go
@@ -671,7 +671,7 @@ cd ts
 npm run conformance
 ```
 
-The 75 fixtures pin the AST through the plugin path in both runtimes; they are a
+The 75 fixtures pin the AST through the plugin path in every runtime; they are a
 regression net, not a proof that the runtimes agree. The claim that they agree
 rests on a wider comparison: all 652 spec inputs under all four `GFM` × `Breaks`
 combinations (2608 records) with both the AST and the HTML compared on each,

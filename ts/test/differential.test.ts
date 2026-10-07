@@ -17,9 +17,9 @@
 // paths could plausibly diverge (link tails holding backticks, tables in
 // containers, trailing spaces, reference definitions...). The generator is
 // deterministic — same seeds, same documents, every run — and
-// `go/differential_test.go` builds the identical documents with the
-// identical generator, so a reproduction case can be named by its seed in
-// either runtime.
+// `go/differential_test.go` and `rs/tests/differential_test.rs` build the
+// identical documents with the identical generator, so a reproduction case
+// can be named by its seed in any runtime.
 
 import { test } from 'node:test'
 import assert from 'node:assert'

@@ -6,7 +6,7 @@ task recipes see the [how-to guide](guide.md); for design rationale see
 [concepts](concepts.md).
 
 **Conformant to CommonMark 0.31.2.** 652/652 examples of the specification's own test
-suite, all 26 sections, in both the TypeScript and the Go runtime. The suite is vendored
+suite, all 26 sections, in this runtime and in the other two. The suite is vendored
 at `test/commonmark/spec.json` and is run with `npm run conformance`. The five GFM
 extensions score 24/24 on the vendored extension corpus `test/gfm/spec.json`, run with
 `npm run conformance-gfm`. Full figures in [Conformance](#conformance).
@@ -673,7 +673,7 @@ All 26 sections pass.
 Runtime parity is checked separately: 676 examples (652 CommonMark + 24 GFM) across 4
 option combinations (`gfm` × `breaks`) is 2704 records, with 0 differing ASTs and 0
 differing HTML outputs between TypeScript and Go. The 75 shared AST fixtures in
-`test/spec/*.tsv` pass in both.
+`test/spec/*.tsv` pass in every runtime.
 
 ### GFM
 
@@ -705,7 +705,7 @@ The extension set is complete: **24/24** on the vendored GFM extension corpus.
 | Footnotes | Not implemented: a GitHub product feature, not a section of the GFM spec suite | (none) |
 
 `gfm: false` disables all five together, and the output is then plain CommonMark,
-byte-identical to a pure-CommonMark parse over 1430 checked records. Both runtimes
+byte-identical to a pure-CommonMark parse over 1430 checked records. All three runtimes
 implement all five.
 
 **Tables.** A delimiter row on the line directly after an open paragraph whose last line

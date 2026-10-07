@@ -8,7 +8,7 @@ Three things are worth settling before anything else, because they decide how yo
 rest of this document.
 
 **The parser is conformant to CommonMark 0.31.2.** All 652 examples of the specification's
-own test suite pass, in all 26 sections, in both the TypeScript and the Go runtime. The
+own test suite pass, in all 26 sections, in this runtime and in the other two. The
 suite is vendored at `test/commonmark/spec.json` and `npm run conformance` runs it, so the
 claim is a measurement anyone can repeat rather than a description of intent. Most of what
 follows is an account of what it cost to make that number true, which is why the number
@@ -225,8 +225,8 @@ The conformance suite runs without the engine, without a build step, and without
 `node_modules`. It stages the sources in a temporary directory and executes them under
 Node's type stripping. That means the 652/652 figure can be checked in an environment
 where the engine is not installed or not yet built, including CI on a fresh clone, and
-including the sibling-development setup where the engine is a local `file:` dependency
-that may be mid-change.
+including the sibling-development setup, where the engine in `node_modules` is a link to a
+local checkout that may be mid-change.
 
 It keeps the failure surface narrow. When a conformance example fails you know it is the
 parser, because there is nothing else in the process. A parser entangled with a lexer would

@@ -3,7 +3,7 @@
 A CommonMark parser for the [Tabnas](https://github.com/tabnas/parser) engine.
 
 **This parser is conformant to CommonMark 0.31.2**, all 652 examples, across all 26
-sections of the spec suite, in both runtimes. The suite is vendored in this repository, so
+sections of the spec suite, in all three runtimes. The suite is vendored in this repository, so
 the claim is checkable: `npm run conformance` reports 652/652, with no build step and no
 engine installed. It runs with the GFM extensions off, which is what measuring CommonMark
 conformance means: with `gfm: true` the extensions deliberately change nine of those

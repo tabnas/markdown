@@ -14,10 +14,10 @@ package tabnasmarkdown
 // test/spec/mixed.tsv), so "all suites green" is necessary but not sufficient
 // once the plugin path stops sharing the drivers.
 //
-// The seeded document generator is identical to the one in
-// ts/test/differential.test.ts — same fragments, same xorshift32, same
-// documents — so a reproduction case can be named by its seed in either
-// runtime.
+// The seeded document generator is identical to the ones in
+// ts/test/differential.test.ts and rs/tests/common/mod.rs — same fragments,
+// same xorshift32, same documents — so a reproduction case can be named by
+// its seed in any runtime.
 
 import (
 	"encoding/json"

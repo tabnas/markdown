@@ -1321,7 +1321,7 @@ export class BlockParser {
    * Not simply `offset`: a JavaScript string index counts UTF-16 units, so an
    * astral character (emoji, rare CJK) would advance the column by two. A
    * column means a character, so `\u{1F600} *x*` must report the same columns
-   * in both runtimes.
+   * in every runtime.
    *
    * Counted incrementally from the last offset already measured. `addChild`
    * runs once per container opened, so counting from the start of the line

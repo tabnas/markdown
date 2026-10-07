@@ -1,10 +1,11 @@
 # Build, test and publish the TypeScript (ts/), Go (go/) and Rust (rs/)
 # implementations. ts/ is canonical; go/ and rs/ track it.
 #
-# Local build/test resolve the unpublished @tabnas siblings via the
-# repo-set go.work + node_modules symlinks (admin/scripts/link.sh). The
-# Rust crate takes the engine and the test-support crate as path
-# dependencies on the sibling checkouts (rs/Cargo.toml).
+# TypeScript and Go build against the published @tabnas siblings (npm, the
+# Go proxy); admin/scripts/link.sh can point them at local checkouts
+# instead (node_modules symlinks + a go.work one level up). The Rust crate
+# takes the engine and the test-support crate as path dependencies on the
+# sibling checkouts (rs/Cargo.toml).
 
 .PHONY: all build test clean build-ts build-go build-rs test-ts test-go test-rs \
         clean-ts clean-go clean-rs publish-ts publish-go version-rs tags-go reset \
@@ -74,8 +75,9 @@ clean-rs:
 # rs/Cargo.lock, which rs/tests/version_test.rs holds to
 # ts/package.json. The lock is refreshed by a metadata read rather
 # than a build, so this stays fast and touches nothing else. There is
-# no publish-rs: the crate is unpublished and consumed as a sibling
-# checkout, so a version bump is the whole release.
+# no publish-rs: release.yml's crates job publishes the crate to
+# crates.io from the release tag, after crates-release.yml rewrites the
+# manifest's path dependencies as crates.io requirements.
 version-rs:
 	@test -n "$(V)" || (echo "Usage: make version-rs V=x.y.z" && exit 1)
 	sed -i.bak 's/^version = ".*"/version = "$(V)"/' rs/Cargo.toml
