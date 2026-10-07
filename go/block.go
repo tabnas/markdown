@@ -461,8 +461,8 @@ func (p *blockParser) sourceColumn(offset int) int {
 	return p.colAnchorChars
 }
 
-// jsTrim, which cuts a fenced code block's info string identically in both
-// runtimes, lives in common.go \u2014 inline.go needs the same set to decide hard
+// jsTrim, which cuts a fenced code block's info string identically in every
+// runtime, lives in common.go \u2014 inline.go needs the same set to decide hard
 // line breaks, and normalizeReference needs it for \u00A74.7 label matching.
 
 // trailingBlankRunStart is the index at which the trailing /(\n *)+/ of b

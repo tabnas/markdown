@@ -57,7 +57,8 @@ promoted, and what remains under `ci/` is the Rust gate script.
 
 - **`.github/workflows/rust.yml`**, the Rust gate: `ci/rust/run.sh` over
   the crate in `rs/`, on the MSRV pinned in `rs/Cargo.toml`. The engine
-  and the test-support crate are unpublished path dependencies on
-  sibling checkouts (`../parser/rs`, `../support/rs`), so the workflow
+  and the test-support crate are path dependencies on sibling checkouts
+  (`../parser/rs`, `../support/rs`); both are on crates.io, but the
+  committed manifest stays path-only, so the workflow
   checks this repository out into a named directory and clones both
   siblings beside it before running the script.

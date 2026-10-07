@@ -66,9 +66,11 @@ jobs:
         with:
           path: markdown
 
-      # Sibling main, not a release: neither crate is published, so this
-      # is the only resolution there is. It is also the one CI already
-      # uses for Go, so both ports are measured against the same engine.
+      # Sibling main, not a release: rs/Cargo.toml names both crates by path
+      # (they are on crates.io, but the committed manifest stays
+      # path-only), so this is the only resolution there is. It is also the
+      # one CI already uses for Go, so both ports are measured against the
+      # same engine.
       - name: Clone the sibling engine
         run: git clone --depth 1 https://github.com/tabnas/parser.git parser
 

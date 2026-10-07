@@ -107,16 +107,19 @@ npm install @tabnas/markdown @tabnas/parser
 
 # Go (1.24+)
 go get github.com/tabnas/markdown/go@latest
+
+# Rust (1.85+)
+cargo add tabnas-markdown
 ```
 
 `@tabnas/parser` is a peer dependency of the npm package. The Go module requires
 `github.com/tabnas/parser/go` (the bare engine), and `github.com/tabnas/support/go`
 for its tests only. The package itself imports nothing but the engine.
 
-The Rust crate, `tabnas-markdown` in [`rs/`](rs/), is not published: the `tabnas` engine
-crate it depends on is unpublished too, so both are consumed as sibling checkouts through
-`path` dependencies. Clone `parser` and `markdown` next to each other and see
-[`rs/README.md`](rs/README.md) for the two `Cargo.toml` lines.
+The Rust crate, `tabnas-markdown` in [`rs/`](rs/), runs on the engine crate `tabnas-parser`,
+and both are published on crates.io. In this repository the crate is built against a sibling
+`parser` checkout by path, which is not how a consumer takes it. See
+[`rs/README.md`](rs/README.md) for when your own code needs the engine crate as well.
 
 ## What is parsed
 

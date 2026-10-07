@@ -279,11 +279,11 @@ deleted with the rescope.
 
 ## The tabnas engine dependency
 
-Both runtimes depend on the **bare engine**, not jsonic:
+All three runtimes depend on the **bare engine**, not jsonic:
 
 - TypeScript: `@tabnas/parser` is a `peerDependency` (`>=0`) and a `"*"` devDependency. `@tabnas/debug`, `@tabnas/railroad`, `@tabnas/jsonic` and `@tabnas/support` are dev-only `"*"` devDependencies (debug for `debug-model.test.ts`, railroad for `ts/doc/grammar.{svg,txt}`, jsonic for `markdown.test.ts`, support for the shared fixture runner the parity, differential and tree-golden tests use). None is a `file:` path: each resolves to whatever the install leaves in `ts/node_modules/@tabnas/`, a symlink to the sibling checkout where `admin/scripts/link.sh` wired one, the registry copy otherwise. `engines.node` is `>=24`.
 - Go: `go/go.mod` requires `github.com/tabnas/parser/go` and `github.com/tabnas/support/go`, and **nothing else**: no jsonic, no indirect requirements. The package itself imports only the engine. `support/go` is the shared fixture runner, for the tests only: `go/parity_test.go`, `go/differential_test.go` and `go/tree_golden_test.go` import it, and no non-test file does. Keep it that way: a new direct requirement in `go/go.mod` needs a reason stated here.
-- Rust: `tabnas = { package = "tabnas-parser", path = "../../parser/rs" }` in `rs/Cargo.toml` is the crate's only runtime tabnas dependency; `tabnas-support = { path = "../../support/rs" }` (the shared fixture runner) is dev-only. Neither crate is published, so both are sibling checkouts and `rs/Cargo.lock` records a resolution naming them, which is why `ci/rust/run.sh` runs cargo **without** `--locked` and checks the lockfile by diffing it instead, exempting both siblings' recorded versions.
+- Rust: `tabnas = { package = "tabnas-parser", path = "../../parser/rs" }` in `rs/Cargo.toml` is the crate's only runtime tabnas dependency; `tabnas-support = { path = "../../support/rs" }` (the shared fixture runner) is dev-only. Both crates are on crates.io (the engine as `tabnas-parser`), but the committed manifest stays path-only: `crates-release.yml` rewrites the engine's path into a crates.io requirement, and drops the dev-only runner, only in the copy it publishes. A path dependency resolves to whatever version the sibling checkout holds, so `rs/Cargo.lock`'s entries for the two siblings move whenever their checkouts do. That is why `ci/rust/run.sh` runs cargo **without** `--locked` and checks the lockfile by diffing it instead, exempting both siblings' recorded versions.
 
 `go/go.mod` carries no `replace`, so Go needs no sibling checkout: both
 requirements resolve from the module proxy. To develop against a sibling
@@ -312,12 +312,12 @@ the reverse.
 Three things in this repo are contracts, not samples:
 
 1. **The conformance corpus.** `test/commonmark/spec.json` is the
-   vendored 0.31.2 suite, unmodified. Both runtimes are at 652/652. A
+   vendored 0.31.2 suite, unmodified. All three runtimes are at 652/652. A
    change that drops an example is a regression, not a trade-off. Do not
    edit `spec.json`, do not skip examples, do not add a tolerance to the
    comparison — it is a byte-for-byte HTML match and must stay one.
 2. **The GFM extension corpus.** `test/gfm/spec.json`, same rules, run
-   with `gfm:true`. Both runtimes are at 24/24, every section asserted.
+   with `gfm:true`. All three runtimes are at 24/24, every section asserted.
 3. **The doc-example assertions.** Every ` ```js ` block in `README.md`,
    `ts/README.md`, `go/README.md` and `ts/doc/` that contains a `// =>`
    line is executed by `ts/test/doc-examples.test.ts`. A wrong expected
@@ -546,9 +546,9 @@ The steps, in order:
    two Rust sites `rs/Cargo.toml` and `rs/src/lib.rs` (plus the crate's
    entry in `rs/Cargo.lock`; `make version-rs V=x.y.z` does all three Rust
    files). Drift is caught by `ts/test/version.test.ts`,
-   `go/version_test.go` and `rs/tests/version_test.rs`. The Rust crate is
-   unpublished and consumed as a sibling checkout, so the bump IS its
-   release; there is no `publish-rs`.
+   `go/version_test.go` and `rs/tests/version_test.rs`. The Rust crate
+   ships with the release: `release.yml`'s `crates` job publishes it to
+   crates.io from the release tag, so there is no `publish-rs`.
 2. Verify against the **published** dependencies rather than your checkout.
    The release runner installs fresh from the registry; a working tree
    usually does not, so reproduce that before believing anything:
@@ -569,12 +569,14 @@ The steps, in order:
    suite then passes against unreleased code while appearing to verify the
    published one. Reinstalling is the part that matters.
 
-   One thing a clean install does **not** isolate:
-   `ts/test/doc-examples.test.*` resolves `@tabnas/*` by filesystem path
-   (`const TABNAS = path.join(REPO, '..')`), not through `node_modules`. If
-   unbuilt sibling checkouts sit beside this repo, those blocks fail with
-   `MODULE_NOT_FOUND` no matter what you installed — build the siblings, or
-   verify somewhere they are absent.
+   A clean install also covers the doc examples.
+   `ts/test/doc-examples.test.*` resolves a doc example's `require`
+   through `node_modules` first; only a `@tabnas/*` package that is not
+   installed falls back to the sibling checkout `../<x>/ts`
+   (`const TABNAS = path.join(REPO, '..')`), and `@tabnas/markdown` itself
+   resolves to this repository's `ts/`. The tested blocks name only
+   `@tabnas/markdown` and `@tabnas/parser`, a devDependency, so no sibling
+   checkout is involved.
 
    `npm test` already compiles here: `ts/package.json` sets `pretest` to
    `npm run build`, which npm runs automatically. No separate build step is
@@ -588,13 +590,17 @@ The steps, in order:
    ```bash
    (
      cd go
-     go mod edit -json | grep -q '"Replace": null' || { echo 'go.mod has a replace'; exit 1; }
+     go mod edit -json | jq -e '.Replace == null' >/dev/null || { echo 'go.mod has a replace'; exit 1; }
      GOWORK=off go test -count=1 ./...
    )
    ```
 
    `-count=1` because shared fixtures live outside the Go module, so a
-   changed corpus does not invalidate the test cache.
+   changed corpus does not invalidate the test cache. The check asks `jq`,
+   not `grep`: current Go leaves the `Replace` key out when there is no
+   replace, where older Go printed `"Replace": null`, and `jq` reads a
+   missing key as null, so the check passes on a clean `go.mod` and fails
+   on a replace either way.
 3. **Merge the bump through a reviewed PR.** That is the house convention —
    `CONTRIBUTING.md` squash-merges PRs and takes the title as the commit
    message — and what `release.yml`'s own header describes. A direct push to
@@ -760,7 +766,7 @@ They stay in the Makefile because removing them is a separate change.
 
 ## Error codes
 
-This package declares **no** error codes of its own — neither runtime
+This package declares **no** error codes of its own — no runtime
 extends `options.error` — and none are exercised: no fixture in `test/spec/`
 carries an error row at all. That is not a gap; it follows from the format.
 CommonMark defines an output for every input — there are no ill-formed
@@ -770,7 +776,7 @@ errors.
 
 The machine-readable list is [`tabnas.plugin.json`](tabnas.plugin.json)
 (`errorCodes` — correctly empty). If a genuinely markdown-specific failure
-ever needs a code, declare it in both runtimes, add it to that list, and pin
+ever needs a code, declare it in every runtime, add it to that list, and pin
 it with an `ERROR:<code>` fixture row — the code is the contract, not the
 message.
 
@@ -877,10 +883,10 @@ Diátaxis cross-link table in `README.md` current.
 Three things must not fall out of the docs as they change:
 
 * **The conformance claim, stated plainly and early** — at the top of
-  `README.md`, `ts/README.md` and `go/README.md`, and near the top of
-  every tutorial, guide and reference: conformant to CommonMark 0.31.2,
-  652 examples, 26 sections, both runtimes, with the command that shows
-  it. A reader meeting the package should not have to hunt for it.
+  `README.md`, `ts/README.md`, `go/README.md` and `rs/README.md`, and near
+  the top of every tutorial, guide and reference: conformant to CommonMark
+  0.31.2, 652 examples, 26 sections, all three runtimes, with the command
+  that shows it. A reader meeting the package should not have to hunt for it.
 * **The unsanitized-HTML warning**, wherever HTML output is documented —
   including the note that the disallowed-raw-HTML filter is not a
   sanitizer.

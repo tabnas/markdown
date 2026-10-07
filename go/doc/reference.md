@@ -773,7 +773,7 @@ All 26 sections pass.
 Runtime parity is checked separately: 676 examples (652 CommonMark + 24 GFM) across 4
 option combinations (`gfm` × `breaks`) is 2704 records, with 0 differing ASTs and 0
 differing HTML outputs between TypeScript and Go. The 75 shared AST fixtures in
-`test/spec/*.tsv` pass in both; `go test -run TestSpec ./...` runs the Go half.
+`test/spec/*.tsv` pass in every runtime; `go test -run TestSpec ./...` runs Go's share.
 
 ### GFM
 

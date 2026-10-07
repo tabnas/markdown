@@ -212,24 +212,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Install
 
-The `tabnas` engine crate is not published to a registry, so it and this
-crate are consumed as **sibling checkouts**, the standard tabnas
-development model. Clone `https://github.com/tabnas/parser` and
-`https://github.com/tabnas/markdown` next to each other and point at
-them:
+The crate and the engine it runs on are both on crates.io, the engine as
+`tabnas-parser`, whose library is named `tabnas` in code:
 
-```toml
-[dependencies]
-tabnas-markdown = { path = "../markdown/rs" }
-tabnas = { package = "tabnas-parser", path = "../parser/rs" }
+```bash
+cargo add tabnas-markdown
 ```
 
-The first entry is enough for the examples above: the crate re-exports
+That is enough for the examples above: the crate re-exports
 `Tabnas` and the error type (as `MarkdownError`), and the AST comes back
-as a `tabnas::Value` whose methods need no import. Add the second entry
-as soon as your code names any other engine type, because a crate's
-dependencies are not passed on to its dependents. Running the tests
-needs a third sibling, `https://github.com/tabnas/support`, which holds
+as a `tabnas::Value` whose methods need no import. Add the engine with
+`cargo add tabnas-parser` as soon as your code names any other engine
+type, because a crate's dependencies are not passed on to its dependents.
+
+In this repository, `Cargo.toml` takes the engine by path from a sibling
+checkout of `https://github.com/tabnas/parser` instead. Running the tests
+needs a second sibling, `https://github.com/tabnas/support`, which holds
 the shared fixture runner and is a dev-dependency only.
 
 The crate needs Rust 1.85 or later.

@@ -9,8 +9,9 @@ package tabnasmarkdown
 // drops SourcePos — so a positional divergence between the runtimes is
 // invisible to them. This suite pins the NATIVE tree instead: every fixture
 // input is parsed with ParseTree and serialized to the canonical JSON shape
-// both runtimes implement (see serializeTree here and in
-// ts/test/tree-golden.test.ts), then compared against
+// every runtime implements (see serializeTree here, in
+// ts/test/tree-golden.test.ts and in rs/tests/tree_golden_test.rs), then
+// compared against
 // `test/spec/tree/<name>.json`. The goldens are generated from the canonical
 // TypeScript:
 //
