@@ -110,7 +110,8 @@ go get github.com/tabnas/markdown/go@latest
 ```
 
 `@tabnas/parser` is a peer dependency of the npm package. The Go module requires
-`github.com/tabnas/parser/go` (the bare engine) and nothing else.
+`github.com/tabnas/parser/go` (the bare engine), and `github.com/tabnas/support/go`
+for its tests only. The package itself imports nothing but the engine.
 
 The Rust crate, `tabnas-markdown` in [`rs/`](rs/), is not published: the `tabnas` engine
 crate it depends on is unpublished too, so both are consumed as sibling checkouts through
