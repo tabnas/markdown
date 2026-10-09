@@ -19,10 +19,10 @@ test('translation parts expose the manifest, sources and explicit entries', () =
 })
 
 // An embed takes a plain tree into a format's own schema. Markdown's
-// events carry an mdast tree, but its render writes from records, which
-// any tree's rows give, so its manifest names no embed and the package
-// carries none; a manifest that named one would be held to its file here,
-// as the lift and the render are above.
+// events carry its own mdast-adjacent tree, but its render writes from
+// records, which any tree's rows give, so its manifest names no embed and
+// the package carries none; a manifest that named one would be held to its
+// file here, as the lift and the render are above.
 test('translation parts carry the embed the manifest names, and none where it names none', () => {
   const parts = translate()
   const spec = JSON.parse(readFileSync(path.join(root, 'tabnas.plugin.json'), 'utf8')).translate

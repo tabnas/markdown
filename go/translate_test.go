@@ -41,10 +41,10 @@ func TestTranslationParts(t *testing.T) {
 }
 
 // An embed takes a plain tree into a format's own schema. Markdown's
-// events carry an mdast tree, but its render writes from records, which
-// any tree's rows give, so its manifest names no embed and the package
-// carries none; a manifest that named one would be held to its file here,
-// as the lift and the render are above.
+// events carry its own mdast-adjacent tree, but its render writes from
+// records, which any tree's rows give, so its manifest names no embed and
+// the package carries none; a manifest that named one would be held to its
+// file here, as the lift and the render are above.
 func TestTranslationEmbed(t *testing.T) {
 	manifest, err := os.ReadFile("../tabnas.plugin.json")
 	if err != nil {

@@ -395,7 +395,9 @@ pub const fn translate() -> Option<TranslationParts> {
 /// it. Its `translate` object is what a host that translates reads: the
 /// shapes Markdown is read as (`records`, through the lift, then `tree`)
 /// and written from (`records`), the root whose elements are the records
-/// (`array`), the tree its events carry (`mdast`, not a plain one), the
+/// (`array`), the tree its events carry (`markdown-ast`, the
+/// mdast-adjacent AST the reader builds, whose root is a `document`, not
+/// mdast's `root`, and not a plain tree either), the
 /// files that hold the lift and the render, and the sentences that say
 /// what a translation does not keep. The crate embeds its own copy,
 /// `translate/manifest.json`, since a packaged crate holds nothing outside

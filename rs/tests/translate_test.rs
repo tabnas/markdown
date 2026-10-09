@@ -79,10 +79,10 @@ fn the_render_the_manifest_names_is_the_one_the_crate_embeds() {
 }
 
 /// An embed takes a plain tree into a format's own schema. Markdown's
-/// events carry an mdast tree, but its render writes from records, which
-/// any tree's rows give, so its manifest names no embed and the crate
-/// carries none; a manifest that named one would be held to its file
-/// here, as the lift and the render are above.
+/// events carry its own mdast-adjacent tree, but its render writes from
+/// records, which any tree's rows give, so its manifest names no embed and
+/// the crate carries none; a manifest that named one would be held to its
+/// file here, as the lift and the render are above.
 #[test]
 fn the_embed_the_manifest_names_is_the_one_the_crate_embeds() {
     let translate = translate();
@@ -120,7 +120,8 @@ fn the_structural_interface_names_both_entries() {
 }
 
 /// A Markdown table is read as records first, through the lift, and as
-/// the document's tree second, an mdast tree rather than a plain one; it
+/// the document's tree second, its mdast-adjacent tree (schema
+/// `markdown-ast`, whose root is a `document`) rather than a plain one; it
 /// is written from records, as a table, the records being the elements of
 /// the root array. The manifest carries the languageId the host keys its
 /// registry by.
@@ -134,7 +135,7 @@ fn markdown_reads_records_through_a_lift_and_writes_records() {
     assert_eq!(translate["reads"], json!(["records", "tree"]));
     assert_eq!(translate["writes"], "records");
     assert_eq!(translate["root"], "array");
-    assert_eq!(translate["schema"], "mdast");
+    assert_eq!(translate["schema"], "markdown-ast");
     assert_eq!(translate["lift"], "alchemy/lift.alc");
     assert_eq!(translate["render"], "alchemy/render.alc");
 }

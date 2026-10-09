@@ -55,7 +55,7 @@ const TRANSLATION: TranslationParts = Object.freeze({
     ],
     "writes": "records",
     "root": "array",
-    "schema": "mdast",
+    "schema": "markdown-ast",
     "lift": "alchemy/lift.alc",
     "render": "alchemy/render.alc",
     "loss": [
