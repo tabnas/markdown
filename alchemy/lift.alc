@@ -23,26 +23,36 @@
 ; cell of text beside emphasis, a link, an image, inline HTML or an
 ; autolink is their texts run together, `Bob *b*` as `Bob b`.
 ;
-; The document must hold exactly one table: a second table, or none by
-; the end, is a failure (INPUT_INVALID) that says so, since a Markdown
-; document is read as records through its table and nothing else.
+; A Markdown document is read as records through its table and nothing
+; else, so the first table is the one read: a table after it is not
+; read, its rows and cells passed over as any other node's. A document
+; with no table is read as the empty table, a schema of no columns, no
+; row and `table-end`, which the render writes back as the empty
+; document. The manifest's loss lines say both.
 ;
 ; The state is one vector, [stack phase seen in-cell runs cells]:
 ;   stack    the open containers, one marker each: `:array`, `:node` for
 ;            an object whose type is not known yet or is any other node,
 ;            and `:table`, `:row` or `:cell` once its `type` has named
-;            one, so that its end is known when its object ends;
+;            one, or `:later` for a table after the first, so that its
+;            end is known when its object ends;
 ;   phase    `:before` the table, `:header` inside it until its first
-;            row ends, `:body` once the schema is written, `:after` it;
+;            row ends, `:body` once the schema is written, `:after` it,
+;            and `:later` inside a table after it, which is not read;
 ;   seen     what the last key was, `:type`, `:text` (a `value` or an
-;            `alt`) or `:other`, so that the scalar after it is classified;
+;            `alt`) or `:other`, so that the scalar after it is classified,
+;            and `:none` before the first event, so that events with no
+;            value at all are told from a document with no table;
 ;   in-cell  whether a cell is open, so that text under it is the cell's;
 ;   runs     the open cell's runs of text, in order;
 ;   cells    the open row's cells, as wide as one row.
 ; It grows with the document's nesting and with one row's width, never
-; with the table's length: a row is emitted when its object ends and
-; dropped. Events no tree has (a key outside an object, an end with
-; nothing open) fail with INPUT_INVALID, saying so.
+; with the table's length or the document's: a row is emitted when its
+; object ends and dropped, and a later table keeps nothing. Events no
+; tree has (a key outside an object, an end with nothing open), and
+; events of a node where the reader's tree never puts one (a row or a
+; cell outside a table, a table inside one), fail with
+; PROTOCOL_ORDER_ERROR, saying so.
 
 ; A column record of the TableRows protocol, as the standard library's
 ; `public-column` makes one.
@@ -82,31 +92,35 @@ def markdown-mark [marker stack]
   push marker (pop stack)
 
 ; The scalar after `type`: the three nodes the lift reads leave their
-; marker on the stack and move the phase; any other node is `:node`.
+; marker on the stack and move the phase; a table after the first leaves
+; `:later`, and its rows and cells, like any other node, stay `:node`.
 def markdown-node [name stack phase in-cell runs cells]
   match name
     case "table"
       match phase
         case :before (transition [(markdown-mark :table stack) :header :other in-cell runs cells] [])
-        case :after (fail "the document holds a second table, and only a document of one table is read as records")
-        case _ (fail "the events hold a table inside a table, which the reader's tree never has")
+        case :after (transition [(markdown-mark :later stack) :later :other in-cell runs cells] [])
+        case _ (fail :protocol-order "the events hold a table inside a table, which the reader's tree never has")
     case "tableRow"
       match phase
-        case :before (fail "the events hold a table row outside a table, which the reader's tree never has")
-        case :after (fail "the events hold a table row outside a table, which the reader's tree never has")
+        case :before (fail :protocol-order "the events hold a table row outside a table, which the reader's tree never has")
+        case :after (fail :protocol-order "the events hold a table row outside a table, which the reader's tree never has")
+        case :later (transition [stack phase :other in-cell runs cells] [])
         case _ (transition [(markdown-mark :row stack) phase :other in-cell runs []] [])
     case "tableCell"
       match phase
-        case :before (fail "the events hold a table cell outside a table, which the reader's tree never has")
-        case :after (fail "the events hold a table cell outside a table, which the reader's tree never has")
+        case :before (fail :protocol-order "the events hold a table cell outside a table, which the reader's tree never has")
+        case :after (fail :protocol-order "the events hold a table cell outside a table, which the reader's tree never has")
+        case :later (transition [stack phase :other in-cell runs cells] [])
         case _
           if in-cell
-            fail "the events hold a table cell inside a cell, which the reader's tree never has"
+            fail :protocol-order "the events hold a table cell inside a cell, which the reader's tree never has"
             transition [(markdown-mark :cell stack) phase :other true [] cells] []
     case _ (transition [stack phase :other in-cell runs cells] [])
 
 ; An object's end: a cell joins its row, a row is the schema or a
-; record, the table is done, and any other node is dropped.
+; record, the table is done, a later table is passed over, and any other
+; node is dropped.
 def markdown-close [stack phase in-cell runs cells]
   match (markdown-top stack)
     case :cell
@@ -119,9 +133,11 @@ def markdown-close [stack phase in-cell runs cells]
           transition [(pop stack) phase :other in-cell runs []] [(row cells)]
     case :table
       transition [(pop stack) :after :other in-cell runs cells] []
+    case :later
+      transition [(pop stack) :after :other in-cell runs cells] []
     case :node
       transition [(pop stack) phase :other in-cell runs cells] []
-    case _ (fail "the events end an object that is not open, which a tree's never do")
+    case _ (fail :protocol-order "the events end an object that is not open, which a tree's never do")
 
 def markdown-event [stack phase seen in-cell runs cells event]
   match event
@@ -131,8 +147,8 @@ def markdown-event [stack phase seen in-cell runs cells event]
       transition [(push :array stack) phase :other in-cell runs cells] []
     case (key name)
       match (markdown-top stack)
-        case :none (fail "the events hold a key outside an object, which a tree's never do")
-        case :array (fail "the events hold a key inside an array, which a tree's never do")
+        case :none (fail :protocol-order "the events hold a key outside an object, which a tree's never do")
+        case :array (fail :protocol-order "the events hold a key inside an array, which a tree's never do")
         case _ (transition [stack phase (markdown-seen name) in-cell runs cells] [])
     case (scalar value)
       match seen
@@ -146,24 +162,31 @@ def markdown-event [stack phase seen in-cell runs cells event]
     case array-end
       match (markdown-top stack)
         case :array (transition [(pop stack) phase :other in-cell runs cells] [])
-        case _ (fail "the events end an array that is not open, which a tree's never do")
+        case _ (fail :protocol-order "the events end an array that is not open, which a tree's never do")
 
 def markdown-lift-step [s event]
   match s
     case [stack phase seen in-cell runs cells]
       markdown-event stack phase seen in-cell runs cells event
 
+; What the end of the events adds once every container is closed: the
+; table's end, or, for a document with no table, the empty table.
+def markdown-lift-end [stack outputs]
+  match (count stack)
+    case 0 outputs
+    case _ (fail :protocol-order "the events ended inside a container, which a tree's never do")
+
 def markdown-lift-finish [s]
   match s
     case [stack phase seen in-cell runs cells]
-      match phase
-        case :after
-          match (count stack)
-            case 0 [table-end]
-            case _ (fail "the events ended inside a container, which a tree's never do")
-        case :before (fail "the document holds no table, and only a document of one table is read as records")
-        case _ (fail "the events ended inside the table, which a tree's never do")
+      match seen
+        case :none (fail :protocol-order "the events hold no value, where a tree's hold one")
+        case _
+          match phase
+            case :after (markdown-lift-end stack [table-end])
+            case :before (markdown-lift-end stack [(schema []) table-end])
+            case _ (fail :protocol-order "the events ended inside a table, which a tree's never do")
 
 ; The lift: the document's events in, the table's records out.
 def markdown-lift [input]
-  scan-emit [[] :before :other false [] []] markdown-lift-step markdown-lift-finish (events input)
+  scan-emit [[] :before :none false [] []] markdown-lift-step markdown-lift-finish (events input)

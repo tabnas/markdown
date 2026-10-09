@@ -366,6 +366,8 @@ pub struct TranslationParts {
     pub manifest: &'static str,
     /// An optional lift from the grammar's events to its first read shape.
     pub lift: Option<TranslationPart>,
+    /// An optional embedding of a plain tree in the format's schema, with its reverse.
+    pub embed: Option<TranslationPart>,
     /// An optional render from the write shape to text.
     pub render: Option<TranslationPart>,
 }
@@ -376,6 +378,7 @@ const TRANSLATION: TranslationParts = TranslationParts {
         entry: "markdown-lift",
         source: Some(include_str!("../translate/lift.alc")),
     }),
+    embed: None,
     render: Some(TranslationPart {
         entry: "markdown-render",
         source: Some(include_str!("../translate/render.alc")),
@@ -391,11 +394,12 @@ pub const fn translate() -> Option<TranslationParts> {
 /// The plugin's manifest, `tabnas.plugin.json`, as the repository carries
 /// it. Its `translate` object is what a host that translates reads: the
 /// shapes Markdown is read as (`records`, through the lift, then `tree`)
-/// and written from (`records`), the files that hold the lift and the
-/// render, and the sentences that say what a translation does not keep.
-/// The crate embeds its own copy, `translate/manifest.json`, since a
-/// packaged crate holds nothing outside `rs/`; `tests/translate_test.rs`
-/// holds the copy to the file.
+/// and written from (`records`), the root whose elements are the records
+/// (`array`), the tree its events carry (`mdast`, not a plain one), the
+/// files that hold the lift and the render, and the sentences that say
+/// what a translation does not keep. The crate embeds its own copy,
+/// `translate/manifest.json`, since a packaged crate holds nothing outside
+/// `rs/`; `tests/translate_test.rs` holds the copy to the file.
 ///
 /// ```
 /// assert!(tabnas_markdown::manifest_text().contains("\"translate\""));
@@ -408,7 +412,8 @@ pub fn manifest_text() -> &'static str {
 /// `translate.lift` names: a library of alchemy definitions, with no
 /// `export`, whose entry point `markdown-lift` reads a document's events
 /// as a table's records, the first row's cells as the column labels and
-/// every later row as a record. A host links it with its own program.
+/// every later row as a record: the first table's, or the empty table's
+/// when the document holds none. A host links it with its own program.
 /// The crate embeds its own copy, `translate/lift.alc`, held to the file
 /// as the manifest's is.
 ///
@@ -425,9 +430,10 @@ pub fn lift_text() -> &'static str {
 /// Markdown's render, `alchemy/render.alc`, the file the manifest's
 /// `translate.render` names: a library of alchemy definitions, with no
 /// `export`, whose entry point `markdown-render` writes a table's records
-/// as one GFM pipe table. A host links it with its own program. The
-/// crate embeds its own copy, `translate/render.alc`, held to the file as
-/// the manifest's is.
+/// as one GFM pipe table, and a table of no columns as the empty
+/// document. A host links it with its own program. The crate embeds its
+/// own copy, `translate/render.alc`, held to the file as the manifest's
+/// is.
 ///
 /// ```
 /// assert!(tabnas_markdown::render_text().contains("def markdown-render [input]"));

@@ -17,3 +17,19 @@ test('translation parts expose the manifest, sources and explicit entries', () =
   assert.equal(parts.render?.entry, 'markdown-render')
   assert.equal(parts.render?.source, readFileSync(path.join(root, 'alchemy', 'render.alc'), 'utf8'))
 })
+
+// An embed takes a plain tree into a format's own schema. Markdown's
+// events carry an mdast tree, but its render writes from records, which
+// any tree's rows give, so its manifest names no embed and the package
+// carries none; a manifest that named one would be held to its file here,
+// as the lift and the render are above.
+test('translation parts carry the embed the manifest names, and none where it names none', () => {
+  const parts = translate()
+  const spec = JSON.parse(readFileSync(path.join(root, 'tabnas.plugin.json'), 'utf8')).translate
+  if (null == spec.embed) {
+    assert.equal(parts.embed, undefined)
+  } else {
+    assert.equal(parts.embed?.entry, 'markdown-embed')
+    assert.equal(parts.embed?.source, readFileSync(path.join(root, spec.embed), 'utf8'))
+  }
+})
