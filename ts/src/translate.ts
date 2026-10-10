@@ -72,7 +72,7 @@ const TRANSLATION: TranslationParts = Object.freeze({
       "Every value is written as text, so a number or a boolean reads back as a string.",
       "Column alignment is not kept.",
       "A line break in a cell is written as a space.",
-      "Leading and trailing spaces in a cell are not kept.",
+      "Whitespace at either end of a cell is not kept, as the reader trims it: the space, the tab, U+00A0, U+FEFF, U+2028, U+2029 and the other Unicode space separators, though not U+0085.",
       "A U+0000 in a cell is written as U+FFFD, the character a Markdown reader puts in its place, so it reads back as U+FFFD."
     ]
   }
