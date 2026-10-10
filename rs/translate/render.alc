@@ -9,45 +9,69 @@
 ; `| --- | --- |`, and a row per record, each line ended by a line feed
 ; and every cell between `| ` and ` |`. A cell is its value's text as
 ; the CSV renderer writes it (`scalar-text`: a string as it is, a number
-; by its lexeme, a boolean by its name, null and a missing cell as
+; by its lexeme, or by its word, `Infinity`, `-Infinity` or `NaN`, when
+; it is not finite, a boolean by its name, null and a missing cell as
 ; nothing, a vector or a record as its compact JSON text), with every
-; backslash doubled and every pipe escaped as `\|`, which the reader
-; turns back into the characters (the reader's split skips the byte
-; after a backslash, so the pipe's escape holds only when a backslash
-; before it is itself escaped), and every line break replaced by a
-; space, since a row is one line. No other character is escaped: the
-; render cannot look at one (alchemy has no character test), so a cell
-; is plain text, and text that spells inline markup reads back as that
-; markup. A U+0000 in a cell is written as it is for the same reason,
-; and the reader replaces it with U+FFFD, as CommonMark asks of every
-; reader; the loss declaration says so. Alignment is not written: every
-; column's delimiter is `---`.
+; backslash doubled, and every character that can begin inline markup
+; escaped with a backslash, as CommonMark lets any ASCII punctuation be
+; escaped: the pipe, which the reader's split skips after a backslash
+; (so its escape holds only when a backslash before it is itself
+; escaped), the backtick of a code span, the `*` and `_` of emphasis,
+; the brackets of a link, an image or a footnote, the `<` of an autolink
+; or of raw HTML, the `&` of an entity or numeric character reference,
+; and the `~` of GFM's strikethrough. The reader turns each escape back
+; into its character, so a written cell reads back as the text it was;
+; a URL that GFM reads as an autolink reads back as its own text, which
+; is the link's. Every line break is replaced by a space, since a row is
+; one line, and a U+0000 is written as U+FFFD, the character CommonMark
+; has every reader put in its place; the loss declaration says both.
+; Alignment is not written: every column's delimiter is `---`.
+;
+; A table of no columns, the one an empty array or object makes, has no
+; pipe table, since a row needs at least one cell: it is written as the
+; empty document, nothing at all, and so are its rows, which have no
+; cells. The lift reads that document back as the empty table, of no
+; columns and no rows.
 ;
 ; The state is one marker: `:start` before the schema, the schema's
 ; width (a number) while rows may follow, and `:ended` after
 ; `table-end`, so that a stream which breaks the protocol (a row before
 ; the schema, a second schema, a row of another width, anything after
-; the end, no end) fails with INPUT_INVALID, saying so, rather than
-; being written. The check is this file's rather than `csv-table`'s,
-; whose refusals speak of CSV. A schema of no columns fails too: a row
-; needs at least one cell, so such a table has no Markdown form.
+; the end, no end) fails with PROTOCOL_ORDER_ERROR, saying so, rather
+; than being written. The check is this file's rather than
+; `csv-table`'s, whose refusals speak of CSV.
 
 ; What `scalar-text` reads: null and a missing cell are written as
 ; nothing, where the CSV renderer's `csv-options` map a missing cell to
-; an error.
+; an error, and a number that is not finite as its word.
 def markdown-options
   record
     entry :null-text ""
     entry :missing ""
+    entry :non-finite :literal
 
-; A cell's text, as it stands between the pipes.
+; A cell's text, as it stands between the pipes: the backslashes doubled
+; first, so that the escapes written after them stay single.
 def markdown-cell [cell]
   replace-text "\r" " "
     replace-text "\n" " "
       replace-text "\r\n" " "
-        replace-text "|" "\\|"
-          replace-text "\\" "\\\\"
-            scalar-text markdown-options cell
+        replace-text "\u0000" "\ufffd"
+          markdown-escape
+            replace-text "\\" "\\\\"
+              scalar-text markdown-options cell
+
+; Every character that can begin inline markup, escaped with a backslash.
+def markdown-escape [cell-text]
+  replace-text "~" "\\~"
+    replace-text "&" "\\&"
+      replace-text "<" "\\<"
+        replace-text "]" "\\]"
+          replace-text "[" "\\["
+            replace-text "_" "\\_"
+              replace-text "*" "\\*"
+                replace-text "`" "\\`"
+                  replace-text "|" "\\|" cell-text
 
 def markdown-label [column]
   markdown-cell (get :label column)
@@ -65,38 +89,45 @@ def markdown-delimiter [width]
     repeat width "| --- "
     "|\n"
 
+; A record's line in a table `width` columns wide, or none in a table of
+; no columns, which is written as the empty document.
+def markdown-row [width cells]
+  match width
+    case 0 []
+    case _ [(markdown-line (map markdown-cell cells))]
+
 def markdown-render-step [s event]
   match event
     case (schema columns)
       match s
         case :start
           match (count columns)
-            case 0 (fail "a table of no columns has no Markdown form: a row needs at least one cell")
+            case 0 (transition 0 [])
             case _
               transition (count columns)
                 vector
                   markdown-line (map markdown-label columns)
                   markdown-delimiter (count columns)
-        case _ (fail "the events hold a second schema, where a table's hold one")
+        case _ (fail :protocol-order "the events hold a second schema, where a table's hold one")
     case (row cells)
       match s
-        case :start (fail "the events hold a row before the schema, which a table's never do")
-        case :ended (fail "the events hold a row after table-end, which a table's never do")
+        case :start (fail :protocol-order "the events hold a row before the schema, which a table's never do")
+        case :ended (fail :protocol-order "the events hold a row after table-end, which a table's never do")
         case _
           match (compare (count cells) s)
-            case :equal (transition s [(markdown-line (map markdown-cell cells))])
-            case _ (fail "the events hold a row that is not as wide as the schema, which a table's never do")
+            case :equal (transition s (markdown-row s cells))
+            case _ (fail :protocol-order "the events hold a row that is not as wide as the schema, which a table's never do")
     case table-end
       match s
-        case :start (fail "the events end before the schema, which a table's never do")
-        case :ended (fail "the events hold a second table-end, which a table's never do")
+        case :start (fail :protocol-order "the events end before the schema, which a table's never do")
+        case :ended (fail :protocol-order "the events hold a second table-end, which a table's never do")
         case _ (transition :ended [])
 
 def markdown-render-finish [s]
   match s
     case :ended []
-    case :start (fail "the events hold no schema, where a table's hold one first")
-    case _ (fail "the events ended before table-end, which a table's never do")
+    case :start (fail :protocol-order "the events hold no schema, where a table's hold one first")
+    case _ (fail :protocol-order "the events ended before table-end, which a table's never do")
 
 ; The render: the table's records in, the pipe table's text out.
 def markdown-render [input]

@@ -36,15 +36,26 @@
       "tree"
     ],
     "writes": "records",
+    "root": "array",
+    "schema": "markdown-ast",
     "lift": "alchemy/lift.alc",
     "render": "alchemy/render.alc",
     "loss": [
-      "Only a document holding one table is read as records: a document with no table, or with more than one, is refused.",
-      "Inline markup in a cell is flattened to its text when it is read, an image to its alt text, and a written cell is plain text, so text that spells inline markup reads back as that markup.",
+      "The rows are the elements of the root array, and a root of another kind is written as one row.",
+      "The columns are the first row's, an object's keys or an array's positions labelled 0, 1 and so on, so a member or position of a later row that the first row lacks is not written, and one the first row has and a later row lacks is an empty cell.",
+      "When the first row is a scalar there is one column, named value, and every row is written whole in it, an array or an object as its compact JSON text.",
+      "A table of no columns, such as the one an empty array or object makes, is written as the empty document, which reads back as the empty table.",
+      "Read as records, a document with no table is the empty table, of no columns and no rows.",
+      "Read as records, a document with several tables is its first table, and the tables after it are not read.",
+      "Inline markup in a cell is flattened to its text when it is read, an image to its alt text; a written cell escapes every character that can begin inline markup, so it reads back as the text it was.",
+      "A null and a missing cell are both written as an empty cell, so the two cannot be told apart, or from an empty string, when read back.",
+      "A nested array or object in a cell is written as its compact JSON text.",
+      "A number that is not finite is written as Infinity, -Infinity or NaN, and as null inside a nested array or object, since JSON has no spelling for one.",
+      "Every value is written as text, so a number or a boolean reads back as a string.",
       "Column alignment is not kept.",
       "A line break in a cell is written as a space.",
-      "Leading and trailing spaces in a cell are not kept.",
-      "A U+0000 in a cell is written as it is, and the reader replaces it with U+FFFD when the table is read back."
+      "Whitespace at either end of a cell is not kept, as the reader trims it: the space, the tab, U+00A0, U+FEFF, U+2028, U+2029 and the other Unicode space separators, though not U+0085.",
+      "A U+0000 in a cell is written as U+FFFD, the character a Markdown reader puts in its place, so it reads back as U+FFFD."
     ]
   }
 }

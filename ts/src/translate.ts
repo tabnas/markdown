@@ -11,6 +11,7 @@ type TranslationPart = Readonly<{
 type TranslationParts = Readonly<{
   manifest: string
   lift?: TranslationPart
+  embed?: TranslationPart
   render?: TranslationPart
 }>
 
@@ -53,15 +54,26 @@ const TRANSLATION: TranslationParts = Object.freeze({
       "tree"
     ],
     "writes": "records",
+    "root": "array",
+    "schema": "markdown-ast",
     "lift": "alchemy/lift.alc",
     "render": "alchemy/render.alc",
     "loss": [
-      "Only a document holding one table is read as records: a document with no table, or with more than one, is refused.",
-      "Inline markup in a cell is flattened to its text when it is read, an image to its alt text, and a written cell is plain text, so text that spells inline markup reads back as that markup.",
+      "The rows are the elements of the root array, and a root of another kind is written as one row.",
+      "The columns are the first row's, an object's keys or an array's positions labelled 0, 1 and so on, so a member or position of a later row that the first row lacks is not written, and one the first row has and a later row lacks is an empty cell.",
+      "When the first row is a scalar there is one column, named value, and every row is written whole in it, an array or an object as its compact JSON text.",
+      "A table of no columns, such as the one an empty array or object makes, is written as the empty document, which reads back as the empty table.",
+      "Read as records, a document with no table is the empty table, of no columns and no rows.",
+      "Read as records, a document with several tables is its first table, and the tables after it are not read.",
+      "Inline markup in a cell is flattened to its text when it is read, an image to its alt text; a written cell escapes every character that can begin inline markup, so it reads back as the text it was.",
+      "A null and a missing cell are both written as an empty cell, so the two cannot be told apart, or from an empty string, when read back.",
+      "A nested array or object in a cell is written as its compact JSON text.",
+      "A number that is not finite is written as Infinity, -Infinity or NaN, and as null inside a nested array or object, since JSON has no spelling for one.",
+      "Every value is written as text, so a number or a boolean reads back as a string.",
       "Column alignment is not kept.",
       "A line break in a cell is written as a space.",
-      "Leading and trailing spaces in a cell are not kept.",
-      "A U+0000 in a cell is written as it is, and the reader replaces it with U+FFFD when the table is read back."
+      "Whitespace at either end of a cell is not kept, as the reader trims it: the space, the tab, U+00A0, U+FEFF, U+2028, U+2029 and the other Unicode space separators, though not U+0085.",
+      "A U+0000 in a cell is written as U+FFFD, the character a Markdown reader puts in its place, so it reads back as U+FFFD."
     ]
   }
 }
@@ -91,26 +103,36 @@ const TRANSLATION: TranslationParts = Object.freeze({
 ; cell of text beside emphasis, a link, an image, inline HTML or an
 ; autolink is their texts run together, \`Bob *b*\` as \`Bob b\`.
 ;
-; The document must hold exactly one table: a second table, or none by
-; the end, is a failure (INPUT_INVALID) that says so, since a Markdown
-; document is read as records through its table and nothing else.
+; A Markdown document is read as records through its table and nothing
+; else, so the first table is the one read: a table after it is not
+; read, its rows and cells passed over as any other node's. A document
+; with no table is read as the empty table, a schema of no columns, no
+; row and \`table-end\`, which the render writes back as the empty
+; document. The manifest's loss lines say both.
 ;
 ; The state is one vector, [stack phase seen in-cell runs cells]:
 ;   stack    the open containers, one marker each: \`:array\`, \`:node\` for
 ;            an object whose type is not known yet or is any other node,
 ;            and \`:table\`, \`:row\` or \`:cell\` once its \`type\` has named
-;            one, so that its end is known when its object ends;
+;            one, or \`:later\` for a table after the first, so that its
+;            end is known when its object ends;
 ;   phase    \`:before\` the table, \`:header\` inside it until its first
-;            row ends, \`:body\` once the schema is written, \`:after\` it;
+;            row ends, \`:body\` once the schema is written, \`:after\` it,
+;            and \`:later\` inside a table after it, which is not read;
 ;   seen     what the last key was, \`:type\`, \`:text\` (a \`value\` or an
-;            \`alt\`) or \`:other\`, so that the scalar after it is classified;
+;            \`alt\`) or \`:other\`, so that the scalar after it is classified,
+;            and \`:none\` before the first event, so that events with no
+;            value at all are told from a document with no table;
 ;   in-cell  whether a cell is open, so that text under it is the cell's;
 ;   runs     the open cell's runs of text, in order;
 ;   cells    the open row's cells, as wide as one row.
 ; It grows with the document's nesting and with one row's width, never
-; with the table's length: a row is emitted when its object ends and
-; dropped. Events no tree has (a key outside an object, an end with
-; nothing open) fail with INPUT_INVALID, saying so.
+; with the table's length or the document's: a row is emitted when its
+; object ends and dropped, and a later table keeps nothing. Events no
+; tree has (a key outside an object, an end with nothing open), and
+; events of a node where the reader's tree never puts one (a row or a
+; cell outside a table, a table inside one), fail with
+; PROTOCOL_ORDER_ERROR, saying so.
 
 ; A column record of the TableRows protocol, as the standard library's
 ; \`public-column\` makes one.
@@ -150,31 +172,35 @@ def markdown-mark [marker stack]
   push marker (pop stack)
 
 ; The scalar after \`type\`: the three nodes the lift reads leave their
-; marker on the stack and move the phase; any other node is \`:node\`.
+; marker on the stack and move the phase; a table after the first leaves
+; \`:later\`, and its rows and cells, like any other node, stay \`:node\`.
 def markdown-node [name stack phase in-cell runs cells]
   match name
     case "table"
       match phase
         case :before (transition [(markdown-mark :table stack) :header :other in-cell runs cells] [])
-        case :after (fail "the document holds a second table, and only a document of one table is read as records")
-        case _ (fail "the events hold a table inside a table, which the reader's tree never has")
+        case :after (transition [(markdown-mark :later stack) :later :other in-cell runs cells] [])
+        case _ (fail :protocol-order "the events hold a table inside a table, which the reader's tree never has")
     case "tableRow"
       match phase
-        case :before (fail "the events hold a table row outside a table, which the reader's tree never has")
-        case :after (fail "the events hold a table row outside a table, which the reader's tree never has")
+        case :before (fail :protocol-order "the events hold a table row outside a table, which the reader's tree never has")
+        case :after (fail :protocol-order "the events hold a table row outside a table, which the reader's tree never has")
+        case :later (transition [stack phase :other in-cell runs cells] [])
         case _ (transition [(markdown-mark :row stack) phase :other in-cell runs []] [])
     case "tableCell"
       match phase
-        case :before (fail "the events hold a table cell outside a table, which the reader's tree never has")
-        case :after (fail "the events hold a table cell outside a table, which the reader's tree never has")
+        case :before (fail :protocol-order "the events hold a table cell outside a table, which the reader's tree never has")
+        case :after (fail :protocol-order "the events hold a table cell outside a table, which the reader's tree never has")
+        case :later (transition [stack phase :other in-cell runs cells] [])
         case _
           if in-cell
-            fail "the events hold a table cell inside a cell, which the reader's tree never has"
+            fail :protocol-order "the events hold a table cell inside a cell, which the reader's tree never has"
             transition [(markdown-mark :cell stack) phase :other true [] cells] []
     case _ (transition [stack phase :other in-cell runs cells] [])
 
 ; An object's end: a cell joins its row, a row is the schema or a
-; record, the table is done, and any other node is dropped.
+; record, the table is done, a later table is passed over, and any other
+; node is dropped.
 def markdown-close [stack phase in-cell runs cells]
   match (markdown-top stack)
     case :cell
@@ -187,9 +213,11 @@ def markdown-close [stack phase in-cell runs cells]
           transition [(pop stack) phase :other in-cell runs []] [(row cells)]
     case :table
       transition [(pop stack) :after :other in-cell runs cells] []
+    case :later
+      transition [(pop stack) :after :other in-cell runs cells] []
     case :node
       transition [(pop stack) phase :other in-cell runs cells] []
-    case _ (fail "the events end an object that is not open, which a tree's never do")
+    case _ (fail :protocol-order "the events end an object that is not open, which a tree's never do")
 
 def markdown-event [stack phase seen in-cell runs cells event]
   match event
@@ -199,8 +227,8 @@ def markdown-event [stack phase seen in-cell runs cells event]
       transition [(push :array stack) phase :other in-cell runs cells] []
     case (key name)
       match (markdown-top stack)
-        case :none (fail "the events hold a key outside an object, which a tree's never do")
-        case :array (fail "the events hold a key inside an array, which a tree's never do")
+        case :none (fail :protocol-order "the events hold a key outside an object, which a tree's never do")
+        case :array (fail :protocol-order "the events hold a key inside an array, which a tree's never do")
         case _ (transition [stack phase (markdown-seen name) in-cell runs cells] [])
     case (scalar value)
       match seen
@@ -214,27 +242,34 @@ def markdown-event [stack phase seen in-cell runs cells event]
     case array-end
       match (markdown-top stack)
         case :array (transition [(pop stack) phase :other in-cell runs cells] [])
-        case _ (fail "the events end an array that is not open, which a tree's never do")
+        case _ (fail :protocol-order "the events end an array that is not open, which a tree's never do")
 
 def markdown-lift-step [s event]
   match s
     case [stack phase seen in-cell runs cells]
       markdown-event stack phase seen in-cell runs cells event
 
+; What the end of the events adds once every container is closed: the
+; table's end, or, for a document with no table, the empty table.
+def markdown-lift-end [stack outputs]
+  match (count stack)
+    case 0 outputs
+    case _ (fail :protocol-order "the events ended inside a container, which a tree's never do")
+
 def markdown-lift-finish [s]
   match s
     case [stack phase seen in-cell runs cells]
-      match phase
-        case :after
-          match (count stack)
-            case 0 [table-end]
-            case _ (fail "the events ended inside a container, which a tree's never do")
-        case :before (fail "the document holds no table, and only a document of one table is read as records")
-        case _ (fail "the events ended inside the table, which a tree's never do")
+      match seen
+        case :none (fail :protocol-order "the events hold no value, where a tree's hold one")
+        case _
+          match phase
+            case :after (markdown-lift-end stack [table-end])
+            case :before (markdown-lift-end stack [(schema []) table-end])
+            case _ (fail :protocol-order "the events ended inside a table, which a tree's never do")
 
 ; The lift: the document's events in, the table's records out.
 def markdown-lift [input]
-  scan-emit [[] :before :other false [] []] markdown-lift-step markdown-lift-finish (events input)
+  scan-emit [[] :before :none false [] []] markdown-lift-step markdown-lift-finish (events input)
 ` }),
   render: Object.freeze({ entry: "markdown-render", source: `; Markdown's render: a table's records, the TableRows protocol (one
 ; \`schema\`, a \`row\` per record and \`table-end\`), written as one GFM pipe
@@ -247,45 +282,69 @@ def markdown-lift [input]
 ; \`| --- | --- |\`, and a row per record, each line ended by a line feed
 ; and every cell between \`| \` and \` |\`. A cell is its value's text as
 ; the CSV renderer writes it (\`scalar-text\`: a string as it is, a number
-; by its lexeme, a boolean by its name, null and a missing cell as
+; by its lexeme, or by its word, \`Infinity\`, \`-Infinity\` or \`NaN\`, when
+; it is not finite, a boolean by its name, null and a missing cell as
 ; nothing, a vector or a record as its compact JSON text), with every
-; backslash doubled and every pipe escaped as \`\\|\`, which the reader
-; turns back into the characters (the reader's split skips the byte
-; after a backslash, so the pipe's escape holds only when a backslash
-; before it is itself escaped), and every line break replaced by a
-; space, since a row is one line. No other character is escaped: the
-; render cannot look at one (alchemy has no character test), so a cell
-; is plain text, and text that spells inline markup reads back as that
-; markup. A U+0000 in a cell is written as it is for the same reason,
-; and the reader replaces it with U+FFFD, as CommonMark asks of every
-; reader; the loss declaration says so. Alignment is not written: every
-; column's delimiter is \`---\`.
+; backslash doubled, and every character that can begin inline markup
+; escaped with a backslash, as CommonMark lets any ASCII punctuation be
+; escaped: the pipe, which the reader's split skips after a backslash
+; (so its escape holds only when a backslash before it is itself
+; escaped), the backtick of a code span, the \`*\` and \`_\` of emphasis,
+; the brackets of a link, an image or a footnote, the \`<\` of an autolink
+; or of raw HTML, the \`&\` of an entity or numeric character reference,
+; and the \`~\` of GFM's strikethrough. The reader turns each escape back
+; into its character, so a written cell reads back as the text it was;
+; a URL that GFM reads as an autolink reads back as its own text, which
+; is the link's. Every line break is replaced by a space, since a row is
+; one line, and a U+0000 is written as U+FFFD, the character CommonMark
+; has every reader put in its place; the loss declaration says both.
+; Alignment is not written: every column's delimiter is \`---\`.
+;
+; A table of no columns, the one an empty array or object makes, has no
+; pipe table, since a row needs at least one cell: it is written as the
+; empty document, nothing at all, and so are its rows, which have no
+; cells. The lift reads that document back as the empty table, of no
+; columns and no rows.
 ;
 ; The state is one marker: \`:start\` before the schema, the schema's
 ; width (a number) while rows may follow, and \`:ended\` after
 ; \`table-end\`, so that a stream which breaks the protocol (a row before
 ; the schema, a second schema, a row of another width, anything after
-; the end, no end) fails with INPUT_INVALID, saying so, rather than
-; being written. The check is this file's rather than \`csv-table\`'s,
-; whose refusals speak of CSV. A schema of no columns fails too: a row
-; needs at least one cell, so such a table has no Markdown form.
+; the end, no end) fails with PROTOCOL_ORDER_ERROR, saying so, rather
+; than being written. The check is this file's rather than
+; \`csv-table\`'s, whose refusals speak of CSV.
 
 ; What \`scalar-text\` reads: null and a missing cell are written as
 ; nothing, where the CSV renderer's \`csv-options\` map a missing cell to
-; an error.
+; an error, and a number that is not finite as its word.
 def markdown-options
   record
     entry :null-text ""
     entry :missing ""
+    entry :non-finite :literal
 
-; A cell's text, as it stands between the pipes.
+; A cell's text, as it stands between the pipes: the backslashes doubled
+; first, so that the escapes written after them stay single.
 def markdown-cell [cell]
   replace-text "\\r" " "
     replace-text "\\n" " "
       replace-text "\\r\\n" " "
-        replace-text "|" "\\\\|"
-          replace-text "\\\\" "\\\\\\\\"
-            scalar-text markdown-options cell
+        replace-text "\\u0000" "\\ufffd"
+          markdown-escape
+            replace-text "\\\\" "\\\\\\\\"
+              scalar-text markdown-options cell
+
+; Every character that can begin inline markup, escaped with a backslash.
+def markdown-escape [cell-text]
+  replace-text "~" "\\\\~"
+    replace-text "&" "\\\\&"
+      replace-text "<" "\\\\<"
+        replace-text "]" "\\\\]"
+          replace-text "[" "\\\\["
+            replace-text "_" "\\\\_"
+              replace-text "*" "\\\\*"
+                replace-text "\`" "\\\\\`"
+                  replace-text "|" "\\\\|" cell-text
 
 def markdown-label [column]
   markdown-cell (get :label column)
@@ -303,38 +362,45 @@ def markdown-delimiter [width]
     repeat width "| --- "
     "|\\n"
 
+; A record's line in a table \`width\` columns wide, or none in a table of
+; no columns, which is written as the empty document.
+def markdown-row [width cells]
+  match width
+    case 0 []
+    case _ [(markdown-line (map markdown-cell cells))]
+
 def markdown-render-step [s event]
   match event
     case (schema columns)
       match s
         case :start
           match (count columns)
-            case 0 (fail "a table of no columns has no Markdown form: a row needs at least one cell")
+            case 0 (transition 0 [])
             case _
               transition (count columns)
                 vector
                   markdown-line (map markdown-label columns)
                   markdown-delimiter (count columns)
-        case _ (fail "the events hold a second schema, where a table's hold one")
+        case _ (fail :protocol-order "the events hold a second schema, where a table's hold one")
     case (row cells)
       match s
-        case :start (fail "the events hold a row before the schema, which a table's never do")
-        case :ended (fail "the events hold a row after table-end, which a table's never do")
+        case :start (fail :protocol-order "the events hold a row before the schema, which a table's never do")
+        case :ended (fail :protocol-order "the events hold a row after table-end, which a table's never do")
         case _
           match (compare (count cells) s)
-            case :equal (transition s [(markdown-line (map markdown-cell cells))])
-            case _ (fail "the events hold a row that is not as wide as the schema, which a table's never do")
+            case :equal (transition s (markdown-row s cells))
+            case _ (fail :protocol-order "the events hold a row that is not as wide as the schema, which a table's never do")
     case table-end
       match s
-        case :start (fail "the events end before the schema, which a table's never do")
-        case :ended (fail "the events hold a second table-end, which a table's never do")
+        case :start (fail :protocol-order "the events end before the schema, which a table's never do")
+        case :ended (fail :protocol-order "the events hold a second table-end, which a table's never do")
         case _ (transition :ended [])
 
 def markdown-render-finish [s]
   match s
     case :ended []
-    case :start (fail "the events hold no schema, where a table's hold one first")
-    case _ (fail "the events ended before table-end, which a table's never do")
+    case :start (fail :protocol-order "the events hold no schema, where a table's hold one first")
+    case _ (fail :protocol-order "the events ended before table-end, which a table's never do")
 
 ; The render: the table's records in, the pipe table's text out.
 def markdown-render [input]

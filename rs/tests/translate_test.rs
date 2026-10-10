@@ -8,8 +8,10 @@
 // `lift_text()` and `render_text()`. The copies are the only texts a host
 // sees, so they must be the files: this holds the embedded manifest to
 // the repository's, and each part the manifest names, read from the
-// repository, to the embedded one. Change the file at the root and copy
-// it into `rs/translate/`; this fails until both are the same.
+// repository, to the embedded one, as it would an embed the manifest
+// named. Change the file at the root and run `npm run embed` in `ts/`,
+// which copies it into `rs/translate/`; this fails until both are the
+// same.
 
 mod common;
 
@@ -52,7 +54,7 @@ fn the_manifest_the_crate_embeds_is_the_repositorys() {
     assert_eq!(
         on_disk,
         tabnas_markdown::manifest_text(),
-        "rs/translate/manifest.json is not tabnas.plugin.json: copy the manifest into rs/translate"
+        "rs/translate/manifest.json is not tabnas.plugin.json: run npm run embed in ts"
     );
 }
 
@@ -62,7 +64,7 @@ fn the_lift_the_manifest_names_is_the_one_the_crate_embeds() {
         part_on_disk("lift"),
         tabnas_markdown::lift_text(),
         "translate.lift names a file, and rs/translate/lift.alc, which lift_text() embeds, \
-         is another text: copy the lift into rs/translate"
+         is another text: run npm run embed in ts"
     );
 }
 
@@ -72,7 +74,36 @@ fn the_render_the_manifest_names_is_the_one_the_crate_embeds() {
         part_on_disk("render"),
         tabnas_markdown::render_text(),
         "translate.render names a file, and rs/translate/render.alc, which render_text() \
-         embeds, is another text: copy the render into rs/translate"
+         embeds, is another text: run npm run embed in ts"
+    );
+}
+
+/// An embed takes a plain tree into a format's own schema. Markdown's
+/// events carry its own mdast-adjacent tree, but its render writes from
+/// records, which any tree's rows give, so its manifest names no embed and
+/// the crate carries none; a manifest that named one would be held to its
+/// file here, as the lift and the render are above.
+#[test]
+fn the_embed_the_manifest_names_is_the_one_the_crate_embeds() {
+    let translate = translate();
+    let parts = tabnas_markdown::translate().expect("Markdown carries translation parts");
+    let Some(path) = translate.get("embed").and_then(Value::as_str) else {
+        assert_eq!(
+            parts.embed, None,
+            "the manifest names no embed, and the crate carries one"
+        );
+        return;
+    };
+    let on_disk = fs::read_to_string(common::repo_root().join(path))
+        .unwrap_or_else(|e| panic!("translate.embed names {path}, which cannot be read: {e}"));
+    let embed = parts
+        .embed
+        .unwrap_or_else(|| panic!("translate.embed names {path}, and the crate carries no embed"));
+    assert_eq!(embed.entry, "markdown-embed");
+    assert_eq!(
+        embed.source,
+        Some(on_disk.as_str()),
+        "translate.embed names {path}, and the crate embeds another text: run npm run embed in ts"
     );
 }
 
@@ -89,8 +120,11 @@ fn the_structural_interface_names_both_entries() {
 }
 
 /// A Markdown table is read as records first, through the lift, and as
-/// the document's tree second; it is written from records, as a table.
-/// The manifest carries the languageId the host keys its registry by.
+/// the document's tree second, its mdast-adjacent tree (schema
+/// `markdown-ast`, whose root is a `document`) rather than a plain one; it
+/// is written from records, as a table, the records being the elements of
+/// the root array. The manifest carries the languageId the host keys its
+/// registry by.
 #[test]
 fn markdown_reads_records_through_a_lift_and_writes_records() {
     let manifest: Value =
@@ -100,6 +134,8 @@ fn markdown_reads_records_through_a_lift_and_writes_records() {
     let translate = translate();
     assert_eq!(translate["reads"], json!(["records", "tree"]));
     assert_eq!(translate["writes"], "records");
+    assert_eq!(translate["root"], "array");
+    assert_eq!(translate["schema"], "markdown-ast");
     assert_eq!(translate["lift"], "alchemy/lift.alc");
     assert_eq!(translate["render"], "alchemy/render.alc");
 }
