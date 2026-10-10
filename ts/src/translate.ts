@@ -65,7 +65,7 @@ const TRANSLATION: TranslationParts = Object.freeze({
       "A table of no columns, such as the one an empty array or object makes, is written as the empty document, which reads back as the empty table.",
       "Read as records, a document with no table is the empty table, of no columns and no rows.",
       "Read as records, a document with several tables is its first table, and the tables after it are not read.",
-      "Inline markup in a cell is flattened to its text when it is read, an image to its alt text, and a written cell is plain text, so text that spells inline markup reads back as that markup.",
+      "Inline markup in a cell is flattened to its text when it is read, an image to its alt text; a written cell escapes every character that can begin inline markup, so it reads back as the text it was.",
       "A null and a missing cell are both written as an empty cell, so the two cannot be told apart, or from an empty string, when read back.",
       "A nested array or object in a cell is written as its compact JSON text.",
       "A number that is not finite is written as Infinity, -Infinity or NaN, and as null inside a nested array or object, since JSON has no spelling for one.",
@@ -73,7 +73,7 @@ const TRANSLATION: TranslationParts = Object.freeze({
       "Column alignment is not kept.",
       "A line break in a cell is written as a space.",
       "Leading and trailing spaces in a cell are not kept.",
-      "A U+0000 in a cell is written as it is, and the reader replaces it with U+FFFD when the table is read back."
+      "A U+0000 in a cell is written as U+FFFD, the character a Markdown reader puts in its place, so it reads back as U+FFFD."
     ]
   }
 }
@@ -285,17 +285,20 @@ def markdown-lift [input]
 ; by its lexeme, or by its word, \`Infinity\`, \`-Infinity\` or \`NaN\`, when
 ; it is not finite, a boolean by its name, null and a missing cell as
 ; nothing, a vector or a record as its compact JSON text), with every
-; backslash doubled and every pipe escaped as \`\\|\`, which the reader
-; turns back into the characters (the reader's split skips the byte
-; after a backslash, so the pipe's escape holds only when a backslash
-; before it is itself escaped), and every line break replaced by a
-; space, since a row is one line. No other character is escaped: the
-; render cannot look at one (alchemy has no character test), so a cell
-; is plain text, and text that spells inline markup reads back as that
-; markup. A U+0000 in a cell is written as it is for the same reason,
-; and the reader replaces it with U+FFFD, as CommonMark asks of every
-; reader; the loss declaration says so. Alignment is not written: every
-; column's delimiter is \`---\`.
+; backslash doubled, and every character that can begin inline markup
+; escaped with a backslash, as CommonMark lets any ASCII punctuation be
+; escaped: the pipe, which the reader's split skips after a backslash
+; (so its escape holds only when a backslash before it is itself
+; escaped), the backtick of a code span, the \`*\` and \`_\` of emphasis,
+; the brackets of a link, an image or a footnote, the \`<\` of an autolink
+; or of raw HTML, the \`&\` of an entity or numeric character reference,
+; and the \`~\` of GFM's strikethrough. The reader turns each escape back
+; into its character, so a written cell reads back as the text it was;
+; a URL that GFM reads as an autolink reads back as its own text, which
+; is the link's. Every line break is replaced by a space, since a row is
+; one line, and a U+0000 is written as U+FFFD, the character CommonMark
+; has every reader put in its place; the loss declaration says both.
+; Alignment is not written: every column's delimiter is \`---\`.
 ;
 ; A table of no columns, the one an empty array or object makes, has no
 ; pipe table, since a row needs at least one cell: it is written as the
@@ -320,14 +323,28 @@ def markdown-options
     entry :missing ""
     entry :non-finite :literal
 
-; A cell's text, as it stands between the pipes.
+; A cell's text, as it stands between the pipes: the backslashes doubled
+; first, so that the escapes written after them stay single.
 def markdown-cell [cell]
   replace-text "\\r" " "
     replace-text "\\n" " "
       replace-text "\\r\\n" " "
-        replace-text "|" "\\\\|"
-          replace-text "\\\\" "\\\\\\\\"
-            scalar-text markdown-options cell
+        replace-text "\\u0000" "\\ufffd"
+          markdown-escape
+            replace-text "\\\\" "\\\\\\\\"
+              scalar-text markdown-options cell
+
+; Every character that can begin inline markup, escaped with a backslash.
+def markdown-escape [cell-text]
+  replace-text "~" "\\\\~"
+    replace-text "&" "\\\\&"
+      replace-text "<" "\\\\<"
+        replace-text "]" "\\\\]"
+          replace-text "[" "\\\\["
+            replace-text "_" "\\\\_"
+              replace-text "*" "\\\\*"
+                replace-text "\`" "\\\\\`"
+                  replace-text "|" "\\\\|" cell-text
 
 def markdown-label [column]
   markdown-cell (get :label column)

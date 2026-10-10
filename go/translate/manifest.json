@@ -47,7 +47,7 @@
       "A table of no columns, such as the one an empty array or object makes, is written as the empty document, which reads back as the empty table.",
       "Read as records, a document with no table is the empty table, of no columns and no rows.",
       "Read as records, a document with several tables is its first table, and the tables after it are not read.",
-      "Inline markup in a cell is flattened to its text when it is read, an image to its alt text, and a written cell is plain text, so text that spells inline markup reads back as that markup.",
+      "Inline markup in a cell is flattened to its text when it is read, an image to its alt text; a written cell escapes every character that can begin inline markup, so it reads back as the text it was.",
       "A null and a missing cell are both written as an empty cell, so the two cannot be told apart, or from an empty string, when read back.",
       "A nested array or object in a cell is written as its compact JSON text.",
       "A number that is not finite is written as Infinity, -Infinity or NaN, and as null inside a nested array or object, since JSON has no spelling for one.",
@@ -55,7 +55,7 @@
       "Column alignment is not kept.",
       "A line break in a cell is written as a space.",
       "Leading and trailing spaces in a cell are not kept.",
-      "A U+0000 in a cell is written as it is, and the reader replaces it with U+FFFD when the table is read back."
+      "A U+0000 in a cell is written as U+FFFD, the character a Markdown reader puts in its place, so it reads back as U+FFFD."
     ]
   }
 }
