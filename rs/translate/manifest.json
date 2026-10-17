@@ -56,6 +56,7 @@
       "A line break in a cell is written as a space.",
       "Whitespace at either end of a cell is not kept, as the reader trims it: the space, the tab, U+00A0, U+FEFF, U+2028, U+2029 and the other Unicode space separators, though not U+0085.",
       "A U+0000 in a cell is written as U+FFFD, the character a Markdown reader puts in its place, so it reads back as U+FFFD."
-    ]
+    ],
+    "whole": "A link or an image may name a link reference definition that comes later in the document, so a document's tree is complete only at its end: it is read whole before anything is written."
   }
 }
