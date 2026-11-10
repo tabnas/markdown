@@ -14,6 +14,10 @@ type TranslationParts struct {
 	Lift     *TranslationPart
 	Embed    *TranslationPart
 	Render   *TranslationPart
+	// Transduce is the transducer: a document's JSON events from its
+	// parser's rule passes, a block at a time, for a host that reads parser
+	// events.
+	Transduce *TranslationPart
 }
 
 //go:embed translate/manifest.json
@@ -25,10 +29,14 @@ var translationLift string
 //go:embed translate/render.alc
 var translationRender string
 
+//go:embed translate/transduce.alc
+var translationTransduce string
+
 var translationParts = TranslationParts{
-	Manifest: translationManifest,
-	Lift:     &TranslationPart{Entry: "markdown-lift", Source: translationLift},
-	Render:   &TranslationPart{Entry: "markdown-render", Source: translationRender},
+	Manifest:  translationManifest,
+	Lift:      &TranslationPart{Entry: "markdown-lift", Source: translationLift},
+	Render:    &TranslationPart{Entry: "markdown-render", Source: translationRender},
+	Transduce: &TranslationPart{Entry: "markdown-transduce", Source: translationTransduce},
 }
 
 // Translate returns Markdown's translation parts.
@@ -39,6 +47,7 @@ func Translate() *TranslationParts {
 	parts.Lift = copyPart(parts.Lift)
 	parts.Embed = copyPart(parts.Embed)
 	parts.Render = copyPart(parts.Render)
+	parts.Transduce = copyPart(parts.Transduce)
 	return &parts
 }
 

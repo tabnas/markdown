@@ -434,6 +434,9 @@ pub struct TranslationParts {
     pub embed: Option<TranslationPart>,
     /// An optional render from the write shape to text.
     pub render: Option<TranslationPart>,
+    /// An optional transducer: a document's JSON events from its parser's
+    /// rule passes, for a host that reads parser events.
+    pub transduce: Option<TranslationPart>,
 }
 
 const TRANSLATION: TranslationParts = TranslationParts {
@@ -446,6 +449,10 @@ const TRANSLATION: TranslationParts = TranslationParts {
     render: Some(TranslationPart {
         entry: "markdown-render",
         source: Some(include_str!("../translate/render.alc")),
+    }),
+    transduce: Some(TranslationPart {
+        entry: "markdown-transduce",
+        source: Some(include_str!("../translate/transduce.alc")),
     }),
 };
 
@@ -488,6 +495,25 @@ pub fn manifest_text() -> &'static str {
 /// ```
 pub fn lift_text() -> &'static str {
     match TRANSLATION.lift {
+        Some(part) => part.source.unwrap_or_default(),
+        None => "",
+    }
+}
+
+/// Markdown's transducer part, `alchemy/transduce.alc`, the file the
+/// manifest's `translate.transduce` names: a library of alchemy
+/// definitions, with no `export`, whose entry point `markdown-transduce`
+/// writes a document's JSON events from the grammar's rule passes, a block
+/// at a time, as the walk of the parser's value writes them. A host that
+/// reads parser events links it with its own program. The crate embeds its
+/// own copy, `translate/transduce.alc`, held to the file as the
+/// manifest's is.
+///
+/// ```
+/// assert!(tabnas_markdown::transduce_text().contains("def markdown-transduce [input]"));
+/// ```
+pub fn transduce_text() -> &'static str {
+    match TRANSLATION.transduce {
         Some(part) => part.source.unwrap_or_default(),
         None => "",
     }

@@ -13,6 +13,7 @@ type TranslationParts = Readonly<{
   lift?: TranslationPart
   embed?: TranslationPart
   render?: TranslationPart
+  transduce?: TranslationPart
 }>
 
 const TRANSLATION: TranslationParts = Object.freeze({
@@ -58,6 +59,7 @@ const TRANSLATION: TranslationParts = Object.freeze({
     "schema": "markdown-ast",
     "lift": "alchemy/lift.alc",
     "render": "alchemy/render.alc",
+    "transduce": "alchemy/transduce.alc",
     "loss": [
       "The rows are the elements of the root array, and a root of another kind is written as one row.",
       "The columns are the first row's, an object's keys or an array's positions labelled 0, 1 and so on, so a member or position of a later row that the first row lacks is not written, and one the first row has and a later row lacks is an empty cell.",
@@ -73,9 +75,10 @@ const TRANSLATION: TranslationParts = Object.freeze({
       "Column alignment is not kept.",
       "A line break in a cell is written as a space.",
       "Whitespace at either end of a cell is not kept, as the reader trims it: the space, the tab, U+00A0, U+FEFF, U+2028, U+2029 and the other Unicode space separators, though not U+0085.",
-      "A U+0000 in a cell is written as U+FFFD, the character a Markdown reader puts in its place, so it reads back as U+FFFD."
-    ],
-    "whole": "A link or an image may name a link reference definition that comes later in the document, so a document's tree is complete only at its end: it is read whole before anything is written."
+      "A U+0000 in a cell is written as U+FFFD, the character a Markdown reader puts in its place, so it reads back as U+FFFD.",
+      "Read as a tree, a bracketed label is a linkReference or an imageReference whether or not the document defines it, as mdast keeps references unresolved, so one with no definition, which CommonMark reads as literal text, is a reference, and emphasis or a link around it nests as it would around a reference.",
+      "Read as records, a cell's reference is its text, without the brackets."
+    ]
   }
 }
 `,
@@ -90,9 +93,12 @@ const TRANSLATION: TranslationParts = Object.freeze({
 ; The reader's tree is mdast's shape: a \`document\` whose \`children\` are
 ; blocks, a \`table\` among them whose \`children\` are \`tableRow\`s of
 ; \`tableCell\`s, and each cell's \`children\` the inline nodes of its text:
-; \`text\`, \`inlineCode\` and \`html\` with a \`value\`, \`image\` with an \`alt\`,
-; and \`emphasis\`, \`strong\`, \`link\` and the rest with \`children\` of their
-; own. \`type\` is each node's first member. The lift takes the first
+; \`text\`, \`inlineCode\` and \`html\` with a \`value\`, \`image\` and
+; \`imageReference\` with an \`alt\`, and \`emphasis\`, \`strong\`, \`link\`,
+; \`linkReference\` and the rest with \`children\` of their own. \`type\` is
+; each node's first member. The tree keeps references unresolved, so a
+; cell's \`[a]\` is a \`linkReference\` whether or not the document defines
+; \`a\`, and its text is \`a\`, without the brackets. The lift takes the first
 ; row's cells as the column labels and every later row as a record, and
 ; reads nothing else of the document: not the blocks around the table,
 ; and not the table's \`align\`. A cell is the text under it, every
@@ -407,6 +413,109 @@ def markdown-render-finish [s]
 def markdown-render [input]
   join ""
     scan-emit :start markdown-render-step markdown-render-finish input
+` }),
+  transduce: Object.freeze({ entry: "markdown-transduce", source: `; Markdown's transducer part: a document's JSON events from the markdown
+; grammar's rule passes, for a host that reads parser events (dmog's
+; \`translate\` and \`run --grammar markdown\`). Every event is the one the walk
+; of the grammar's value gives, in its order, a block at a time: a container
+; begins as its rule opens and ends as it closes, and a leaf is written whole.
+; This is a library of definitions, each named \`markdown-transduce...\`, which
+; a host links with its own program; its entry point is \`markdown-transduce\`.
+;
+; The grammar's rules open and close every node of the tree. \`markdown\` is
+; the document: its open pass begins the document's object and its
+; \`children\`, and its close pass, at the end of the source, ends them. Each
+; node of the tree is a rule named for its type. A container's rule
+; (\`blockquote\`, \`list\`, \`listItem\`, \`paragraph\`, \`heading\`, \`table\`,
+; \`tableRow\`, \`tableCell\`, \`emphasis\`, \`strong\`, \`delete\`, \`link\`,
+; \`linkReference\`) opens on a token whose value is the node's head, the
+; members before its \`children\` (\`type\` first, then \`ordered\` and \`start\`, a
+; heading's \`depth\`, a table's \`align\`, a link's \`url\` and \`title\`, a
+; reference's \`identifier\`, \`label\` and \`referenceType\`), and closes on the
+; \`#EN\` token, whose value is the members after them (a list's \`spread\`, a
+; list item's \`spread\` and \`checked\`). A leaf's rule (\`thematicBreak\`,
+; \`code\`, \`html\`, \`definition\`, \`text\`, \`inlineCode\`, \`break\`, \`image\`,
+; \`imageReference\`) opens on a token whose value is the whole node, and
+; closes at once. \`children\`, the loop of a container's children, and the
+; lines it reads (\`#LB\`) write nothing. A member's value is a scalar, or a
+; vector of scalars (a table's \`align\`), written as an array.
+;
+; The grammar finishes a block's inline content as the block closes, since
+; the block bounds it, and keeps references unresolved, so a block's events
+; depend on nothing after it: no document is refused. The state is whether
+; any pass came: a source that makes none, the empty document, is the empty
+; document at finish. Nothing grows with the document.
+
+; What a rule is: the document, a container, a leaf, or none of them.
+def markdown-transduce-kind [name]
+  match name
+    case "markdown" :document
+    case "blockquote" :container
+    case "list" :container
+    case "listItem" :container
+    case "paragraph" :container
+    case "heading" :container
+    case "table" :container
+    case "tableRow" :container
+    case "tableCell" :container
+    case "emphasis" :container
+    case "strong" :container
+    case "delete" :container
+    case "link" :container
+    case "linkReference" :container
+    case "thematicBreak" :leaf
+    case "code" :leaf
+    case "html" :leaf
+    case "definition" :leaf
+    case "text" :leaf
+    case "inlineCode" :leaf
+    case "break" :leaf
+    case "image" :leaf
+    case "imageReference" :leaf
+    case _ :none
+
+; The value of the token a pass consumed: a head, a tail or a whole node.
+def markdown-transduce-value [rule]
+  get :val (transduce-token 0 rule)
+
+; One member of a record as its events: a vector as an array of scalars.
+def markdown-transduce-member [record name]
+  let [value (get name record)]
+    match (kind value)
+      case :vector (push-all [array-end] (push-all (map (fn [item] (scalar item)) value) [(key name) array-start]))
+      case _ [(key name) (scalar value)]
+
+; Every member of a record as its events, in the record's order.
+def markdown-transduce-members [record]
+  flatten (map (partial markdown-transduce-member record) (keys record))
+
+def markdown-transduce-open [rule]
+  match (markdown-transduce-kind (get :name rule))
+    case :document [object-start (key "type") (scalar "document") (key "children") array-start]
+    case :container (push-all [(key "children") array-start] (push-all (markdown-transduce-members (markdown-transduce-value rule)) [object-start]))
+    case :leaf (push object-end (push-all (markdown-transduce-members (markdown-transduce-value rule)) [object-start]))
+    case _ []
+
+def markdown-transduce-close [rule]
+  match (markdown-transduce-kind (get :name rule))
+    case :document [array-end object-end]
+    case :container (push object-end (push-all (markdown-transduce-members (markdown-transduce-value rule)) [array-end]))
+    case _ []
+
+def markdown-transduce-step [started pass]
+  match pass
+    case (open rule) (transition true (markdown-transduce-open rule))
+    case (close rule) (transition true (markdown-transduce-close rule))
+
+; A source that made no pass is the empty document.
+def markdown-transduce-finish [started]
+  match started
+    case true []
+    case _ [object-start (key "type") (scalar "document") (key "children") array-start array-end object-end]
+
+; The part: the rule passes in, the document's events out.
+def markdown-transduce [input]
+  as-events (scan-emit false markdown-transduce-step markdown-transduce-finish (parser-events input))
 ` })
 })
 
