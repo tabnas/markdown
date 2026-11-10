@@ -723,8 +723,8 @@ type blockHandler struct {
 	// finalize is called once when the block is closed.
 	finalize   func(p *blockParser, block *MdNode)
 	canContain func(t NodeType) bool
-	// acceptsLines marks the leaves that accumulate raw text: code blocks,
-	// HTML blocks, paragraphs, tables.
+	// acceptsLines marks the leaves that take lines: code blocks, HTML
+	// blocks, paragraphs, tables.
 	acceptsLines bool
 	// verbatim marks the blocks whose lines are literal text, so Appendix A
 	// step 2 does not look for block starts while one is the last matched
@@ -971,9 +971,11 @@ func init() {
 				// §4.7: a paragraph may begin with link reference definitions.
 				// Consume them from the front; if nothing is left, the
 				// paragraph disappears.
-				if p.consumeReferenceDefs(block) && isBlank(string(block.StringContent)) {
+				if p.readDefinitions(block) && isBlank(string(block.StringContent)) {
 					block.Unlink()
+					return
 				}
+				p.markTaskItem(block)
 			},
 			canContain:   noChildren,
 			acceptsLines: true,
@@ -1074,30 +1076,19 @@ func addTableRow(
 		}
 		row.AppendChild(cell)
 	}
+
+	if p.events != nil {
+		*p.events = append(*p.events, BlockEvent{Kind: EventRow, Node: row})
+	}
 }
 
-// finalizeTable closes a table: it turns the raw lines the table accumulated
-// into body rows.
-//
-// The first accumulated line is the delimiter row that opened the table. It
-// carries no data — its alignments are already on the node — so it is skipped
-// here, which is also what keeps the source line numbering of the rows below it
-// straightforward: the table accepts exactly one line per source line, and a
-// blank line closes it, so there are no gaps.
-func finalizeTable(p *blockParser, table *MdNode) {
-	lines := bytes.Split(table.StringContent, []byte{'\n'})
+// finalizeTable closes a table. Its body rows were made one per line as the
+// lines came (addLine): the table accepts exactly one line per source line,
+// and a blank line closes it, so each row's line is the line that made it,
+// and a row is finished the moment its line is, which is what lets a driver
+// write a table a row at a time.
+func finalizeTable(_ *blockParser, table *MdNode) {
 	table.StringContent = nil
-
-	// Line 0 is the delimiter row; the last element is the empty string after
-	// the final newline.
-	headerLine := table.SourcePos[0][0]
-	for i := 1; i < len(lines); i++ {
-		if 0 == len(lines[i]) {
-			continue
-		}
-		line := string(lines[i])
-		addTableRow(p, table, splitTableRow(line), false, headerLine+i+1, charCount(line))
-	}
 }
 
 // missingHandler stands in for a node type with no block behaviour. The
@@ -1350,7 +1341,7 @@ var blockStarts = []blockStart{
 		// only what remains becomes the heading. If nothing remains this is not
 		// a setext underline at all (it falls through to thematic break /
 		// paragraph).
-		p.consumeReferenceDefs(container)
+		p.readDefinitions(container)
 		if 0 == len(container.StringContent) {
 			return startNone
 		}
@@ -1453,14 +1444,6 @@ type blockParser struct {
 	lineNumber     int
 	lastLineLength int
 
-	// tableArmed is the GFM table probe gate. True by default — the batch
-	// driver probes every candidate line, as it always has. The engine
-	// driver sets it per line from the #LB token's tblArm bit (a provable
-	// superset of "could be a delimiter row"; see engineblock.go), which is
-	// what lets the GFM alt be a genuine, subtractable extension seam
-	// without moving any table decision out of this file.
-	tableArmed bool
-
 	// prevLineLength is the length of the line before the one lastLineLength
 	// measures.
 	//
@@ -1532,6 +1515,52 @@ type blockParser struct {
 	// MdNode has no field for the HTML block type, and the tree contract is not
 	// ours to change, so open HTML blocks carry it here.
 	htmlBlockTypes map[*MdNode]int
+
+	// events are the events of the lines incorporated since the driver last
+	// took them, or nil, the default, when no driver asks: the batch parse
+	// records nothing.
+	events *[]BlockEvent
+
+	// tableDelimiterRow is the table whose delimiter row is the next line
+	// addLine writes: that row opened the table and holds no data, so it
+	// makes no row.
+	tableDelimiterRow *MdNode
+}
+
+// BlockEventKind says what a BlockEvent records.
+type BlockEventKind int
+
+const (
+	// EventOpen is a container opened: a block quote, a list, a list item
+	// or a table, whose fields at that point are read when the line's
+	// events are.
+	EventOpen BlockEventKind = iota
+	// EventRow is a table row made, complete with its cells.
+	EventRow
+	// EventDefinition is a definition read off a paragraph.
+	EventDefinition
+	// EventClose is a block closed, after its finalizer ran. A closed
+	// paragraph that held nothing but definitions has been unlinked by
+	// then, and has no parent.
+	EventClose
+)
+
+// BlockEvent is what the block phase did, in the order it did it, for a
+// driver that writes blocks as they finish. Mirrors ts/src/block.ts
+// BlockEvent.
+type BlockEvent struct {
+	Kind BlockEventKind
+	Node *MdNode
+	Def  Definition
+}
+
+// openEvents are the containers whose opening is an event: the ones a
+// driver writes open.
+var openEvents = map[NodeType]bool{
+	NodeBlockQuote: true,
+	NodeList:       true,
+	NodeItem:       true,
+	NodeTable:      true,
 }
 
 func newBlockParser(options Options) *blockParser {
@@ -1542,7 +1571,6 @@ func newBlockParser(options Options) *blockParser {
 		fastReject = maybeSpecialGFM
 	}
 	return &blockParser{
-		tableArmed:           true,
 		options:              options,
 		refmap:               RefMap{},
 		doc:                  doc,
@@ -1660,8 +1688,18 @@ func (p *blockParser) addLine() {
 	} else {
 		text = p.currentLine[p.offset:]
 	}
-	tip.StringContent = append(tip.StringContent, text...)
-	tip.StringContent = append(tip.StringContent, '\n')
+	if NodeTable == tip.Type {
+		// A table's line is a row the moment it arrives, but for the
+		// delimiter row that opened it.
+		if p.tableDelimiterRow == tip {
+			p.tableDelimiterRow = nil
+		} else {
+			addTableRow(p, tip, splitTableRow(text), false, p.lineNumber, charCount(text))
+		}
+	} else {
+		tip.StringContent = append(tip.StringContent, text...)
+		tip.StringContent = append(tip.StringContent, '\n')
+	}
 	p.lastAddedLine = text
 	p.lastAddedColumn = column
 	p.lastAddedTo = tip
@@ -1681,8 +1719,14 @@ func (p *blockParser) addChild(tag NodeType, offset int) *MdNode {
 	columnNumber := p.sourceColumn(offset) + 1 // offset 0 is column 1
 	node := NewNode(tag)
 	node.SourcePos = SourcePos{{p.lineNumber, columnNumber}, {0, 0}}
+	if NodeParagraph == tag {
+		node.ContentLine = p.lineNumber
+	}
 	p.openTip().AppendChild(node)
 	p.tip = node
+	if p.events != nil && openEvents[tag] {
+		*p.events = append(*p.events, BlockEvent{Kind: EventOpen, Node: node})
+	}
 	return node
 }
 
@@ -1698,13 +1742,10 @@ func (p *blockParser) addChild(tag NodeType, offset int) *MdNode {
 // definitions — and the table is opened after it.
 //
 // On success the table is the tip and the caller returns "leaf started", so
-// step 3 adds the delimiter row itself to the table's raw content. It is
-// skipped again by finalizeTable; keeping it costs nothing and makes the
-// table's accumulated lines line up one-for-one with the source lines.
+// step 3 hands the delimiter row itself to addLine, which skips it: the header
+// row is made here, and every later line of the table is a body row the moment
+// it arrives.
 func (p *blockParser) tryOpenTable(container *MdNode) bool {
-	if !p.tableArmed {
-		return false
-	}
 	if !p.options.GFM || p.indented || NodeParagraph != container.Type {
 		return false
 	}
@@ -1755,9 +1796,10 @@ func (p *blockParser) tryOpenTable(container *MdNode) bool {
 	table.SourcePos[0][0] = headerLine
 	table.SourcePos[0][1] = headerColumn
 	table.TableAlign = align
+	p.tableDelimiterRow = table
 
-	// The row is measured over its own text, exactly as finalizeTable measures
-	// the body rows: lastLineLength counts the whole source line, container
+	// The row is measured over its own text, exactly as addLine measures the
+	// body rows: lastLineLength counts the whole source line, container
 	// markers included, so inside a block quote it would end the header row two
 	// columns past where every body row of the same table ends.
 	addTableRow(p, table, headerCells, true, headerLine, charCount(p.lastAddedLine))
@@ -1799,28 +1841,84 @@ func (p *blockParser) finalizeAt(block *MdNode, lineNumber int, endColumn int) {
 	handlerFor(block.Type).finalize(p, block)
 	delete(p.htmlBlockTypes, block)
 	p.tip = above
+	if p.events != nil {
+		*p.events = append(*p.events, BlockEvent{Kind: EventClose, Node: block})
+	}
 }
 
-// consumeReferenceDefs strips leading link reference definitions (§4.7) from a
-// block's raw content, adding each to the refmap, and reports whether any were
-// consumed. The TypeScript inlines this loop at both call sites; here it is one
-// helper so the []byte -> string conversion parseReference needs happens once
-// rather than once per definition.
-func (p *blockParser) consumeReferenceDefs(block *MdNode) bool {
-	s := string(block.StringContent)
-	consumed := 0
-	for consumed < len(s) && '[' == s[consumed] {
-		pos := parseReference(s[consumed:], p.refmap)
-		if 0 == pos {
+// readDefinitions reads the link reference definitions (§4.7) off the front
+// of a paragraph's raw content, as the paragraph finishes or a setext
+// underline converts it, and reports whether any was read. Each is recorded
+// three ways: in refmap (the first definition of a label wins), beside the
+// paragraph's container where it stands (after the paragraph's previous
+// sibling, so before the paragraph, or where it stood once it is gone), and,
+// for a driver, as an event. Mirrors ts/src/block.ts readDefinitions.
+func (p *blockParser) readDefinitions(para *MdNode) bool {
+	read := false
+	for 0 < len(para.StringContent) && '[' == para.StringContent[0] {
+		content := string(para.StringContent)
+		d, ok := parseDefinition(content)
+		if !ok {
 			break
 		}
-		consumed += pos
+
+		// Every line of a paragraph is one source line, so the definition's
+		// lines are counted from where the content begins.
+		newlines := strings.Count(content[:d.length], "\n")
+		last := 0
+		if '\n' == content[d.length-1] {
+			last = 1
+		}
+		def := Definition{
+			Label:       d.label,
+			Destination: d.destination,
+			Title:       d.title,
+			HasTitle:    d.hasTitle,
+			Start:       para.ContentLine,
+			End:         para.ContentLine + newlines - last,
+		}
+		para.ContentLine += newlines
+		para.StringContent = para.StringContent[d.length:]
+
+		key := normalizeReference(d.label)
+		if _, exists := p.refmap[key]; !exists {
+			p.refmap[key] = RefDef{Destination: d.destination, Title: d.title, HasTitle: d.hasTitle}
+		}
+		if parent := para.Parent; parent != nil {
+			parent.Definitions = append(parent.Definitions, DefinitionSite{After: para.Prev, Def: def})
+		}
+		if p.events != nil {
+			*p.events = append(*p.events, BlockEvent{Kind: EventDefinition, Def: def})
+		}
+		read = true
 	}
-	if 0 == consumed {
-		return false
+	return read
+}
+
+// markTaskItem implements GFM task list items: an item whose first block is
+// a paragraph beginning with a task list item marker is checked or not, and
+// the marker is consumed so it does not survive into the text. Decided as
+// the paragraph finishes, on its raw content, before the inline phase has
+// seen it: that is what makes the marker win over anything the inline
+// scanner would make of the brackets (with a `[x]: /url` definition in the
+// document, `- [x] foo` is still a task item rather than a link), and what
+// settles the item's checked state before the item itself finishes.
+func (p *blockParser) markTaskItem(para *MdNode) {
+	if !p.options.GFM {
+		return
 	}
-	block.StringContent = block.StringContent[consumed:]
-	return true
+	item := para.Parent
+	if item == nil || NodeItem != item.Type || item.FirstChild != para {
+		return
+	}
+	state, length, ok := taskListMarker(para.StringContent)
+	if !ok {
+		return
+	}
+	// Whitespace between the brackets is unchecked; `x`/`X` is checked.
+	item.Checked = ' ' != state && '\t' != state
+	item.HasChecked = true
+	para.StringContent = para.StringContent[length:]
 }
 
 // incorporateLine folds one line into the tree — the three steps of Appendix A.
@@ -1998,9 +2096,6 @@ func (p *blockParser) finish() (*MdNode, RefMap) {
 	}
 
 	p.doc.GFM = p.options.GFM
-	if p.options.GFM {
-		markTaskListItems(p.doc)
-	}
 
 	return p.doc, p.refmap
 }
@@ -2054,56 +2149,6 @@ func taskListMarker(s []byte) (state byte, length int, ok bool) {
 		return 0, 0, false
 	}
 	return state, i, true
-}
-
-// taskListContainers is the set of node types markTaskListItems descends into.
-var taskListContainers = map[NodeType]bool{
-	NodeDocument:   true,
-	NodeBlockQuote: true,
-	NodeList:       true,
-	NodeItem:       true,
-}
-
-// markTaskListItems implements GFM task list items: mark every item whose
-// first block is a paragraph beginning with a task list item marker, and
-// consume the marker so it does not survive into the text.
-//
-// Run at the end of the block phase, over StringContent — before the inline
-// phase has seen it. That is what makes the marker win over anything the
-// inline scanner would otherwise make of the brackets: with a `[x]: /url`
-// definition in the document, `- [x] foo` is still a task item rather than a
-// link. It also means the item's checked state is settled before ast.go or
-// html.go looks at the tree.
-//
-// Iterative rather than recursive: container nesting depth is chosen by the
-// input, and strings.Repeat("> ", 20000) is a document this parser otherwise
-// handles.
-func markTaskListItems(doc *MdNode) {
-	stack := []*MdNode{doc}
-
-	for 0 < len(stack) {
-		node := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-
-		if NodeItem == node.Type {
-			first := node.FirstChild
-			if nil != first && NodeParagraph == first.Type {
-				if state, length, ok := taskListMarker(first.StringContent); ok {
-					// Whitespace between the brackets is unchecked; `x`/`X` is
-					// checked.
-					node.Checked = ' ' != state && '\t' != state
-					node.HasChecked = true
-					first.StringContent = first.StringContent[length:]
-				}
-			}
-		}
-
-		if taskListContainers[node.Type] {
-			for c := node.LastChild; nil != c; c = c.Prev {
-				stack = append(stack, c)
-			}
-		}
-	}
 }
 
 // parseBlocks runs phase 1: build the block tree and collect link reference

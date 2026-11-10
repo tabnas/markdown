@@ -19,6 +19,17 @@
 //! - `spread` follows mdast semantics: a list is spread when it is loose,
 //!   an item when it holds blank-line-separated blocks.
 //!
+//! The tree keeps references unresolved, as mdast does: a bracketed label
+//! is a `linkReference` or an `imageReference` naming it, whether or not the
+//! document defines it, and each link reference definition is a
+//! `definition` node where it stands. A block's tree then depends on
+//! nothing outside the block, so it is complete as the block closes (the
+//! engine path writes it then; see `engine_block.rs`).
+//! [`resolve_references`] gives back the tree with the references
+//! resolved, for a caller that wants links. A list's and a list item's
+//! `spread`, and an item's `checked`, follow its `children`, since they are
+//! known only once the children are.
+//!
 //! The result is a [`tabnas::Value`], which is what the plugin's parse
 //! returns, so the engine path and the engine-free path produce one type.
 //! Every children array is a real (possibly empty) array, never `null`.
@@ -31,11 +42,34 @@
 use indexmap::IndexMap;
 use tabnas::Value;
 
-use crate::common::{js_space_index, js_trim};
-use crate::node::{ListType, NodeId, NodeType, Tree};
+use crate::common::{js_space_index, js_trim, normalize_reference, unescape_string};
+use crate::node::{Definition, ListType, NodeId, NodeType, Tree};
 use crate::options::Options;
 
-fn object(entries: Vec<(&'static str, Value)>) -> Value {
+/// A label's identifier, as mdast's: normalized as CommonMark matches
+/// labels ([`normalize_reference`]), in lower case, as the canonical
+/// runtime's `toLowerCase` writes it (Rust's full mapping is the same one,
+/// final sigma included). Two labels a definition and a reference would
+/// match on have the same identifier.
+pub fn label_identifier(raw_label: &str) -> String {
+    let key = normalize_reference(raw_label);
+    if key.is_ascii() {
+        key.to_ascii_lowercase()
+    } else {
+        key.to_lowercase()
+    }
+}
+
+fn reference_type_value(tree: &Tree, node: NodeId) -> Value {
+    string(
+        tree.get(node)
+            .reference_type
+            .map_or("shortcut", |t| t.as_str()),
+    )
+}
+
+/// An object value with these members, in this order.
+pub(crate) fn object(entries: Vec<(&'static str, Value)>) -> Value {
     let mut map = IndexMap::with_capacity(entries.len());
     for (key, value) in entries {
         map.insert(key.to_string(), value);
@@ -89,20 +123,66 @@ fn collect_alt_text(tree: &Tree, node: NodeId) -> String {
 /// Derived from the block parser's sourcepos rather than tracked
 /// separately: consecutive children whose line ranges are not adjacent
 /// must have had a blank line between them.
-fn item_is_spread(tree: &Tree, item: NodeId) -> bool {
-    let mut child = tree.get(item).first_child;
-    while let Some(c) = child {
-        let Some(next) = tree.get(c).next else {
-            break;
+/// The children are the AST's, definitions among them, each by the lines
+/// it spans.
+pub(crate) fn item_is_spread(tree: &Tree, item: NodeId) -> bool {
+    let mut prev_end: Option<usize> = None;
+    for child in block_sequence(tree, item) {
+        let (start, end) = match child {
+            BlockChild::Definition(def) => (def.start, def.end),
+            BlockChild::Node(id) => {
+                let pos = tree.get(id).sourcepos;
+                (pos[0][0], pos[1][0])
+            }
         };
-        let end_line = tree.get(c).sourcepos[1][0];
-        let next_start_line = tree.get(next).sourcepos[0][0];
-        if next_start_line > end_line + 1 {
+        if prev_end.is_some_and(|e| start > e + 1) {
             return true;
         }
-        child = Some(next);
+        prev_end = Some(end);
     }
     false
+}
+
+/// One of a container's children in the AST's order.
+pub(crate) enum BlockChild<'t> {
+    Node(NodeId),
+    Definition(&'t Definition),
+}
+
+/// A container's children in the AST's order: each child, and each
+/// definition where it stands among them (see `DefinitionSite`).
+pub(crate) fn block_sequence(tree: &Tree, container: NodeId) -> Vec<BlockChild<'_>> {
+    let defs = &tree.get(container).definitions;
+    let mut out = Vec::new();
+    let mut d = 0;
+    while d < defs.len() && defs[d].after.is_none() {
+        out.push(BlockChild::Definition(&defs[d].def));
+        d += 1;
+    }
+    let mut c = tree.get(container).first_child;
+    while let Some(id) = c {
+        out.push(BlockChild::Node(id));
+        while d < defs.len() && defs[d].after == Some(id) {
+            out.push(BlockChild::Definition(&defs[d].def));
+            d += 1;
+        }
+        c = tree.get(id).next;
+    }
+    out
+}
+
+/// A definition's node.
+pub fn definition_node(def: &Definition) -> Value {
+    object(vec![
+        ("type", string("definition")),
+        ("identifier", Value::String(label_identifier(&def.label))),
+        ("label", Value::String(unescape_string(&def.label))),
+        ("url", string(&def.destination)),
+        (
+            "title",
+            nullable_string(&def.title.clone().filter(|t| !t.is_empty())),
+        ),
+    ])
 }
 
 /// One container's inline children under construction.
@@ -145,7 +225,7 @@ impl InlineFrame {
 }
 
 /// Project a block's inline children.
-fn inline_children(tree: &Tree, node: NodeId, opts: &Options) -> Vec<Value> {
+pub fn inline_children(tree: &Tree, node: NodeId, opts: &Options) -> Vec<Value> {
     let mut stack = vec![InlineFrame {
         node: None,
         cursor: tree.get(node).first_child,
@@ -176,6 +256,19 @@ fn inline_children(tree: &Tree, node: NodeId, opts: &Options) -> Vec<Value> {
                 ]),
                 NodeType::Del => object(vec![
                     ("type", string("delete")),
+                    ("children", Value::array(done.out)),
+                ]),
+                NodeType::LinkReference => object(vec![
+                    ("type", string("linkReference")),
+                    (
+                        "identifier",
+                        Value::String(label_identifier(&container_node.label)),
+                    ),
+                    (
+                        "label",
+                        Value::String(unescape_string(&container_node.label)),
+                    ),
+                    ("referenceType", reference_type_value(tree, container)),
                     ("children", Value::array(done.out)),
                 ]),
                 _ => object(vec![
@@ -217,7 +310,11 @@ fn inline_children(tree: &Tree, node: NodeId, opts: &Options) -> Vec<Value> {
                 ("value", string(&child.literal)),
             ])),
 
-            NodeType::Emph | NodeType::Strong | NodeType::Del | NodeType::Link => {
+            NodeType::Emph
+            | NodeType::Strong
+            | NodeType::Del
+            | NodeType::Link
+            | NodeType::LinkReference => {
                 frame.flush();
                 stack.push(InlineFrame {
                     node: Some(child_id),
@@ -232,6 +329,14 @@ fn inline_children(tree: &Tree, node: NodeId, opts: &Options) -> Vec<Value> {
                 ("type", string("image")),
                 ("url", string(&child.destination)),
                 ("title", nullable_string(&child.title)),
+                ("alt", Value::String(collect_alt_text(tree, child_id))),
+            ])),
+
+            NodeType::ImageReference => frame.push(object(vec![
+                ("type", string("imageReference")),
+                ("identifier", Value::String(label_identifier(&child.label))),
+                ("label", Value::String(unescape_string(&child.label))),
+                ("referenceType", reference_type_value(tree, child_id)),
                 ("alt", Value::String(collect_alt_text(tree, child_id))),
             ])),
 
@@ -251,32 +356,82 @@ fn is_block_container(t: NodeType) -> bool {
     )
 }
 
-/// A projected block, or `None` for a node the AST has no shape for.
-fn build_block(
-    tree: &Tree,
-    node: NodeId,
-    opts: &Options,
-    built: &mut [Option<Value>],
-) -> Option<Value> {
+/// The fields of a container block's node known when it opens, `type`
+/// first, in the order the node has them: what precedes its `children`.
+/// Its fields known only when it closes are [`block_tail`]'s. Mirrors
+/// `ts/src/ast.ts` `blockHead`.
+pub fn block_head(tree: &Tree, node: NodeId) -> Vec<(&'static str, Value)> {
     let n = tree.get(node);
     match n.node_type {
-        NodeType::Paragraph => Some(object(vec![
-            ("type", string("paragraph")),
-            ("children", Value::array(inline_children(tree, node, opts))),
-        ])),
-
-        NodeType::Heading => Some(object(vec![
+        NodeType::BlockQuote => vec![("type", string("blockquote"))],
+        NodeType::List => {
+            let data = n.list_data.as_ref();
+            let ordered = data.is_some_and(|d| d.list_type == ListType::Ordered);
+            let start = if ordered {
+                Value::Number(data.map_or(1, |d| d.start) as f64)
+            } else {
+                Value::Null
+            };
+            vec![
+                ("type", string("list")),
+                ("ordered", Value::Bool(ordered)),
+                ("start", start),
+            ]
+        }
+        NodeType::Item => vec![("type", string("listItem"))],
+        NodeType::Paragraph => vec![("type", string("paragraph"))],
+        NodeType::Heading => vec![
             ("type", string("heading")),
             ("depth", Value::Number(n.level as f64)),
-            ("children", Value::array(inline_children(tree, node, opts))),
-        ])),
+        ],
+        NodeType::Table => {
+            // A column with no colon is JSON null, and a table with no
+            // columns is `[]`.
+            let align: Vec<Value> = n
+                .table_align
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .map(|a| match a {
+                    Some(a) => string(a.as_str()),
+                    None => Value::Null,
+                })
+                .collect();
+            vec![("type", string("table")), ("align", Value::array(align))]
+        }
+        NodeType::TableRow => vec![("type", string("tableRow"))],
+        NodeType::TableCell => vec![("type", string("tableCell"))],
+        _ => Vec::new(),
+    }
+}
 
+/// The fields of a container block's node that follow its `children`.
+pub fn block_tail(tree: &Tree, node: NodeId) -> Vec<(&'static str, Value)> {
+    let n = tree.get(node);
+    match n.node_type {
+        NodeType::List => {
+            let tight = n.list_data.as_ref().is_none_or(|d| d.tight);
+            vec![("spread", Value::Bool(!tight))]
+        }
+        NodeType::Item => {
+            let checked = match n.checked {
+                Some(b) => Value::Bool(b),
+                None => Value::Null,
+            };
+            vec![
+                ("spread", Value::Bool(item_is_spread(tree, node))),
+                ("checked", checked),
+            ]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// A leaf block's node: a code block, an HTML block or a thematic break.
+pub fn leaf_block(tree: &Tree, node: NodeId) -> Option<Value> {
+    let n = tree.get(node);
+    match n.node_type {
         NodeType::ThematicBreak => Some(object(vec![("type", string("thematicBreak"))])),
-
-        NodeType::BlockQuote => Some(object(vec![
-            ("type", string("blockquote")),
-            ("children", Value::array(built_children(tree, node, built))),
-        ])),
 
         NodeType::CodeBlock => {
             // `js_trim` / `js_space_index`, not `str::trim` and an
@@ -322,6 +477,44 @@ fn build_block(
             ("value", string(&n.literal)),
         ])),
 
+        _ => None,
+    }
+}
+
+/// A container node of the AST: its head, its children, then its tail.
+fn container_node(tree: &Tree, node: NodeId, children: Vec<Value>) -> Value {
+    let mut entries = block_head(tree, node);
+    entries.push(("children", Value::array(children)));
+    entries.extend(block_tail(tree, node));
+    object(entries)
+}
+
+/// A projected block, or `None` for a node the AST has no shape for.
+fn build_block(
+    tree: &Tree,
+    node: NodeId,
+    opts: &Options,
+    built: &mut [Option<Value>],
+) -> Option<Value> {
+    let n = tree.get(node);
+    match n.node_type {
+        NodeType::Paragraph | NodeType::Heading => Some(container_node(
+            tree,
+            node,
+            inline_children(tree, node, opts),
+        )),
+
+        NodeType::ThematicBreak | NodeType::CodeBlock | NodeType::HtmlBlock => {
+            leaf_block(tree, node)
+        }
+
+        NodeType::BlockQuote | NodeType::Item => {
+            // An item is only reached here if it is somehow detached from
+            // its list; a list builds its own items below.
+            let children = built_children(tree, node, built);
+            Some(container_node(tree, node, children))
+        }
+
         NodeType::Table => {
             // A table's children are rows and cells rather than blocks, so
             // the block walk never descends into one; the nesting is a
@@ -343,86 +536,38 @@ fn build_block(
                     if cell_node.node_type != NodeType::TableCell {
                         continue;
                     }
-                    cells.push(object(vec![
-                        ("type", string("tableCell")),
-                        ("children", Value::array(inline_children(tree, c, opts))),
-                    ]));
+                    cells.push(container_node(tree, c, inline_children(tree, c, opts)));
                 }
-                rows.push(object(vec![
-                    ("type", string("tableRow")),
-                    ("children", Value::array(cells)),
-                ]));
+                rows.push(container_node(tree, r, cells));
             }
-            // A column with no colon is JSON null, and a table with no
-            // columns is `[]`.
-            let align: Vec<Value> = n
-                .table_align
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .map(|a| match a {
-                    Some(a) => string(a.as_str()),
-                    None => Value::Null,
-                })
-                .collect();
-            Some(object(vec![
-                ("type", string("table")),
-                ("align", Value::array(align)),
-                ("children", Value::array(rows)),
-            ]))
+            Some(container_node(tree, node, rows))
         }
 
         NodeType::List => {
-            let data = n.list_data.as_ref();
-            let ordered = data.is_some_and(|d| d.list_type == ListType::Ordered);
             // The items were built before the list (children precede
             // their parent in the build order) and each already took its
             // own children out of `built`; take the items the same way.
             let items = built_children(tree, node, built);
-            let start = if ordered {
-                Value::Number(data.map_or(1, |d| d.start) as f64)
-            } else {
-                Value::Null
-            };
-            let tight = data.is_none_or(|d| d.tight);
-            Some(object(vec![
-                ("type", string("list")),
-                ("ordered", Value::Bool(ordered)),
-                ("start", start),
-                ("spread", Value::Bool(!tight)),
-                ("children", Value::array(items)),
-            ]))
+            Some(container_node(tree, node, items))
         }
-
-        NodeType::Item => Some(list_item(tree, node, built)),
 
         _ => None,
     }
 }
 
-fn list_item(tree: &Tree, item: NodeId, built: &mut [Option<Value>]) -> Value {
-    let checked = match tree.get(item).checked {
-        Some(b) => Value::Bool(b),
-        None => Value::Null,
-    };
-    object(vec![
-        ("type", string("listItem")),
-        ("spread", Value::Bool(item_is_spread(tree, item))),
-        ("checked", checked),
-        ("children", Value::array(built_children(tree, item, built))),
-    ])
-}
-
 /// The already-built projections of `node`'s children, in source order,
-/// taken out of `built`.
+/// with the definitions among them, taken out of `built`.
 fn built_children(tree: &Tree, node: NodeId, built: &mut [Option<Value>]) -> Vec<Value> {
     let mut out = Vec::new();
-    let mut c = tree.get(node).first_child;
-    while let Some(id) = c {
-        if let Some(value) = built[id].take() {
-            out.push(value);
+    for child in block_sequence(tree, node) {
+        match child {
+            BlockChild::Definition(def) => out.push(definition_node(def)),
+            BlockChild::Node(id) => {
+                if let Some(value) = built[id].take() {
+                    out.push(value);
+                }
+            }
         }
-        c = tree.get(id).next;
     }
     out
 }
@@ -472,4 +617,210 @@ pub fn to_ast(tree: &Tree, opts: &Options) -> Value {
             Value::array(block_children(tree, tree.root(), opts)),
         ),
     ])
+}
+
+// --- resolving references -------------------------------------------------
+
+/// What [`resolve_references`] reads a reference's destination from.
+struct Resource {
+    url: Value,
+    title: Value,
+}
+
+fn get<'v>(node: &'v Value, key: &str) -> Option<&'v Value> {
+    match node {
+        Value::Object(map) => map.get(key),
+        _ => None,
+    }
+}
+
+fn get_str<'v>(node: &'v Value, key: &str) -> &'v str {
+    match get(node, key) {
+        Some(Value::String(s)) => s,
+        _ => "",
+    }
+}
+
+/// The tree with its references resolved, as CommonMark reads a document:
+/// each `linkReference` and `imageReference` whose identifier a definition
+/// has becomes the `link` or the `image` that definition gives (the first
+/// definition of an identifier wins), one no definition has becomes its
+/// source text again (`[`, its text, `]`, then `[label]` for a full
+/// reference and `[]` for a collapsed one, as mdast-util-to-hast reverts
+/// one), and the definitions leave the tree. Adjacent text is merged, as
+/// the parse merges it. A new tree; the one given is not changed. Mirrors
+/// `ts/src/ast.ts` `resolveReferences`.
+///
+/// The parse reads a bracketed label as a reference whether or not the
+/// document defines it, so where one with no definition decided how the
+/// text around it nests (emphasis that would have crossed it, a link whose
+/// text holds it), the result is the tree that reading gives, not the one
+/// CommonMark gives: the loss the manifest declares. Every other document
+/// resolves to the tree CommonMark reads.
+///
+/// Iterative over the containers, since block nesting is the input's to
+/// choose.
+///
+/// ```
+/// let doc = tabnas_markdown::parse("[a]\n\n[a]: /u")?;
+/// let resolved = tabnas_markdown::resolve_references(&doc).to_json();
+/// assert_eq!(resolved["children"][0]["children"][0]["type"], "link");
+/// assert_eq!(resolved["children"][0]["children"][0]["url"], "/u");
+/// # Ok::<(), tabnas_markdown::MarkdownError>(())
+/// ```
+pub fn resolve_references(doc: &Value) -> Value {
+    let mut defs: std::collections::HashMap<String, Resource> = std::collections::HashMap::new();
+    let mut stack: Vec<&Value> = vec![doc];
+    while let Some(node) = stack.pop() {
+        if get_str(node, "type") == "definition" {
+            defs.entry(get_str(node, "identifier").to_string())
+                .or_insert_with(|| Resource {
+                    url: get(node, "url").cloned().unwrap_or(Value::Null),
+                    title: get(node, "title").cloned().unwrap_or(Value::Null),
+                });
+            continue;
+        }
+        if let Some(Value::Array(children)) = get(node, "children") {
+            for c in children.iter().rev() {
+                stack.push(c);
+            }
+        }
+    }
+
+    struct Frame<'v> {
+        node: &'v Value,
+        children: &'v [Value],
+        i: usize,
+        out: Vec<Value>,
+    }
+    fn push(out: &mut Vec<Value>, node: Value) {
+        if get_str(&node, "type") == "text" {
+            if let Some(last) = out.last_mut() {
+                if get_str(last, "type") == "text" {
+                    let value = format!("{}{}", get_str(last, "value"), get_str(&node, "value"));
+                    *last = object(vec![
+                        ("type", string("text")),
+                        ("value", Value::String(value)),
+                    ]);
+                    return;
+                }
+            }
+        }
+        out.push(node);
+    }
+    fn text(out: &mut Vec<Value>, value: String) {
+        push(
+            out,
+            object(vec![
+                ("type", string("text")),
+                ("value", Value::String(value)),
+            ]),
+        );
+    }
+    fn suffix(node: &Value) -> String {
+        match get_str(node, "referenceType") {
+            "full" => format!("[{}]", get_str(node, "label")),
+            "collapsed" => "[]".to_string(),
+            _ => String::new(),
+        }
+    }
+    fn children_of(node: &Value) -> &[Value] {
+        match get(node, "children") {
+            Some(Value::Array(items)) => items,
+            _ => &[],
+        }
+    }
+    fn rebuilt(node: &Value, children: Vec<Value>) -> Value {
+        let mut map = IndexMap::new();
+        if let Value::Object(fields) = node {
+            for (k, v) in fields.iter() {
+                // `children` keeps its place, its value set below.
+                map.insert(
+                    k.clone(),
+                    if k == "children" {
+                        Value::Null
+                    } else {
+                        v.clone()
+                    },
+                );
+            }
+        }
+        map.insert("children".to_string(), Value::array(children));
+        Value::object(map)
+    }
+
+    let mut stack = vec![Frame {
+        node: doc,
+        children: children_of(doc),
+        i: 0,
+        out: Vec::new(),
+    }];
+    loop {
+        let frame = stack
+            .last_mut()
+            .expect("the document's frame is popped last");
+        if frame.i >= frame.children.len() {
+            let done = stack.pop().expect("a frame to pop");
+            let node = done.node;
+            let Some(parent) = stack.last_mut() else {
+                return rebuilt(node, done.out);
+            };
+            if get_str(node, "type") == "linkReference" {
+                match defs.get(get_str(node, "identifier")) {
+                    Some(res) => push(
+                        &mut parent.out,
+                        object(vec![
+                            ("type", string("link")),
+                            ("url", res.url.clone()),
+                            ("title", res.title.clone()),
+                            ("children", Value::array(done.out)),
+                        ]),
+                    ),
+                    None => {
+                        text(&mut parent.out, "[".to_string());
+                        for c in done.out {
+                            push(&mut parent.out, c);
+                        }
+                        text(&mut parent.out, format!("]{}", suffix(node)));
+                    }
+                }
+            } else {
+                let value = rebuilt(node, done.out);
+                push(&mut parent.out, value);
+            }
+            continue;
+        }
+        let child = &frame.children[frame.i];
+        frame.i += 1;
+        match get_str(child, "type") {
+            "definition" => {}
+            "imageReference" => {
+                let alt = get_str(child, "alt").to_string();
+                match defs.get(get_str(child, "identifier")) {
+                    Some(res) => push(
+                        &mut frame.out,
+                        object(vec![
+                            ("type", string("image")),
+                            ("url", res.url.clone()),
+                            ("title", res.title.clone()),
+                            ("alt", Value::String(alt)),
+                        ]),
+                    ),
+                    None => text(&mut frame.out, format!("![{}]{}", alt, suffix(child))),
+                }
+            }
+            _ => {
+                if let Some(Value::Array(items)) = get(child, "children") {
+                    stack.push(Frame {
+                        node: child,
+                        children: items,
+                        i: 0,
+                        out: Vec::new(),
+                    });
+                } else {
+                    push(&mut frame.out, child.clone());
+                }
+            }
+        }
+    }
 }

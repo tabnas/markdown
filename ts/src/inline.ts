@@ -24,7 +24,7 @@
 // scan while emphasis matching happens afterwards over the delimiter stack.
 
 import { MdNode } from './node.ts'
-import type { NodeType } from './node.ts'
+import type { NodeType, ReferenceType } from './node.ts'
 import type { ParserOptions, RefMap } from './options.ts'
 import {
   ENTITY,
@@ -521,6 +521,16 @@ export function scanInlineLinkTail(subject: string, pos: number): LinkTailScan |
   return null
 }
 
+/** A link reference definition as `parseDefinition` reads one (§4.7). */
+export type ParsedDefinition = {
+  /** How many characters of the subject the definition takes. */
+  length: number
+  /** The label's raw source text, between its brackets. */
+  label: string
+  destination: string
+  title: string | null
+}
+
 export class InlineParser {
   subject = ''
   pos = 0
@@ -528,10 +538,21 @@ export class InlineParser {
   brackets: Bracket | null = null
   refmap: RefMap
   options: ParserOptions
+  /**
+   * Read a bracketed label as a reference whether or not the document
+   * defines it, keeping it unresolved (`link_reference`, `image_reference`)
+   * rather than looking it up in `refmap`: the parse the AST is projected
+   * from. The inline parse of a block then depends on nothing outside the
+   * block, which is what lets the engine path finish a block's inlines when
+   * the block closes. Off, the parse resolves references as CommonMark
+   * does, which the HTML renderer needs.
+   */
+  keepReferences: boolean
 
-  constructor(refmap: RefMap, options: ParserOptions) {
+  constructor(refmap: RefMap, options: ParserOptions, keepReferences = false) {
     this.refmap = refmap
     this.options = options
+    this.keepReferences = keepReferences
   }
 
   // --- scanning primitives ---
@@ -918,6 +939,9 @@ export class InlineParser {
     let dest: string | null = null
     let title: string | null = null
     let matched = false
+    // Kept references only: the label and the form that named it.
+    let keptLabel: string | null = null
+    let keptType: ReferenceType = 'shortcut'
 
     const savepos = this.pos
 
@@ -935,21 +959,39 @@ export class InlineParser {
       // absent one means the link text is itself the label (collapsed and
       // shortcut) — which is only possible if that text holds no bracket.
       let reflabel: string | null = null
+      let reftype: ReferenceType = 'shortcut'
       const beforelabel = this.pos
       const n = this.parseLinkLabel()
       if (n > 2) {
         reflabel = this.subject.slice(beforelabel + 1, beforelabel + n - 1)
+        reftype = 'full'
       } else if (!opener.bracketAfter) {
         reflabel = this.subject.slice(opener.index + 1, startpos - 1)
+        reftype = 2 === n ? 'collapsed' : 'shortcut'
       }
       if (0 === n) this.pos = savepos
 
       if (null !== reflabel) {
-        const link = this.refmap[normalizeReference(reflabel)]
-        if (undefined !== link) {
-          dest = link.destination
-          title = link.title
-          matched = true
+        if (this.keepReferences) {
+          // A reference wherever a definition could name the label: one a
+          // definition's own label could be (a full form's second label
+          // was scanned as one; the link text of the other two forms must
+          // scan as one too), holding more than white space.
+          const valid =
+            'full' === reftype ||
+            isLinkLabelAt(this.subject, opener.index, startpos)
+          if (valid && '' !== normalizeReference(reflabel)) {
+            keptLabel = reflabel
+            keptType = reftype
+            matched = true
+          }
+        } else {
+          const link = this.refmap[normalizeReference(reflabel)]
+          if (undefined !== link) {
+            dest = link.destination
+            title = link.title
+            matched = true
+          }
         }
       }
     }
@@ -961,9 +1003,16 @@ export class InlineParser {
       return true
     }
 
-    const node = new MdNode(isImage ? 'image' : 'link')
-    node.destination = dest
-    node.title = null === title || '' === title ? null : title
+    let node: MdNode
+    if (null !== keptLabel) {
+      node = new MdNode(isImage ? 'image_reference' : 'link_reference')
+      node.label = keptLabel
+      node.referenceType = keptType
+    } else {
+      node = new MdNode(isImage ? 'image' : 'link')
+      node.destination = dest
+      node.title = null === title || '' === title ? null : title
+    }
 
     let tmp = opener.node.next
     while (null !== tmp) {
@@ -1121,10 +1170,13 @@ export class InlineParser {
   }
 
   /**
-   * §4.7: consume leading link reference definitions. Called by the block
-   * phase while finalizing a paragraph, repeatedly, until it returns 0.
+   * §4.7: the link reference definition at the start of `s`, or null. The
+   * block phase calls it while finalizing a paragraph, repeatedly, slicing
+   * off what each takes, until it answers null; it records each definition
+   * itself (`refmap`, first definition wins, and the definitions beside the
+   * paragraph's container), so nothing here depends on a refmap.
    */
-  parseReference(s: string): number {
+  parseDefinition(s: string): ParsedDefinition | null {
     this.subject = s
     this.pos = 0
 
@@ -1137,23 +1189,19 @@ export class InlineParser {
 
     const labelStart = this.pos
     const matchChars = this.parseLinkLabel()
-    if (0 === matchChars) return 0
+    if (0 === matchChars) return null
     const rawlabel = this.subject.slice(labelStart + 1, labelStart + matchChars - 1)
 
     if (C_COLON === this.peek()) {
       this.pos += 1
     } else {
-      this.pos = startpos
-      return 0
+      return null
     }
 
     this.spnl()
 
     const dest = this.parseLinkDestination()
-    if (null === dest) {
-      this.pos = startpos
-      return 0
-    }
+    if (null === dest) return null
 
     const beforetitle = this.pos
     this.spnl()
@@ -1178,25 +1226,25 @@ export class InlineParser {
         atLineEnd = null !== this.match(reSpaceAtEndOfLine)
       }
     }
-    if (!atLineEnd) {
-      this.pos = startpos
-      return 0
-    }
+    if (!atLineEnd) return null
 
-    const normlabel = normalizeReference(rawlabel)
-    if ('' === normlabel) {
-      // A label must hold at least one non-whitespace character.
-      this.pos = startpos
-      return 0
-    }
+    // A label must hold at least one non-whitespace character.
+    if ('' === normalizeReference(rawlabel)) return null
 
-    // First definition wins.
-    if (undefined === this.refmap[normlabel]) {
-      this.refmap[normlabel] = { destination: dest, title }
-    }
-
-    return this.pos - startpos
+    return { length: this.pos - startpos, label: rawlabel, destination: dest, title }
   }
+}
+
+/**
+ * Whether the text from `start` (a `[`) to `end` (just past its `]`) is a
+ * link label (§4.7): at most 999 characters between the brackets, and a
+ * bracket inside only if backslash-escaped. A shortcut or collapsed
+ * reference's link text names its label, so it must be one to be a
+ * reference at all, since a definition's label always is.
+ */
+function isLinkLabelAt(subject: string, start: number, end: number): boolean {
+  const scan = scanLinkLabel(subject, start)
+  return null !== scan && 0 !== scan.length && start + scan.rawLength === end
 }
 
 // --- GFM extended autolinks (autolink literals) -----------------------------
@@ -1618,8 +1666,16 @@ function linkifyChildren(parent: MdNode, pending: MdNode[]): void {
       continue
     }
 
-    // No links inside links (§6.3), and an image's children are its alt text.
-    if ('link' !== child.type && 'image' !== child.type && child.isContainer()) {
+    // No links inside links (§6.3), and an image's children are its alt
+    // text. A kept reference is a link or an image as soon as a definition
+    // names its label, so it is passed over the same way.
+    if (
+      'link' !== child.type &&
+      'image' !== child.type &&
+      'link_reference' !== child.type &&
+      'image_reference' !== child.type &&
+      child.isContainer()
+    ) {
       pending.push(child)
     }
     child = child.next
@@ -1652,9 +1708,24 @@ const INLINE_CONTENT_BLOCKS: Record<string, true> = {
  * Phase 2 entry point: walk the block tree and parse the string content of
  * every paragraph, heading and table cell into inline children.
  */
-export function parseInlines(doc: MdNode, refmap: RefMap, options: ParserOptions): void {
-  const parser = new InlineParser(refmap, options)
+export function parseInlines(
+  doc: MdNode,
+  refmap: RefMap,
+  options: ParserOptions,
+  keepReferences = false,
+): void {
+  const parser = new InlineParser(refmap, options, keepReferences)
   forEachInlineBlock(doc, options, (node) => parser.parse(node))
+}
+
+/**
+ * Parse one block's raw content into its inline children, the GFM
+ * autolink-literal post-pass included: what `forEachInlineBlock` does for
+ * each block, for a driver that finishes blocks one at a time.
+ */
+export function parseBlockInlines(parser: InlineParser, block: MdNode): void {
+  parser.parse(block)
+  if (parser.options.gfm) linkifyAutolinks(block)
 }
 
 /**
@@ -1689,11 +1760,9 @@ export function forEachInlineBlock(
 const referenceParser = new InlineParser({}, { gfm: false, breaks: false })
 
 /**
- * Consume link reference definitions from the front of a paragraph's raw
- * content, adding them to `refmap`. Returns the number of characters
- * consumed, or 0 if `s` does not start with a definition.
+ * The link reference definition at the front of a paragraph's raw content,
+ * or null if `s` does not start with one.
  */
-export function parseReference(s: string, refmap: RefMap): number {
-  referenceParser.refmap = refmap
-  return referenceParser.parseReference(s)
+export function parseDefinition(s: string): ParsedDefinition | null {
+  return referenceParser.parseDefinition(s)
 }

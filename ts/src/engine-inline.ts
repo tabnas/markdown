@@ -36,7 +36,7 @@
 import { Tabnas } from '@tabnas/parser'
 import type { Context, MakeLexMatcher } from '@tabnas/parser'
 
-import { InlineParser, forEachInlineBlock } from './inline.ts'
+import { InlineParser, forEachInlineBlock, linkifyAutolinks } from './inline.ts'
 import type { MdNode } from './node.ts'
 import type { ParserOptions, RefMap } from './options.ts'
 
@@ -274,11 +274,23 @@ export function parseInlinesEngine(
 ): void {
   const parser = new InlineParser(refmap, options)
 
-  forEachInlineBlock(doc, options, (block) => {
-    if (!parser.beginBlock(block)) {
-      parser.finishBlock(block)
-      return
-    }
-    inlineTn.parse(parser.subject, { md: { inl: parser, block } })
-  })
+  forEachInlineBlock(doc, options, (block) => scanBlock(inlineTn, parser, block))
+}
+
+/**
+ * One block's inline phase on the engine path, as the block driver runs it
+ * when the block closes: the scan, then the GFM autolink-literal post-pass,
+ * exactly as `forEachInlineBlock` runs the two for each block.
+ */
+export function parseBlockEngine(inlineTn: Tabnas, parser: InlineParser, block: MdNode): void {
+  scanBlock(inlineTn, parser, block)
+  if (parser.options.gfm) linkifyAutolinks(block)
+}
+
+function scanBlock(inlineTn: Tabnas, parser: InlineParser, block: MdNode): void {
+  if (!parser.beginBlock(block)) {
+    parser.finishBlock(block)
+    return
+  }
+  inlineTn.parse(parser.subject, { md: { inl: parser, block } })
 }

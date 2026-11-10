@@ -31,9 +31,9 @@
 // paragraphs and headings that the inline phase consumes.
 
 import { MdNode } from './node.ts'
-import type { ListData, NodeType, SourcePos, TableAlign } from './node.ts'
-import { unescapeString } from './common.ts'
-import { parseReference } from './inline.ts'
+import type { Definition, ListData, NodeType, SourcePos, TableAlign } from './node.ts'
+import { normalizeReference, unescapeString } from './common.ts'
+import { parseDefinition } from './inline.ts'
 import type { ParserOptions, RefMap } from './options.ts'
 
 /** §4.4: four columns of indentation open an indented code block. */
@@ -518,7 +518,7 @@ type BlockHandler = {
   /** Called once when the block is closed. */
   finalize: (parser: BlockParser, block: MdNode) => void
   canContain: (t: NodeType) => boolean
-  /** Leaves that accumulate raw text: code blocks, HTML blocks, paragraphs, tables. */
+  /** Leaves that take lines: code blocks, HTML blocks, paragraphs, tables. */
   acceptsLines: boolean
   /**
    * Lines belonging to this block are literal text, so Appendix A step 2 does
@@ -723,16 +723,11 @@ const BLOCK_HANDLERS: Record<string, BlockHandler> = {
     finalize: (parser, block) => {
       // §4.7: a paragraph may begin with link reference definitions. Consume
       // them from the front; if nothing is left, the paragraph disappears.
-      let hasReferenceDefs = false
-      let pos = 0
-      while (
-        C_OPEN_BRACKET === block.stringContent.charCodeAt(0) &&
-        0 !== (pos = parseReference(block.stringContent, parser.refmap))
-      ) {
-        block.stringContent = block.stringContent.slice(pos)
-        hasReferenceDefs = true
+      if (parser.readDefinitions(block) && isBlank(block.stringContent)) {
+        block.unlink()
+        return
       }
-      if (hasReferenceDefs && isBlank(block.stringContent)) block.unlink()
+      parser.markTaskItem(block)
     },
     canContain: noChildren,
     acceptsLines: true,
@@ -822,29 +817,21 @@ function addTableRow(
     cell.stringContent = i < cells.length ? cells[i] : ''
     row.appendChild(cell)
   }
+
+  if (null !== parser.events) parser.events.push({ kind: 'row', node: row })
 }
 
 /**
- * Close a table: turn the raw lines it accumulated into body rows.
- *
- * The first accumulated line is the delimiter row that opened the table. It
- * carries no data — its alignments are already on the node — so it is skipped
- * here, which is also what keeps the source line numbering of the rows below
- * it straightforward: the table accepts exactly one line per source line, and
- * a blank line closes it, so there are no gaps.
+ * Close a table. Its body rows were made one per line as the lines came
+ * (`addLine`): the table accepts exactly one line per source line, and a
+ * blank line closes it, so each row's line is the line that made it, and a
+ * row is finished the moment its line is, which is what lets a driver write
+ * a table a row at a time.
  */
-function finalizeTable(parser: BlockParser, table: MdNode): void {
-  const lines = table.stringContent.split('\n')
+function finalizeTable(_parser: BlockParser, table: MdNode): void {
+  // Every body row was made as its line arrived (`addLine`), so a closing
+  // table has nothing left to split.
   table.stringContent = ''
-
-  // Line 0 is the delimiter row; the last element is the empty string after
-  // the final newline.
-  const headerLine = table.sourcepos[0][0]
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i]
-    if ('' === line) continue
-    addTableRow(parser, table, splitTableRow(line), false, headerLine + i + 1, charCount(line))
-  }
 }
 
 function handlerFor(type: NodeType): BlockHandler {
@@ -1037,13 +1024,7 @@ const BLOCK_STARTS: BlockStart[] = [
     // §4.7: the paragraph may still have led with reference definitions; only
     // what remains becomes the heading. If nothing remains this is not a
     // setext underline at all (it falls through to thematic break / paragraph).
-    let pos = 0
-    while (
-      C_OPEN_BRACKET === container.stringContent.charCodeAt(0) &&
-      0 !== (pos = parseReference(container.stringContent, parser.refmap))
-    ) {
-      container.stringContent = container.stringContent.slice(pos)
-    }
+    parser.readDefinitions(container)
     if (0 === container.stringContent.length) return 0
 
     const start = container.sourcepos[0]
@@ -1106,9 +1087,45 @@ const BLOCK_STARTS: BlockStart[] = [
 
 // --- the parser -------------------------------------------------------------
 
+/**
+ * What the block phase did, in the order it did it, for a driver that
+ * writes blocks as they finish (`events`): a container opened (a block
+ * quote, a list, a list item or a table, whose fields at that point are
+ * read when the line's events are), a table row made (complete, with its
+ * cells), a definition read off a paragraph, and a block closed, after its
+ * finalizer ran. A closed paragraph that held nothing but definitions has
+ * been unlinked by then, and has no parent.
+ */
+export type BlockEvent =
+  | { kind: 'open'; node: MdNode }
+  | { kind: 'row'; node: MdNode }
+  | { kind: 'definition'; def: Definition }
+  | { kind: 'close'; node: MdNode }
+
+/** The containers whose opening is an event: the ones a driver writes open. */
+const OPEN_EVENTS: Record<string, true> = {
+  block_quote: true,
+  list: true,
+  item: true,
+  table: true,
+}
+
 export class BlockParser {
   options: ParserOptions
   refmap: RefMap = {}
+
+  /**
+   * The events of the lines incorporated since the driver last took them,
+   * or null, the default, when no driver asks: the batch parse records
+   * nothing.
+   */
+  events: BlockEvent[] | null = null
+
+  /**
+   * The table whose delimiter row is the next line `addLine` writes: that
+   * row opened the table and holds no data, so it makes no row.
+   */
+  private tableDelimiterRow: MdNode | null = null
 
   doc: MdNode
   /** Deepest open block; null only once the document itself is finalized. */
@@ -1122,16 +1139,6 @@ export class BlockParser {
   currentLine = ''
   lineNumber = 0
   lastLineLength = 0
-
-  /**
-   * GFM table probe gate. True by default — the batch driver probes every
-   * candidate line, as it always has. The engine driver sets it per line
-   * from the `#LB` token's `tblArm` bit (a provable superset of "could be
-   * a delimiter row"; see engine-block.ts), which is what lets the GFM alt
-   * be a genuine, subtractable extension seam without moving any table
-   * decision out of this file.
-   */
-  tableArmed = true
 
   /**
    * The length of the line before the one `lastLineLength` measures.
@@ -1304,7 +1311,17 @@ export class BlockParser {
       text = ' '.repeat(charsToTab)
     }
     text += this.currentLine.slice(this.offset)
-    tip.stringContent += text + '\n'
+    if ('table' === tip.type) {
+      // A table's line is a row the moment it arrives, but for the
+      // delimiter row that opened it.
+      if (this.tableDelimiterRow === tip) {
+        this.tableDelimiterRow = null
+      } else {
+        addTableRow(this, tip, splitTableRow(text), false, this.lineNumber, charCount(text))
+      }
+    } else {
+      tip.stringContent += text + '\n'
+    }
     this.lastAddedLine = text
     this.lastAddedColumn = column
     this.lastAddedTo = tip
@@ -1349,9 +1366,81 @@ export class BlockParser {
       [this.lineNumber, columnNumber],
       [0, 0],
     ])
+    if ('paragraph' === tag) node.contentLine = this.lineNumber
     this.openTip.appendChild(node)
     this.tip = node
+    if (null !== this.events && true === OPEN_EVENTS[tag]) {
+      this.events.push({ kind: 'open', node })
+    }
     return node
+  }
+
+  /**
+   * §4.7: read the link reference definitions off the front of a
+   * paragraph's raw content, as the paragraph finishes or a setext
+   * underline converts it. Each is recorded three ways: in `refmap` (the
+   * first definition of a label wins), beside the paragraph's container
+   * where it stands (after the paragraph's previous sibling, so before the
+   * paragraph, or where it stood once it is gone), and, for a driver, as an
+   * event. Answers whether any was read.
+   */
+  readDefinitions(para: MdNode): boolean {
+    let read = false
+    while (C_OPEN_BRACKET === para.stringContent.charCodeAt(0)) {
+      const content = para.stringContent
+      const d = parseDefinition(content)
+      if (null === d) break
+
+      // Every line of a paragraph is one source line, so the definition's
+      // lines are counted from where the content begins.
+      let newlines = 0
+      for (let i = 0; i < d.length; i++) {
+        if (10 === content.charCodeAt(i)) newlines++
+      }
+      const last = 10 === content.charCodeAt(d.length - 1) ? 1 : 0
+      const def: Definition = {
+        label: d.label,
+        destination: d.destination,
+        title: d.title,
+        start: para.contentLine,
+        end: para.contentLine + newlines - last,
+      }
+      para.contentLine += newlines
+      para.stringContent = content.slice(d.length)
+
+      const key = normalizeReference(d.label)
+      if (undefined === this.refmap[key]) {
+        this.refmap[key] = { destination: d.destination, title: d.title }
+      }
+      const parent = para.parent
+      if (null !== parent) {
+        if (null === parent.definitions) parent.definitions = []
+        parent.definitions.push({ after: para.prev, def })
+      }
+      if (null !== this.events) this.events.push({ kind: 'definition', def })
+      read = true
+    }
+    return read
+  }
+
+  /**
+   * GFM task list items: an item whose first block is a paragraph beginning
+   * with a task list item marker is checked or not, and the marker is
+   * consumed so it does not survive into the text. Decided as the paragraph
+   * finishes, on its raw content, before the inline phase has seen it: that
+   * is what makes the marker win over anything the inline scanner would make
+   * of the brackets (with a `[x]: /url` definition in the document,
+   * `- [x] foo` is still a task item rather than a link), and what settles
+   * the item's `checked` before the item itself finishes.
+   */
+  markTaskItem(para: MdNode): void {
+    if (!this.options.gfm) return
+    const item = para.parent
+    if (null === item || 'item' !== item.type || item.firstChild !== para) return
+    const m = matchTaskListMarker(para.stringContent)
+    if (null === m) return
+    item.checked = m.checked
+    para.stringContent = para.stringContent.slice(m.length)
   }
 
   /**
@@ -1366,12 +1455,11 @@ export class BlockParser {
    * reference definitions — and the table is opened after it.
    *
    * On success the table is the tip and the caller returns "leaf started", so
-   * step 3 adds the delimiter row itself to the table's raw content. It is
-   * skipped again by `finalizeTable`; keeping it costs nothing and makes the
-   * table's accumulated lines line up one-for-one with the source lines.
+   * step 3 hands the delimiter row itself to `addLine`, which skips it: the
+   * header row is made here, and every later line of the table is a body row
+   * the moment it arrives.
    */
   tryOpenTable(container: MdNode): boolean {
-    if (!this.tableArmed) return false
     if (!this.options.gfm || this.indented || 'paragraph' !== container.type) return false
 
     const align = parseDelimiterRow(this.currentLine.slice(this.nextNonspace))
@@ -1414,9 +1502,10 @@ export class BlockParser {
     table.sourcepos[0][0] = headerLine
     table.sourcepos[0][1] = headerColumn
     table.tableAlign = align
+    this.tableDelimiterRow = table
 
-    // The row is measured over its own text, exactly as `finalizeTable`
-    // measures the body rows: `lastLineLength` counts the whole source line,
+    // The row is measured over its own text, exactly as `addLine` measures
+    // the body rows: `lastLineLength` counts the whole source line,
     // container markers included, so inside a block quote it would end the
     // header row two columns past where every body row of the same table ends.
     addTableRow(this, table, headerCells, true, headerLine, charCount(this.lastAddedLine))
@@ -1450,6 +1539,7 @@ export class BlockParser {
     handlerFor(block.type).finalize(this, block)
     this.htmlBlockTypes.delete(block)
     this.tip = above
+    if (null !== this.events) this.events.push({ kind: 'close', node: block })
   }
 
   /**
@@ -1624,11 +1714,11 @@ export class BlockParser {
   }
 
   /**
-   * Close every still-open block, stamp the parse-time `gfm` flag, and run
-   * the task-list post-pass. `lineNumber` is the count of incorporated
-   * lines, so an incremental driver — one that feeds `incorporateLine`
-   * itself instead of calling `parse` — finishes with exactly the same
-   * finalization the batch loop above gets.
+   * Close every still-open block and stamp the parse-time `gfm` flag.
+   * `lineNumber` is the count of incorporated lines, so an incremental
+   * driver (one that feeds `incorporateLine` itself instead of calling
+   * `parse`) finishes with exactly the same finalization the batch loop
+   * above gets.
    */
   finish(): { doc: MdNode; refmap: RefMap } {
     while (this.tip) {
@@ -1636,7 +1726,6 @@ export class BlockParser {
     }
 
     this.doc.gfm = this.options.gfm
-    if (this.options.gfm) markTaskListItems(this.doc)
 
     return { doc: this.doc, refmap: this.refmap }
   }
@@ -1669,51 +1758,6 @@ export function matchTaskListMarker(
   const m = RE_TASK_LIST_MARKER.exec(content)
   if (null === m) return null
   return { checked: ' ' !== m[1] && '\t' !== m[1], length: m[0].length }
-}
-
-const TASK_LIST_CONTAINERS: Record<string, true> = {
-  document: true,
-  block_quote: true,
-  list: true,
-  item: true,
-}
-
-/**
- * GFM task list items: mark every item whose first block is a paragraph
- * beginning with a task list item marker, and consume the marker so it does
- * not survive into the text.
- *
- * Run at the end of the block phase, over `stringContent` — before the inline
- * phase has seen it. That is what makes the marker win over anything the
- * inline scanner would otherwise make of the brackets: with a `[x]: /url`
- * definition in the document, `- [x] foo` is still a task item rather than a
- * link. It also means the item's `checked` state is settled before `ast.ts` or
- * `html.ts` looks at the tree.
- *
- * Iterative rather than recursive: container nesting depth is chosen by the
- * input, and `'> '.repeat(20000)` is a document this parser otherwise handles.
- */
-function markTaskListItems(doc: MdNode): void {
-  const stack: MdNode[] = [doc]
-
-  while (0 < stack.length) {
-    const node = stack.pop() as MdNode
-
-    if ('item' === node.type) {
-      const first = node.firstChild
-      if (null !== first && 'paragraph' === first.type) {
-        const m = matchTaskListMarker(first.stringContent)
-        if (null !== m) {
-          node.checked = m.checked
-          first.stringContent = first.stringContent.slice(m.length)
-        }
-      }
-    }
-
-    if (true === TASK_LIST_CONTAINERS[node.type]) {
-      for (let c = node.lastChild; c; c = c.prev) stack.push(c)
-    }
-  }
 }
 
 /**

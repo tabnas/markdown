@@ -494,6 +494,10 @@ pub fn render_html_with(tree: &Tree, opts: Options) -> String {
 
             NodeType::Del => r.tag(if entering { "del" } else { "/del" }, &[], false),
 
+            // Only a parse that keeps references makes these, and the tree
+            // a renderer is given comes from the parse that resolves them.
+            NodeType::LinkReference | NodeType::ImageReference => {}
+
             NodeType::Link => {
                 if entering {
                     let mut attrs =

@@ -53,6 +53,33 @@ func lexColumns(lex *parser.Lex) string {
 	return strings.Join(out, " ")
 }
 
+// blockColumns parses src and renders its line tokens and its end as
+// `name@row:col`, as the lexer made them. The block matcher runs the block
+// algorithm as it cuts each line, so it needs a parse's state and is
+// observed through one; the tokens of the blocks a line makes have no width
+// and stand where the line starts, so the lines and the end are where the
+// column arithmetic shows.
+func blockColumns(t *testing.T, src string) string {
+	t.Helper()
+	var out []string
+	end := false
+	j := Make()
+	j.Sub(func(tk *parser.Token, _ *parser.Rule, _ *parser.Context) {
+		// The end is handed to every rule that asks, so it is seen once.
+		if end {
+			return
+		}
+		if tk.Name == "#LB" || tk.Name == "#ZZ" {
+			out = append(out, fmt.Sprintf("%s@%d:%d", tk.Name, tk.RI, tk.CI))
+		}
+		end = tk.Name == "#ZZ"
+	}, nil)
+	if _, err := j.Parse(src); err != nil {
+		t.Fatalf("parse %q: %v", src, err)
+	}
+	return strings.Join(out, " ")
+}
+
 func TestBlockColumnsCountRunesNotBytes(t *testing.T) {
 	// Every case omits the trailing newline on purpose. A source that ends
 	// in one takes the terminated branch, which resets CI to 1 and hides
@@ -88,11 +115,7 @@ func TestBlockColumnsCountRunesNotBytes(t *testing.T) {
 		// the only block row where the two halves differ.
 		{"astral", "# \U0001F600", "#LB@1:1 #ZZ@1:4", "#LB@1:1 #ZZ@1:5"},
 	} {
-		j := parser.Make(parser.Options{})
-		if err := j.Use(Markdown, nil); err != nil {
-			t.Fatalf("%s: use: %v", c.label, err)
-		}
-		got := lexColumns(parser.MakeLex(c.src, j.Config()))
+		got := blockColumns(t, c.src)
 		if got != c.want {
 			t.Errorf("%s: %q\n got %s\nwant %s", c.label, c.src, got, c.want)
 		}

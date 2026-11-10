@@ -1176,11 +1176,25 @@ describe('gfm:false disables every extension', () => {
   })
 
   test('the AST carries no GFM shapes either', () => {
+    // No task item and no autolink literals: `[x]` is a bracketed label, so
+    // the AST reads it as a reference, as it reads every one.
     const doc: any = parseDocument('- [x] www.a.com and a@b.co\n', OPTS)
     const item = doc.children[0].children[0]
     assert.equal(item.checked, null)
     assert.deepEqual(item.children, [
-      { type: 'paragraph', children: [{ type: 'text', value: '[x] www.a.com and a@b.co' }] },
+      {
+        type: 'paragraph',
+        children: [
+          {
+            type: 'linkReference',
+            identifier: 'x',
+            label: 'x',
+            referenceType: 'shortcut',
+            children: [{ type: 'text', value: 'x' }],
+          },
+          { type: 'text', value: ' www.a.com and a@b.co' },
+        ],
+      },
     ])
   })
 })

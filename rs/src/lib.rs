@@ -38,6 +38,7 @@
 //! This is a port of `ts/src/*.ts`, which is canonical, and a sibling of
 //! the Go port in `go/`. See AGENTS.md.
 
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use tabnas::{AltSpec, Plugin, PluginError, Value, TIN_ZZ};
@@ -61,13 +62,13 @@ pub mod inline;
 pub mod node;
 pub mod options;
 
-pub use ast::to_ast;
+pub use ast::{resolve_references, to_ast};
 pub use block::MAX_CONTAINER_NESTING;
 pub use html::{render_html, render_html_with, DISALLOWED_TAGS};
 pub use inline::MAX_INLINE_NESTING;
 pub use node::{
-    Align, ListData, ListType, MdNode, NodeId, NodeType, SourcePos, TableAlign, Tree, WalkEvent,
-    Walker,
+    Align, Definition, DefinitionSite, ListData, ListType, MdNode, NodeId, NodeType, ReferenceType,
+    SourcePos, TableAlign, Tree, WalkEvent, Walker,
 };
 pub use options::{Options, RefDef, RefMap, DEFAULT_OPTIONS};
 pub use tabnas::Tabnas;
@@ -90,9 +91,15 @@ pub const PLUGIN_NAME: &str = "Markdown";
 // ---------------------------------------------------------------------------
 // Public parse API (engine-free)
 
-/// Parse Markdown to the mdast-adjacent JSON AST.
+/// Parse Markdown to the mdast-adjacent JSON AST. References stay
+/// unresolved, as mdast keeps them: a bracketed label is a
+/// `linkReference` or an `imageReference`, and each definition a
+/// `definition` node where it stands. [`resolve_references`] resolves them.
 pub fn parse_document(src: &str, options: &Options) -> Value {
-    to_ast(&commonmark::parse(src, *options), options)
+    to_ast(
+        &commonmark::parse_keeping_references(src, *options),
+        options,
+    )
 }
 
 /// Parse a single run of inline Markdown, returning the inline children of
@@ -131,28 +138,34 @@ pub fn parse_tree(src: &str, options: &Options) -> Tree {
 
 /// Install the parser on a tabnas engine instance.
 ///
-/// The engine parse IS the parse: the `mdLine` custom matcher
-/// (`engine_block.rs`) lexes one `#LB` token per physical line,
-/// `parse.prepare` seeds a fresh block parser for the parse, the `line`
-/// rule feeds each matched line to the shared `incorporate_line`, and the
-/// `markdown` rule's close action on `#ZZ` finalizes, runs the shared
-/// inline phase, and projects the public AST into the rule's node. No
-/// recognition or block decision happens here: the engine owns
-/// tokenization, dispatch and state carriage; the algorithm stays in the
-/// engine-free core (the anti-drift rule, dx-report §42), which is what
-/// keeps this path byte-identical to [`parse_document`] (asserted by the
-/// differential gate and the engine-path conformance harness).
+/// The engine parse IS the parse, and its rules open and close every
+/// block: the `mdBlock` matcher (`engine_block.rs`) cuts one `#LB` token
+/// per physical line through the lexer's window, runs the shared block
+/// algorithm over it, and hands out before it the tokens of the blocks
+/// that line closed and opened; each node of the AST is a rule that opens
+/// on its token and, for a container, closes on `#EN`; and the document's
+/// children, like every container's, are the `children` rule, a replace
+/// loop, so ten thousand blocks run at the depth one does. The block
+/// decisions are the shared engine-free core's (the anti-drift rule,
+/// dx-report §42), which is what keeps this path's AST identical to
+/// [`parse_document`]'s (asserted by the differential gate and the
+/// engine-path conformance harness).
 ///
 /// Use this to add Markdown to an engine you are configuring yourself;
 /// [`make`] and [`make_with`] are the short way to a ready one.
 pub fn markdown(tn: &mut Tabnas, options: &Options) -> Result<(), PluginError> {
     let opts = *options;
 
-    let lb = tn.token(engine_block::LINE_TOKEN);
+    let mut tins: HashMap<&'static str, tabnas::Tin> = HashMap::new();
+    tins.insert(engine_block::LINE_TOKEN, tn.token(engine_block::LINE_TOKEN));
+    tins.insert(engine_block::END_TOKEN, tn.token(engine_block::END_TOKEN));
+    for n in engine_block::NODE_RULES {
+        tins.insert(n.token, tn.token(n.token));
+    }
 
     // Every built-in matcher is off: deliberate configuration, not
     // defense. Markdown's block alphabet is *lines*, so the one registered
-    // matcher is the complete lexical description of this phase: mdLine,
+    // matcher is the complete lexical description of this phase: mdBlock,
     // at an order ahead of every built-in, consuming each physical line
     // whole. (The built-ins would misread the syntax anyway: backtick code
     // spans lex as unterminated strings, `# heading` as a comment,
@@ -178,13 +191,22 @@ pub fn markdown(tn: &mut Tabnas, options: &Options) -> Result<(), PluginError> {
         };
     })?;
 
+    // The inline phase's own engine instance, built once per install and
+    // shared by every parse (see `engine_inline.rs` for why that is sound
+    // here and not in Go).
+    let inline_tn = Arc::new(engine_inline::make_inline_tn(&opts));
+
     tn.options.lex.matchers.insert(
-        engine_block::MD_LINE_MATCHER.to_string(),
+        engine_block::MD_BLOCK_MATCHER.to_string(),
         tabnas::LexMatcher {
-            name: engine_block::MD_LINE_MATCHER.to_string(),
-            order: engine_block::MD_LINE_ORDER,
+            name: engine_block::MD_BLOCK_MATCHER.to_string(),
+            order: engine_block::MD_BLOCK_ORDER,
             matcher: None,
-            imperative: Some(Arc::new(engine_block::make_md_line_matcher(lb))),
+            imperative: Some(Arc::new(engine_block::make_md_block_matcher(
+                opts,
+                tins.clone(),
+                Arc::clone(&inline_tn),
+            ))),
             factory: None,
         },
     );
@@ -193,60 +215,94 @@ pub fn markdown(tn: &mut Tabnas, options: &Options) -> Result<(), PluginError> {
         tabnas::ParsePrepare::Context(Arc::new(engine_block::make_md_prepare(opts))),
     );
 
-    // The inline phase's own engine instance, built once per install and
-    // shared by every parse (see `engine_inline.rs` for why that is sound
-    // here and not in Go).
-    let inline_tn = Arc::new(engine_inline::make_inline_tn(&opts));
-    let run_inlines = move |tree: Tree, refmap: RefMap| {
-        engine_inline::parse_inlines_engine(&inline_tn, tree, refmap, &opts)
-    };
+    let token = |name: &str| tins[name];
+    let slot: Vec<tabnas::Tin> = std::iter::once(token(engine_block::LINE_TOKEN))
+        .chain(engine_block::NODE_RULES.iter().map(|n| token(n.token)))
+        .collect();
 
+    // The document: its children, then the end of the source.
+    let finish = engine_block::make_md_finish(opts, Arc::clone(&inline_tn));
     tn.define_rule("markdown", |rs| {
         rs.clear();
-        rs.add_open(AltSpec {
-            p: Some("line".to_string()),
+        let mut begin = AltSpec {
+            p: Some("children".to_string()),
             ..Default::default()
-        });
-        let mut finish = AltSpec {
+        };
+        begin.add_action(engine_block::md_begin);
+        rs.add_open(begin);
+        let mut end = AltSpec {
             s: vec![vec![TIN_ZZ]],
             ..Default::default()
         };
-        finish.add_action(engine_block::make_md_finish_action(opts, run_inlines));
-        rs.add_close(finish);
+        end.add_action(finish);
+        rs.add_close(end);
+    });
+
+    // A container's children, one node or one line per iteration: a
+    // node's token pushes that node's rule, a line is consumed, and the
+    // loop goes on by replacement (`r`), never by a push chain, while the
+    // next token is either; anything else (`#EN`, `#ZZ`) ends it. The GFM
+    // nodes are the `gfm` group's alts, which `gfm: false` subtracts.
+    tn.define_rule("children", |rs| {
+        rs.clear();
+        for n in engine_block::NODE_RULES {
+            rs.add_open(AltSpec {
+                s: vec![vec![token(n.token)]],
+                b: 1,
+                p: Some(n.rule.to_string()),
+                g: if n.gfm {
+                    "gfm".to_string()
+                } else {
+                    String::new()
+                },
+                ..Default::default()
+            });
+        }
+        rs.add_open(AltSpec {
+            s: vec![vec![token(engine_block::LINE_TOKEN)]],
+            ..Default::default()
+        });
+        rs.add_open(AltSpec::default());
+        rs.add_close(AltSpec {
+            s: vec![slot.clone()],
+            b: 1,
+            r: Some("children".to_string()),
+            ..Default::default()
+        });
         rs.add_close(AltSpec::default());
     });
 
-    // One `#LB` consumed per iteration, tail-recursing via `r` until only
-    // `#ZZ` remains; the empty alts are the fall-through that hands
-    // control back to markdown's close.
-    //
-    // The first alt is the GFM extension seam: tagged `g: "gfm"`, gated on
-    // the token's tblArm bit, arming the shared table probe for this line.
-    // It is injected exactly the way a downstream dialect would extend
-    // this grammar (an alt ahead of the base one, subtractable by its
-    // group tag) and gfm:false removes it via `rule.exclude` above, so the
-    // base dialect is the grammar minus the tagged alts, visibly.
-    tn.define_rule("line", |rs| {
-        rs.clear();
-        let mut gfm = AltSpec {
-            s: vec![vec![lb]],
-            c_fn: Some(Arc::new(engine_block::md_line_gfm_condition)),
-            r: Some("line".to_string()),
-            g: "gfm".to_string(),
-            ..Default::default()
-        };
-        gfm.add_action(engine_block::md_line_gfm_action);
-        rs.add_open(gfm);
-        let mut base = AltSpec {
-            s: vec![vec![lb]],
-            r: Some("line".to_string()),
-            ..Default::default()
-        };
-        base.add_action(engine_block::md_line_action);
-        rs.add_open(base);
-        rs.add_open(AltSpec::default());
-        rs.add_close(AltSpec::default());
-    });
+    // A rule per node: a container opens on its token, pushes its
+    // children, and closes on `#EN`; a leaf opens on its token and closes
+    // at once.
+    for n in engine_block::NODE_RULES {
+        tn.define_rule(n.rule, |rs| {
+            rs.clear();
+            if n.container {
+                let mut open = AltSpec {
+                    s: vec![vec![token(n.token)]],
+                    p: Some("children".to_string()),
+                    ..Default::default()
+                };
+                open.add_action(engine_block::md_open);
+                rs.add_open(open);
+                let mut close = AltSpec {
+                    s: vec![vec![token(engine_block::END_TOKEN)]],
+                    ..Default::default()
+                };
+                close.add_action(engine_block::md_close);
+                rs.add_close(close);
+            } else {
+                let mut open = AltSpec {
+                    s: vec![vec![token(n.token)]],
+                    ..Default::default()
+                };
+                open.add_action(engine_block::md_leaf);
+                rs.add_open(open);
+                rs.add_close(AltSpec::default());
+            }
+        });
+    }
 
     Ok(())
 }
@@ -292,6 +348,14 @@ pub fn make_with(options: &Options) -> Tabnas {
     let mut tn = Tabnas::new();
     tn.use_plugin(plugin(), Some(options.to_value()))
         .expect("the Markdown plugin installs on a bare engine");
+    // The one matcher cuts a line through the lexer's window and fills it
+    // past the line's end, and nothing else reads the source, so a parse
+    // from a reader (`Tabnas::parse_reader`, admin ADR-30) holds the text
+    // of the lines it has not finished with, and not the whole text. The
+    // option is set here, on the parser this package makes, not in the
+    // plugin.
+    tn.set_options(|o| o.lex.window = true)
+        .expect("the window option installs on the parser this package makes");
     tn
 }
 

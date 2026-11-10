@@ -51,7 +51,7 @@ use crate::common::{
     decode_entity, is_escapable, is_unicode_punctuation, is_unicode_whitespace, js_trim,
     normalize_reference, unescape_string, ENTITY_PATTERN, ESCAPABLE_ASCII,
 };
-use crate::node::{MdNode, NodeId, NodeType, Tree};
+use crate::node::{MdNode, NodeId, NodeType, ReferenceType, Tree};
 use crate::options::{Options, RefDef, RefMap};
 
 // --- Section 6.6 raw HTML: the tag grammar, spelled out because it is
@@ -748,6 +748,28 @@ pub struct InlineParser {
     nesting: HashMap<NodeId, usize>,
     /// The code span search memo for the current block's subject.
     backticks: BacktickMemo,
+    /// Read a bracketed label as a reference whether or not the document
+    /// defines it, keeping it unresolved (`link_reference`,
+    /// `image_reference`) rather than looking it up in `refmap`: the parse
+    /// the AST is projected from. The inline parse of a block then depends
+    /// on nothing outside the block, which is what lets the engine path
+    /// finish a block's inlines when the block closes. Off, the parse
+    /// resolves references as CommonMark does, which the HTML renderer
+    /// needs.
+    pub keep_references: bool,
+}
+
+/// A link reference definition as [`parse_definitions`] reads one
+/// (section 4.7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedDefinition {
+    /// The BYTE range of the subject the definition takes.
+    pub start: usize,
+    pub end: usize,
+    /// The label's raw source text, between its brackets.
+    pub label: String,
+    pub destination: String,
+    pub title: Option<String>,
 }
 
 impl InlineParser {
@@ -762,7 +784,15 @@ impl InlineParser {
             options,
             nesting: HashMap::new(),
             backticks: BacktickMemo::default(),
+            keep_references: false,
         }
+    }
+
+    /// A parser that keeps references unresolved (see `keep_references`).
+    pub fn keeping_references(options: Options) -> Self {
+        let mut parser = InlineParser::new(RefMap::new(), options);
+        parser.keep_references = true;
+        parser
     }
 
     /// The tallest nesting height among the siblings from `from` up to
@@ -1220,6 +1250,8 @@ impl InlineParser {
         let mut dest = String::new();
         let mut title: Option<String> = None;
         let mut matched = false;
+        // Kept references only: the label and the form that named it.
+        let mut kept: Option<(String, ReferenceType)> = None;
 
         let savepos = self.pos;
 
@@ -1237,14 +1269,19 @@ impl InlineParser {
             // (collapsed and shortcut), which is only possible if that text
             // holds no bracket.
             let mut reflabel: Option<String> = None;
+            let mut reftype = ReferenceType::Shortcut;
             let beforelabel = self.pos;
             let n = self.parse_link_label();
             if n > 2 {
                 reflabel = Some(self.subject[beforelabel + 1..beforelabel + n - 1].to_string());
+                reftype = ReferenceType::Full;
             } else if !opener.bracket_after {
                 let (lo, hi) = (opener.index + 1, startpos - 1);
                 if lo <= hi && hi <= self.subject.len() {
                     reflabel = Some(self.subject[lo..hi].to_string());
+                    if n == 2 {
+                        reftype = ReferenceType::Collapsed;
+                    }
                 }
             }
             if n == 0 {
@@ -1252,7 +1289,19 @@ impl InlineParser {
             }
 
             if let Some(label) = reflabel {
-                if let Some(link) = self.refmap.get(&normalize_reference(&label)) {
+                if self.keep_references {
+                    // A reference wherever a definition could name the
+                    // label: one a definition's own label could be (a full
+                    // form's second label was scanned as one; the link text
+                    // of the other two forms must scan as one too), holding
+                    // more than white space.
+                    let valid = reftype == ReferenceType::Full
+                        || is_link_label_at(&self.subject, opener.index, startpos);
+                    if valid && !normalize_reference(&label).is_empty() {
+                        kept = Some((label, reftype));
+                        matched = true;
+                    }
+                } else if let Some(link) = self.refmap.get(&normalize_reference(&label)) {
                     dest = link.destination.clone();
                     title = link.title.clone();
                     matched = true;
@@ -1268,15 +1317,30 @@ impl InlineParser {
             return true;
         }
 
-        let mut node = MdNode::new(if is_image {
-            NodeType::Image
-        } else {
-            NodeType::Link
-        });
-        node.destination = dest;
-        // An empty title is the same as no title at all: `[a](/url "")`
-        // renders a bare `<a href="/url">`.
-        node.title = title.filter(|t| !t.is_empty());
+        let node = match kept {
+            Some((label, reftype)) => {
+                let mut node = MdNode::new(if is_image {
+                    NodeType::ImageReference
+                } else {
+                    NodeType::LinkReference
+                });
+                node.label = label;
+                node.reference_type = Some(reftype);
+                node
+            }
+            None => {
+                let mut node = MdNode::new(if is_image {
+                    NodeType::Image
+                } else {
+                    NodeType::Link
+                });
+                node.destination = dest;
+                // An empty title is the same as no title at all:
+                // `[a](/url "")` renders a bare `<a href="/url">`.
+                node.title = title.filter(|t| !t.is_empty());
+                node
+            }
+        };
         let node = tree.add(node);
 
         let mut tmp = tree.get(opener.node).next;
@@ -1476,19 +1540,36 @@ impl InlineParser {
 
     /// Section 4.7: consume one link reference definition at the start
     /// of `s`, adding it to `refmap`. Returns the number of BYTES consumed.
-    /// The block phase goes through [`parse_references`], which takes
+    /// The block phase goes through [`parse_definitions`], which reads
     /// every leading definition of a paragraph over one copy of it.
     pub fn parse_reference(&mut self, s: &str, refmap: &mut RefMap) -> usize {
         self.subject = s.to_string();
         self.pos = 0;
-        self.parse_reference_here(refmap)
+        match self.parse_definition_here() {
+            Some(d) => {
+                refmap
+                    .entry(normalize_reference(&d.label))
+                    .or_insert(RefDef {
+                        destination: d.destination,
+                        title: d.title,
+                    });
+                self.pos
+            }
+            None => 0,
+        }
     }
 
-    /// [`parse_reference`] at the current position of the current
-    /// subject: on success the position is past the definition, on
-    /// failure it is back where it was and the result is 0.
-    fn parse_reference_here(&mut self, refmap: &mut RefMap) -> usize {
+    /// The link reference definition at the current position of the
+    /// current subject: on success the position is past it, on failure it
+    /// is back where it was. Nothing here depends on a refmap: the block
+    /// phase records each definition itself (its refmap, first definition
+    /// wins, and the definitions beside the paragraph's container).
+    fn parse_definition_here(&mut self) -> Option<ParsedDefinition> {
         let startpos = self.pos;
+        let fail = |parser: &mut InlineParser| {
+            parser.pos = startpos;
+            None
+        };
 
         // Section 4.7 allows up to three spaces of indentation before the
         // label. The block phase normally strips a paragraph line's
@@ -1499,22 +1580,20 @@ impl InlineParser {
         let label_start = self.pos;
         let match_chars = self.parse_link_label();
         if match_chars == 0 {
-            return 0;
+            return fail(self);
         }
         let rawlabel = self.subject[label_start + 1..label_start + match_chars - 1].to_string();
 
         if self.peek() == Some(b':') {
             self.pos += 1;
         } else {
-            self.pos = startpos;
-            return 0;
+            return fail(self);
         }
 
         self.spnl();
 
         let Some(dest) = self.parse_link_destination() else {
-            self.pos = startpos;
-            return 0;
+            return fail(self);
         };
 
         let beforetitle = self.pos;
@@ -1541,25 +1620,31 @@ impl InlineParser {
             }
         }
         if !at_line_end {
-            self.pos = startpos;
-            return 0;
+            return fail(self);
         }
 
-        let normlabel = normalize_reference(&rawlabel);
-        if normlabel.is_empty() {
-            // A label must hold at least one non-whitespace character.
-            self.pos = startpos;
-            return 0;
+        // A label must hold at least one non-whitespace character.
+        if normalize_reference(&rawlabel).is_empty() {
+            return fail(self);
         }
 
-        // First definition wins.
-        refmap.entry(normlabel).or_insert(RefDef {
+        Some(ParsedDefinition {
+            start: startpos,
+            end: self.pos,
+            label: rawlabel,
             destination: dest,
             title,
-        });
-
-        self.pos - startpos
+        })
     }
+}
+
+/// Whether the text from `start` (a `[`) to `end` (just past its `]`) is
+/// a link label (section 4.7): at most 999 characters between the
+/// brackets, and a bracket inside only if backslash-escaped. A shortcut or
+/// collapsed reference's link text names its label, so it must be one to
+/// be a reference at all, since a definition's label always is.
+fn is_link_label_at(subject: &str, start: usize, end: usize) -> bool {
+    matches!(scan_link_label(subject, start), Some((raw, length)) if length != 0 && start + raw == end)
 }
 
 /// Autolink text is literal: no backslash escapes, no entity references.
@@ -2027,9 +2112,13 @@ fn linkify_children(tree: &mut Tree, parent: NodeId, pending: &mut Vec<NodeId>) 
 
         // No links inside links (section 6.3), and an image's children are
         // its alt text.
+        // A kept reference is a link or an image as soon as a definition
+        // names its label, so it is passed over the same way.
         let node = tree.get(c);
         if node.node_type != NodeType::Link
             && node.node_type != NodeType::Image
+            && node.node_type != NodeType::LinkReference
+            && node.node_type != NodeType::ImageReference
             && node.is_container()
         {
             pending.push(c);
@@ -2100,6 +2189,14 @@ pub fn parse_inlines(tree: &mut Tree, refmap: RefMap, options: Options) {
     for_each_inline_block(tree, &options, |tree, block| parser.parse(tree, block));
 }
 
+/// [`parse_inlines`] reading every bracketed label a definition could name
+/// as a reference, left unresolved, with no link reference map to consult:
+/// the tree the AST is projected from (see `ast.rs`).
+pub fn parse_inlines_keeping_references(tree: &mut Tree, options: Options) {
+    let mut parser = InlineParser::keeping_references(options);
+    for_each_inline_block(tree, &options, |tree, block| parser.parse(tree, block));
+}
+
 /// Consume link reference definitions from the front of a paragraph's raw
 /// content, adding them to `refmap`. Returns the number of BYTES consumed,
 /// or 0 if `s` does not start with a definition.
@@ -2115,18 +2212,35 @@ pub fn parse_reference(s: &str, refmap: &mut RefMap) -> usize {
 /// Section 4.7 over a whole paragraph: every link reference definition
 /// at the start of `s`, in order, each added to `refmap`. Returns the
 /// number of BYTES they take up together.
+pub fn parse_references(s: &str, refmap: &mut RefMap) -> usize {
+    let definitions = parse_definitions(s);
+    for d in &definitions {
+        refmap
+            .entry(normalize_reference(&d.label))
+            .or_insert(RefDef {
+                destination: d.destination.clone(),
+                title: d.title.clone(),
+            });
+    }
+    definitions.last().map_or(0, |d| d.end)
+}
+
+/// Section 4.7 over a whole paragraph: every link reference definition at
+/// the start of `s`, in order, each with the BYTE range it takes.
 ///
 /// One parser over one copy of `s`, advancing through it. Copying the
-/// remaining tail once per definition, as the per-definition entry
-/// point does, made a paragraph of n short definitions cost O(n^2).
-pub fn parse_references(s: &str, refmap: &mut RefMap) -> usize {
+/// remaining tail once per definition, as the per-definition entry point
+/// does, made a paragraph of n short definitions cost O(n^2).
+pub fn parse_definitions(s: &str) -> Vec<ParsedDefinition> {
     let mut parser = InlineParser::new(RefMap::new(), Options::COMMONMARK);
     parser.subject = s.to_string();
     parser.pos = 0;
+    let mut out = Vec::new();
     while parser.pos < s.len() && s.as_bytes()[parser.pos] == b'[' {
-        if parser.parse_reference_here(refmap) == 0 {
-            break;
+        match parser.parse_definition_here() {
+            Some(d) => out.push(d),
+            None => break,
         }
     }
-    parser.pos
+    out
 }

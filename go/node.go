@@ -52,23 +52,69 @@ const (
 	NodeLink       NodeType = "link"
 	NodeImage      NodeType = "image"
 	NodeDel        NodeType = "del"
+
+	// A link or an image whose destination a label names, kept unresolved:
+	// an inline parse that reads references as references (the AST's, see
+	// ast.go) makes these where the resolving parse would look the label
+	// up. The HTML renderer never sees one, since the tree it renders comes
+	// from the resolving parse.
+	NodeLinkReference  NodeType = "link_reference"
+	NodeImageReference NodeType = "image_reference"
 )
 
 var containerTypes = map[NodeType]bool{
-	NodeDocument:   true,
-	NodeBlockQuote: true,
-	NodeList:       true,
-	NodeItem:       true,
-	NodeParagraph:  true,
-	NodeHeading:    true,
-	NodeTable:      true,
-	NodeTableRow:   true,
-	NodeTableCell:  true,
-	NodeEmph:       true,
-	NodeStrong:     true,
-	NodeLink:       true,
-	NodeImage:      true,
-	NodeDel:        true,
+	NodeDocument:       true,
+	NodeBlockQuote:     true,
+	NodeList:           true,
+	NodeItem:           true,
+	NodeParagraph:      true,
+	NodeHeading:        true,
+	NodeTable:          true,
+	NodeTableRow:       true,
+	NodeTableCell:      true,
+	NodeEmph:           true,
+	NodeStrong:         true,
+	NodeLink:           true,
+	NodeImage:          true,
+	NodeDel:            true,
+	NodeLinkReference:  true,
+	NodeImageReference: true,
+}
+
+// Reference types: how a reference names its label (§6.3), `[a][b]`,
+// `[a][]` or `[a]`.
+const (
+	ReferenceFull      = "full"
+	ReferenceCollapsed = "collapsed"
+	ReferenceShortcut  = "shortcut"
+)
+
+// Definition is a link reference definition (§4.7) as the block phase read
+// it from the front of a paragraph.
+type Definition struct {
+	// Label is the label's raw source text, between its brackets.
+	Label string
+	// Destination is already entity-decoded and backslash-unescaped.
+	Destination string
+	// Title likewise, meaningful only when HasTitle is set.
+	Title    string
+	HasTitle bool
+	// Start and End are the source lines the definition spans, 1-based,
+	// both included.
+	Start int
+	End   int
+}
+
+// DefinitionSite is where a definition stands among a container's
+// children: after the child After (nil: before the first), in source order.
+// Definitions are not blocks in the spec's algorithm, which reads them out
+// of a paragraph and drops a paragraph that held nothing else, so they are
+// kept beside the children rather than among them: the block phase's own
+// reads of a container's children (list looseness, the blank-line flags)
+// never see one.
+type DefinitionSite struct {
+	After *MdNode
+	Def   Definition
 }
 
 // TableAlign is the per-column alignment of a GFM table, from the colons in
@@ -176,6 +222,16 @@ type MdNode struct {
 	Checked    bool
 	HasChecked bool
 
+	// Label and ReferenceType are a link_reference's or image_reference's
+	// label (its raw source text, between its brackets) and the form that
+	// named it.
+	Label         string
+	ReferenceType string
+
+	// Definitions are a container's link reference definitions, read from
+	// paragraphs among its children, each with where it stands.
+	Definitions []DefinitionSite
+
 	// GFM is the parse option, recorded on the DOCUMENT node by the block
 	// phase and meaningless anywhere else.
 	//
@@ -198,6 +254,10 @@ type MdNode struct {
 	// A block whose last line was blank cannot be lazily continued.
 	LastLineBlank   bool
 	LastLineChecked bool
+	// ContentLine is a paragraph's source line where StringContent begins:
+	// its first line, moved on past each definition read off the front, so
+	// a definition read later knows its lines.
+	ContentLine int
 }
 
 // NewNode returns an open node of the given type.

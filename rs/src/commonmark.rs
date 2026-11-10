@@ -10,7 +10,7 @@
 //! this; never the other way round.
 
 use crate::block::parse_blocks;
-use crate::inline::parse_inlines;
+use crate::inline::{parse_inlines, parse_inlines_keeping_references};
 use crate::node::Tree;
 use crate::options::Options;
 
@@ -20,5 +20,16 @@ use crate::options::Options;
 pub fn parse(input: &str, options: Options) -> Tree {
     let (mut tree, refmap) = parse_blocks(input, options);
     parse_inlines(&mut tree, refmap, options);
+    tree
+}
+
+/// [`parse`] with the inline phase reading every bracketed label a
+/// definition could name as a reference, left unresolved, and the link
+/// reference map not consulted: the tree the AST is projected from (see
+/// `ast.rs`). [`parse`] resolves references as CommonMark says, which is
+/// the tree the HTML renderer needs.
+pub fn parse_keeping_references(input: &str, options: Options) -> Tree {
+    let (mut tree, _) = parse_blocks(input, options);
+    parse_inlines_keeping_references(&mut tree, options);
     tree
 }

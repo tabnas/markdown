@@ -86,7 +86,15 @@ fn block_columns_count_characters_not_bytes() {
         markdown(&mut tn, &Options::default()).expect("installs");
         let seen = subscribe(&mut tn);
         tn.parse(src).expect("parses");
-        assert_eq!(drain(&seen), want, "{label}: {src:?}");
+        // The tokens of the blocks a line makes have no width and stand
+        // where the line starts, so the lines and the end are where the
+        // column arithmetic shows.
+        let lines: Vec<String> = drain(&seen)
+            .split(' ')
+            .filter(|t| t.starts_with("#LB@") || t.starts_with("#ZZ@"))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(lines.join(" "), want, "{label}: {src:?}");
     }
 }
 

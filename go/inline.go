@@ -652,6 +652,25 @@ type inlineParser struct {
 	brackets   *bracket
 	refmap     RefMap
 	options    Options
+	// keepReferences reads a bracketed label as a reference whether or not
+	// the document defines it, keeping it unresolved (link_reference,
+	// image_reference) rather than looking it up in refmap: the parse the
+	// AST is projected from. The inline parse of a block then depends on
+	// nothing outside the block, which is what lets the engine path finish
+	// a block's inlines when the block closes. Off, the parse resolves
+	// references as CommonMark does, which the HTML renderer needs.
+	keepReferences bool
+}
+
+// parsedDefinition is a link reference definition as parseDefinition reads
+// one (§4.7).
+type parsedDefinition struct {
+	// length is how many BYTES of the subject the definition takes.
+	length      int
+	label       string
+	destination string
+	title       string
+	hasTitle    bool
 }
 
 // --- scanning primitives ---
@@ -1133,6 +1152,9 @@ func (p *inlineParser) parseCloseBracket(block *MdNode) bool {
 	title := ""
 	hasTitle := false
 	matched := false
+	// Kept references only: the label and the form that named it.
+	keptLabel := ""
+	keptType := ""
 
 	savepos := p.pos
 
@@ -1149,16 +1171,21 @@ func (p *inlineParser) parseCloseBracket(block *MdNode) bool {
 		// absent one means the link text is itself the label (collapsed and
 		// shortcut) — which is only possible if that text holds no bracket.
 		reflabel := ""
+		reftype := ReferenceShortcut
 		haveReflabel := false
 		beforelabel := p.pos
 		n := p.parseLinkLabel()
 		if n > 2 {
 			reflabel = p.subject[beforelabel+1 : beforelabel+n-1]
+			reftype = ReferenceFull
 			haveReflabel = true
 		} else if !opener.bracketAfter {
 			lo, hi := opener.index+1, startpos-1
 			if 0 <= lo && lo <= hi && hi <= len(p.subject) {
 				reflabel = p.subject[lo:hi]
+				if n == 2 {
+					reftype = ReferenceCollapsed
+				}
 				haveReflabel = true
 			}
 		}
@@ -1167,7 +1194,19 @@ func (p *inlineParser) parseCloseBracket(block *MdNode) bool {
 		}
 
 		if haveReflabel {
-			if link, ok := p.refmap[normalizeReference(reflabel)]; ok {
+			if p.keepReferences {
+				// A reference wherever a definition could name the label:
+				// one a definition's own label could be (a full form's
+				// second label was scanned as one; the link text of the
+				// other two forms must scan as one too), holding more than
+				// white space.
+				valid := reftype == ReferenceFull || isLinkLabelAt(p.subject, opener.index, startpos)
+				if valid && normalizeReference(reflabel) != "" {
+					keptLabel = reflabel
+					keptType = reftype
+					matched = true
+				}
+			} else if link, ok := p.refmap[normalizeReference(reflabel)]; ok {
 				dest = link.Destination
 				title = link.Title
 				hasTitle = link.HasTitle
@@ -1183,17 +1222,28 @@ func (p *inlineParser) parseCloseBracket(block *MdNode) bool {
 		return true
 	}
 
-	nodeType := NodeLink
-	if isImage {
-		nodeType = NodeImage
-	}
-	node := NewNode(nodeType)
-	node.Destination = dest
-	// An empty title is the same as no title at all: `[a](/url "")` renders a
-	// bare `<a href="/url">`. TS spells this `null === title || '' === title`.
-	if hasTitle && title != "" {
-		node.Title = title
-		node.HasTitle = true
+	var node *MdNode
+	if keptType != "" {
+		node = NewNode(NodeLinkReference)
+		if isImage {
+			node.Type = NodeImageReference
+		}
+		node.Label = keptLabel
+		node.ReferenceType = keptType
+	} else {
+		nodeType := NodeLink
+		if isImage {
+			nodeType = NodeImage
+		}
+		node = NewNode(nodeType)
+		node.Destination = dest
+		// An empty title is the same as no title at all: `[a](/url "")`
+		// renders a bare `<a href="/url">`. TS spells this `null === title ||
+		// '' === title`.
+		if hasTitle && title != "" {
+			node.Title = title
+			node.HasTitle = true
+		}
 	}
 
 	tmp := opener.node.Next
@@ -1371,10 +1421,13 @@ func (p *inlineParser) parse(block *MdNode) {
 	p.finishBlock(block)
 }
 
-// parseReference implements §4.7: consume leading link reference definitions.
-// Called by the block phase while finalizing a paragraph, repeatedly, until it
-// returns 0.
-func (p *inlineParser) parseReference(s string) int {
+// parseDefinition implements §4.7: the link reference definition at the
+// start of s, or false. The block phase calls it while finalizing a
+// paragraph, repeatedly, slicing off what each takes, until it answers
+// false; it records each definition itself (refmap, first definition wins,
+// and the definitions beside the paragraph's container), so nothing here
+// depends on a refmap.
+func (p *inlineParser) parseDefinition(s string) (parsedDefinition, bool) {
 	p.subject = s
 	p.pos = 0
 
@@ -1388,23 +1441,21 @@ func (p *inlineParser) parseReference(s string) int {
 	labelStart := p.pos
 	matchChars := p.parseLinkLabel()
 	if matchChars == 0 {
-		return 0
+		return parsedDefinition{}, false
 	}
 	rawlabel := p.subject[labelStart+1 : labelStart+matchChars-1]
 
 	if p.peek() == ':' {
 		p.pos++
 	} else {
-		p.pos = startpos
-		return 0
+		return parsedDefinition{}, false
 	}
 
 	p.spnl()
 
 	dest, ok := p.parseLinkDestination()
 	if !ok {
-		p.pos = startpos
-		return 0
+		return parsedDefinition{}, false
 	}
 
 	beforetitle := p.pos
@@ -1431,23 +1482,31 @@ func (p *inlineParser) parseReference(s string) int {
 		}
 	}
 	if !atLineEnd {
-		p.pos = startpos
-		return 0
+		return parsedDefinition{}, false
 	}
 
-	normlabel := normalizeReference(rawlabel)
-	if normlabel == "" {
-		// A label must hold at least one non-whitespace character.
-		p.pos = startpos
-		return 0
+	// A label must hold at least one non-whitespace character.
+	if normalizeReference(rawlabel) == "" {
+		return parsedDefinition{}, false
 	}
 
-	// First definition wins.
-	if _, exists := p.refmap[normlabel]; !exists {
-		p.refmap[normlabel] = RefDef{Destination: dest, Title: title, HasTitle: hasTitle}
-	}
+	return parsedDefinition{
+		length:      p.pos - startpos,
+		label:       rawlabel,
+		destination: dest,
+		title:       title,
+		hasTitle:    hasTitle,
+	}, true
+}
 
-	return p.pos - startpos
+// isLinkLabelAt reports whether the text from start (a `[`) to end (just
+// past its `]`) is a link label (§4.7): at most 999 characters between the
+// brackets, and a bracket inside only if backslash-escaped. A shortcut or
+// collapsed reference's link text names its label, so it must be one to be
+// a reference at all, since a definition's label always is.
+func isLinkLabelAt(subject string, start, end int) bool {
+	raw, length, ok := scanLinkLabel(subject, start)
+	return ok && length != 0 && start+raw == end
 }
 
 // --- GFM extended autolinks (autolink literals) -----------------------------
@@ -1915,7 +1974,11 @@ func linkifyChildren(parent *MdNode, pending []*MdNode) []*MdNode {
 
 		// No links inside links (§6.3), and an image's children are its alt
 		// text.
-		if NodeLink != child.Type && NodeImage != child.Type && child.IsContainer() {
+		// A kept reference is a link or an image as soon as a definition
+		// names its label, so it is passed over the same way.
+		if NodeLink != child.Type && NodeImage != child.Type &&
+			NodeLinkReference != child.Type && NodeImageReference != child.Type &&
+			child.IsContainer() {
 			pending = append(pending, child)
 		}
 		child = child.Next
@@ -1950,8 +2013,12 @@ var inlineContentBlocks = map[NodeType]bool{
 // parseInlines is the phase 2 entry point: walk the block tree and parse the
 // string content of every paragraph, heading and table cell into inline
 // children.
-func parseInlines(doc *MdNode, refmap RefMap, opts Options) {
-	parser := &inlineParser{refmap: refmap, options: opts}
+//
+// With keepReferences, every bracketed label a definition could name is a
+// reference, left unresolved, and refmap is not consulted: the tree the AST
+// is projected from (see ast.go).
+func parseInlines(doc *MdNode, refmap RefMap, opts Options, keepReferences bool) {
+	parser := &inlineParser{refmap: refmap, options: opts, keepReferences: keepReferences}
 	forEachInlineBlock(doc, opts, func(node *MdNode) { parser.parse(node) })
 }
 
@@ -1975,17 +2042,16 @@ func forEachInlineBlock(doc *MdNode, opts Options, fn func(*MdNode)) {
 	}
 }
 
-// parseReference consumes link reference definitions from the front of a
-// paragraph's raw content, adding them to refmap. It returns the number of
-// BYTES consumed (TS counts UTF-16 units; block.go slices by byte), or 0 if s
-// does not start with a definition.
+// parseDefinition is the link reference definition at the front of a
+// paragraph's raw content, or false if s does not start with one. Its
+// length is in BYTES (TS counts UTF-16 units; block.go slices by byte).
 //
 // TS keeps one module-level InlineParser aside for this, because reference
 // definitions are parsed during the block phase, before any parser for the
 // document exists. Go allocates a fresh one per call instead: package-level
-// mutable state would make concurrent parses race, and the struct is four
+// mutable state would make concurrent parses race, and the struct is a few
 // words. Nothing here depends on the parse options.
-func parseReference(s string, refmap RefMap) int {
-	parser := &inlineParser{refmap: refmap, options: Options{GFM: false, Breaks: false}}
-	return parser.parseReference(s)
+func parseDefinition(s string) (parsedDefinition, bool) {
+	parser := &inlineParser{refmap: RefMap{}, options: Options{GFM: false, Breaks: false}}
+	return parser.parseDefinition(s)
 }

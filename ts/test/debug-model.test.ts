@@ -47,12 +47,37 @@ describe('compose: markdown + @tabnas/debug', () => {
     tn.use(Debug, { print: false, trace: false })
     const m = tn.debug.model()
 
-    // The engine block driver's grammar: `markdown` pushes `line`, and
-    // `line` tail-recurses one `#LB` token per physical line (see
-    // engine-block.ts). The old single token-draining rule is gone.
+    // The engine block driver's grammar: `markdown` pushes `children`, the
+    // loop of a container's children, and every node of the AST is a rule
+    // of its own, named for its type (see engine-block.ts).
     assert.deepStrictEqual(
       m.rules.map((r: any) => r.name).sort(),
-      ['line', 'markdown'],
+      [
+        'blockquote',
+        'break',
+        'children',
+        'code',
+        'definition',
+        'delete',
+        'emphasis',
+        'heading',
+        'html',
+        'image',
+        'imageReference',
+        'inlineCode',
+        'link',
+        'linkReference',
+        'list',
+        'listItem',
+        'markdown',
+        'paragraph',
+        'strong',
+        'table',
+        'tableCell',
+        'tableRow',
+        'text',
+        'thematicBreak',
+      ],
     )
 
     // Entry rule is `markdown`.
@@ -67,26 +92,28 @@ describe('compose: markdown + @tabnas/debug', () => {
     assert.ok(Array.isArray(markdown.open), 'markdown.open should exist')
     assert.ok(Array.isArray(markdown.close), 'markdown.close should exist')
 
-    // The `line` rule is where the engine genuinely drives the parse: its
-    // open alt consumes `#LB` and recurses. Block *decisions* still live in
-    // the shared engine-free core, by design (dx-report §42).
-    const line = m.rules.find((r: any) => r.name === 'line')
-    assert.ok(line, 'line rule should exist')
-    assert.ok(Array.isArray(line.open), 'line.open should exist')
-    // Three open alts under GFM: the g:'gfm'-tagged arming alt, the base
-    // alt, and the fall-through.
-    assert.equal(line.open.length, 3)
+    // The `children` loop is where the engine drives the parse: one open
+    // alt per node (each pushing the node's rule), one for a line, and the
+    // fall-through; its close replaces it with the next iteration. The
+    // block *decisions* are the shared engine-free core's, by design
+    // (dx-report §42); the rules open and close each block on them.
+    const children = m.rules.find((r: any) => r.name === 'children')
+    assert.ok(children, 'children rule should exist')
+    assert.ok(Array.isArray(children.open), 'children.open should exist')
+    assert.equal(children.open.length, 24)
+    assert.equal(children.close.length, 2)
   })
 
   test('gfm:false subtracts the tagged alts from the grammar', { skip }, () => {
     // The GFM dialect is a group-tagged extension, removed by rule.exclude —
-    // the base grammar visibly has one alt fewer, not a disabled branch.
+    // the base grammar visibly has no table and no strikethrough to push,
+    // not a disabled branch.
     const tn = new Tabnas().use(Markdown, { gfm: false })
     tn.use(Debug, { print: false, trace: false })
     const m = tn.debug.model()
-    const line = m.rules.find((r: any) => r.name === 'line')
-    assert.ok(line, 'line rule should exist')
-    assert.equal(line.open.length, 2)
+    const children = m.rules.find((r: any) => r.name === 'children')
+    assert.ok(children, 'children rule should exist')
+    assert.equal(children.open.length, 20)
 
     // JSON round-trip
     const grammar = {
