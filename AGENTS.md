@@ -891,7 +891,16 @@ node's text as hostile.
   the source, so the parser this package makes (`make()`, Go `Make()`)
   declares `lex.window`, and a parse from a reader holds a window of the
   source, not the whole of it (`reader.test.ts` and its ports, at windows
-  of a few characters in TypeScript and Rust).
+  of a few characters in TypeScript and Rust). And a parse that keeps no
+  native tree (no `meta.md.keepTree`) lets go of each block at the top of
+  the document once its close is written, with everything below it: the
+  TypeScript and Go drivers unlink it from the document, and Rust's gives
+  its arena slots back for the next blocks (`BlockParser::release_block`,
+  with the blocks the phase dropped, a setext underline's paragraph or a
+  table's header row). The block phase reads only the open blocks on the
+  spine once a block closes, so the document holds its open blocks, not
+  every block it has finished (tabnas/markdown#100;
+  `a_driver_that_releases_written_blocks_keeps_the_arena_bounded`).
   `lex.emptyResult` returns an empty document for `""`. `rule.clear()` is
   required before defining `markdown`, or inherited `val` alts try to
   match a leading `#`.

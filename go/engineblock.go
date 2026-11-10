@@ -310,26 +310,42 @@ func eventTokens(st *mdParseState, opts Options, ev BlockEvent, out []made) []ma
 
 	case EventClose:
 		node := ev.Node
-		switch node.Type {
-		case NodeBlockQuote, NodeList, NodeItem, NodeTable:
-			return append(out, made{endToken, ordered(blockTail(node))})
+		out = closeTokens(st, opts, node, out)
+		// Its tokens are written: a parse that keeps no tree lets go of a
+		// block at the top of the document, and with it everything below
+		// it, so the document no longer keeps every block it has finished
+		// to its end (tabnas/markdown#100). The block phase reads only the
+		// open blocks on the spine after a block closes, and a list's
+		// looseness and the blank-line flags are settled before its close.
+		if !st.keepTree && node.Parent != nil && node.Parent == st.bp.doc {
+			node.Unlink()
+		}
+		return out
+	}
+	return out
+}
 
-		case NodeParagraph, NodeHeading:
-			// A paragraph that held nothing but definitions is gone: its
-			// definitions were written as they were read.
-			if node.Parent == nil {
-				return out
-			}
-			return inlineBlockTokens(st, opts, node, out)
+// closeTokens appends the tokens a block's close makes.
+func closeTokens(st *mdParseState, opts Options, node *MdNode, out []made) []made {
+	switch node.Type {
+	case NodeBlockQuote, NodeList, NodeItem, NodeTable:
+		return append(out, made{endToken, ordered(blockTail(node))})
 
-		case NodeThematicBreak, NodeCodeBlock, NodeHTMLBlock:
-			leaf := leafBlock(node)
-			out = append(out, made{tokenOfType[leaf["type"].(string)], ordered(leaf)})
-			if !st.keepTree {
-				release(node)
-			}
+	case NodeParagraph, NodeHeading:
+		// A paragraph that held nothing but definitions is gone: its
+		// definitions were written as they were read.
+		if node.Parent == nil {
 			return out
 		}
+		return inlineBlockTokens(st, opts, node, out)
+
+	case NodeThematicBreak, NodeCodeBlock, NodeHTMLBlock:
+		leaf := leafBlock(node)
+		out = append(out, made{tokenOfType[leaf["type"].(string)], ordered(leaf)})
+		if !st.keepTree {
+			release(node)
+		}
+		return out
 	}
 	return out
 }
@@ -387,8 +403,10 @@ func inlineTokens(nodes []any, out []made) []made {
 }
 
 // release drops what a written block holds that nothing reads again: its
-// raw text, its literal and its inline nodes. The block itself stays in the
-// native tree, whose later lines still read its flags.
+// raw text, its literal and its inline nodes. A block inside a container
+// stays in the native tree, whose later lines may still read its flags,
+// until the block at the top of the document that holds it closes and is
+// let go, with everything below it.
 func release(node *MdNode) {
 	node.StringContent = nil
 	node.Literal = ""

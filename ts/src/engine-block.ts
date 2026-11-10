@@ -268,35 +268,54 @@ function eventTokens(
 
     case 'close': {
       const node = ev.node
-      switch (node.type) {
-        case 'block_quote':
-        case 'list':
-        case 'item':
-        case 'table':
-          out.push([END_TOKEN, blockTail(node)])
-          return
-
-        case 'paragraph':
-        case 'heading':
-          // A paragraph that held nothing but definitions is gone: its
-          // definitions were written as they were read.
-          if (null === node.parent) return
-          inlineBlockTokens(st, opts, parseBlock, node, out)
-          return
-
-        case 'thematic_break':
-        case 'code_block':
-        case 'html_block': {
-          const leaf = leafBlock(node)
-          out.push([TOKEN_OF[leaf.type], leaf])
-          if (!st.keepTree) release(node)
-          return
-        }
-
-        default:
-          return
-      }
+      closeTokens(st, opts, parseBlock, node, out)
+      // Its tokens are written: a parse that keeps no tree lets go of a
+      // block at the top of the document, and with it everything below it,
+      // so the document no longer keeps every block it has finished to its
+      // end (tabnas/markdown#100). The block phase reads only the open
+      // blocks on the spine after a block closes, and a list's looseness
+      // and the blank-line flags are settled before its close.
+      if (!st.keepTree && node.parent === st.bp.doc) node.unlink()
+      return
     }
+  }
+}
+
+/** The tokens a block's close makes, appended to `out`. */
+function closeTokens(
+  st: MdParseState,
+  opts: ParserOptions,
+  parseBlock: (st: MdParseState, block: MdNode) => void,
+  node: MdNode,
+  out: Made[],
+): void {
+  switch (node.type) {
+    case 'block_quote':
+    case 'list':
+    case 'item':
+    case 'table':
+      out.push([END_TOKEN, blockTail(node)])
+      return
+
+    case 'paragraph':
+    case 'heading':
+      // A paragraph that held nothing but definitions is gone: its
+      // definitions were written as they were read.
+      if (null === node.parent) return
+      inlineBlockTokens(st, opts, parseBlock, node, out)
+      return
+
+    case 'thematic_break':
+    case 'code_block':
+    case 'html_block': {
+      const leaf = leafBlock(node)
+      out.push([TOKEN_OF[leaf.type], leaf])
+      if (!st.keepTree) release(node)
+      return
+    }
+
+    default:
+      return
   }
 }
 
@@ -354,8 +373,10 @@ function inlineTokens(nodes: Inline[], out: Made[]): void {
 
 /**
  * Drop what a written block holds that nothing reads again: its raw text,
- * its literal and its inline nodes. The block itself stays in the native
- * tree, whose later lines still read its flags.
+ * its literal and its inline nodes. A block inside a container stays in the
+ * native tree, whose later lines may still read its flags, until the block
+ * at the top of the document that holds it closes and is let go, with
+ * everything below it.
  */
 function release(node: MdNode): void {
   node.stringContent = ''

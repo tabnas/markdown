@@ -432,6 +432,14 @@ pub fn make_md_block_matcher(
                 for event in events {
                     event_tokens(state, &opts, &inline_tn, event, &mut made);
                 }
+                // The blocks the line took out of the tree with no close
+                // of their own are written by nothing; a parse that keeps
+                // no tree gives their slots back.
+                for block in std::mem::take(&mut state.bp.dropped) {
+                    if !state.keep_tree {
+                        state.bp.release_block(block);
+                    }
+                }
                 if let Some(first) = made.first().cloned() {
                     state.made = made;
                     state.next = 1;
@@ -489,30 +497,53 @@ fn event_tokens(
 
         BlockEvent::Definition(def) => out.push(("#DF", definition_node(&def))),
 
-        BlockEvent::Close(id) => match state.bp.tree.get(id).node_type {
-            NodeType::BlockQuote | NodeType::List | NodeType::Item | NodeType::Table => {
-                out.push((END_TOKEN, object(block_tail(&state.bp.tree, id))));
+        BlockEvent::Close(id) => {
+            close_tokens(state, opts, inline_tn, id, out);
+            // Its tokens are written: a parse that keeps no tree lets go of
+            // a block at the top of the document, with everything below it,
+            // and of a paragraph that held nothing but definitions, which
+            // is out of the tree already. Without this the arena kept every
+            // block to the document's end (tabnas/markdown#100).
+            if !state.keep_tree
+                && (state.bp.is_top_level(id) || state.bp.tree.get(id).parent.is_none())
+            {
+                state.bp.release_block(id);
             }
+        }
+    }
+}
 
-            NodeType::Paragraph | NodeType::Heading => {
-                // A paragraph that held nothing but definitions is gone:
-                // its definitions were written as they were read.
-                if state.bp.tree.get(id).parent.is_some() {
-                    inline_block_tokens(state, opts, inline_tn, id, out);
-                }
+/// The tokens a block's `Close` makes, appended to `out`.
+fn close_tokens(
+    state: &mut BlockState,
+    opts: &Options,
+    inline_tn: &Tabnas,
+    id: NodeId,
+    out: &mut Vec<Made>,
+) {
+    match state.bp.tree.get(id).node_type {
+        NodeType::BlockQuote | NodeType::List | NodeType::Item | NodeType::Table => {
+            out.push((END_TOKEN, object(block_tail(&state.bp.tree, id))));
+        }
+
+        NodeType::Paragraph | NodeType::Heading => {
+            // A paragraph that held nothing but definitions is gone:
+            // its definitions were written as they were read.
+            if state.bp.tree.get(id).parent.is_some() {
+                inline_block_tokens(state, opts, inline_tn, id, out);
             }
+        }
 
-            NodeType::ThematicBreak | NodeType::CodeBlock | NodeType::HtmlBlock => {
-                if let Some(leaf) = leaf_block(&state.bp.tree, id) {
-                    out.push((token_of(node_type_of(&leaf)), leaf));
-                }
-                if !state.keep_tree {
-                    release(&mut state.bp.tree, id);
-                }
+        NodeType::ThematicBreak | NodeType::CodeBlock | NodeType::HtmlBlock => {
+            if let Some(leaf) = leaf_block(&state.bp.tree, id) {
+                out.push((token_of(node_type_of(&leaf)), leaf));
             }
+            if !state.keep_tree {
+                release(&mut state.bp.tree, id);
+            }
+        }
 
-            _ => {}
-        },
+        _ => {}
     }
 }
 
