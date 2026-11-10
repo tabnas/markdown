@@ -16,7 +16,11 @@
 //! and its siblings cannot be a plain owned value, and reference counting
 //! would make every splice a borrow-checker negotiation. An arena gives
 //! the same O(1) splices with plain integer bookkeeping, and an unlinked
-//! node simply becomes unreachable.
+//! node simply becomes unreachable. A driver that writes blocks as they
+//! finish and keeps no tree gives a written block's slots back
+//! ([`Tree::free_subtree`], [`crate::block::BlockParser::release_block`]),
+//! which the next nodes fill, so a long document's arena stays as large as
+//! its widest open block, not its length (tabnas/markdown#100).
 //!
 //! The public, mdast-adjacent AST is produced from this tree by `ast.rs`.
 //! That projection is lossy on purpose (it drops raw inline HTML boundaries
@@ -373,6 +377,10 @@ impl MdNode {
 pub struct Tree {
     nodes: Vec<MdNode>,
     root: NodeId,
+    /// Slots [`Tree::free_subtree`] gave back, which [`Tree::add`] fills
+    /// before it grows the arena. Empty unless a driver that keeps no tree
+    /// frees the blocks it has written (tabnas/markdown#100).
+    free: Vec<NodeId>,
 }
 
 impl Tree {
@@ -382,6 +390,7 @@ impl Tree {
         Tree {
             nodes: vec![MdNode::new(root_type)],
             root: 0,
+            free: Vec::new(),
         }
     }
 
@@ -390,10 +399,37 @@ impl Tree {
         self.root
     }
 
-    /// Add an unlinked node to the arena and return its id.
+    /// Add an unlinked node to the arena and return its id: a slot
+    /// [`Tree::free_subtree`] gave back, when there is one.
     pub fn add(&mut self, node: MdNode) -> NodeId {
+        if let Some(id) = self.free.pop() {
+            self.nodes[id] = node;
+            return id;
+        }
         self.nodes.push(node);
         self.nodes.len() - 1
+    }
+
+    /// Detach `node` and give its slot, and the slots of every node below
+    /// it, back to the arena for [`Tree::add`] to fill, dropping what each
+    /// held; answer the ids given back. Only for a node nothing will read
+    /// again: a slot given back takes the next node added, under the same
+    /// id. Iterative, since nesting is the input's to choose.
+    pub fn free_subtree(&mut self, node: NodeId) -> Vec<NodeId> {
+        self.unlink(node);
+        let mut freed = Vec::new();
+        let mut pending = vec![node];
+        while let Some(id) = pending.pop() {
+            let mut child = self.nodes[id].first_child;
+            while let Some(c) = child {
+                pending.push(c);
+                child = self.nodes[c].next;
+            }
+            self.nodes[id] = MdNode::new(NodeType::Paragraph);
+            freed.push(id);
+        }
+        self.free.extend(freed.iter().copied());
+        freed
     }
 
     /// Add an open, unlinked node of `node_type`.
@@ -409,7 +445,8 @@ impl Tree {
         &mut self.nodes[id]
     }
 
-    /// How many nodes the arena holds, unlinked ones included.
+    /// How many slots the arena holds, unlinked nodes' and given-back ones
+    /// included.
     pub fn len(&self) -> usize {
         self.nodes.len()
     }

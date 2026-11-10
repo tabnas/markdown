@@ -869,9 +869,55 @@ pub struct BlockParser {
     /// The table whose delimiter row is the next line `add_line` writes:
     /// that row opened the table and holds no data, so it makes no row.
     table_delimiter_row: Option<NodeId>,
+
+    /// Blocks the block phase took out of the tree with no `Close` of their
+    /// own, while a driver asks for events: a paragraph a table's header
+    /// row or a setext underline replaced. A driver that keeps no tree
+    /// gives them back with [`BlockParser::release_block`].
+    pub dropped: Vec<NodeId>,
 }
 
 impl BlockParser {
+    /// Note a block taken out of the tree with no `Close` of its own, for a
+    /// driver that asked for events (see [`BlockParser::dropped`]).
+    fn note_dropped(&mut self, block: NodeId) {
+        if self.events.is_some() {
+            self.dropped.push(block);
+        }
+    }
+
+    /// Give back the arena slots of `block` and everything below it, for a
+    /// driver that writes blocks as they finish and keeps no tree: a block
+    /// at the top of the document once its `Close` is written, a block the
+    /// phase took out of the tree. Nothing reads such a block again: the
+    /// phase's continuation and laziness rules read only the open blocks
+    /// on the spine, and the blank-line flags and a list's looseness are
+    /// settled before its `Close`. What the phase still holds of it is let
+    /// go too, so that a slot taken by a new block is never mistaken for it
+    /// (tabnas/markdown#100).
+    pub fn release_block(&mut self, block: NodeId) {
+        // An open block on the spine is not done; a dropped one may still
+        // say open, as nothing finalized it, but nothing links to it.
+        let node = self.tree.get(block);
+        if block == self.doc || self.tip == Some(block) || (node.open && node.parent.is_some()) {
+            return;
+        }
+        for id in self.tree.free_subtree(block) {
+            if self.last_added_to == Some(id) {
+                self.last_added_to = None;
+            }
+            if self.table_delimiter_row == Some(id) {
+                self.table_delimiter_row = None;
+            }
+            self.html_block_types.remove(&id);
+        }
+    }
+
+    /// Whether `block` sits at the top of the document.
+    pub fn is_top_level(&self, block: NodeId) -> bool {
+        self.tree.get(block).parent == Some(self.doc)
+    }
+
     pub fn new(options: Options) -> Self {
         let mut tree = Tree::new(NodeType::Document);
         let doc = tree.root();
@@ -907,6 +953,7 @@ impl BlockParser {
             html_block_types: HashMap::new(),
             events: None,
             table_delimiter_row: None,
+            dropped: Vec::new(),
         }
     }
 
@@ -1185,6 +1232,7 @@ impl BlockParser {
         } else {
             let parent = self.tree.get(container).parent;
             self.tree.unlink(container);
+            self.note_dropped(container);
             self.tip = parent;
         }
 
@@ -1932,6 +1980,7 @@ impl BlockParser {
                 let heading = self.tree.add(heading);
                 self.tree.insert_after(container, heading);
                 self.tree.unlink(container);
+                self.note_dropped(container);
                 self.tip = Some(heading);
                 let rest = self.current_line.len() - self.offset;
                 self.advance_offset(rest, false);
@@ -2320,5 +2369,52 @@ mod tests {
         assert_eq!(trailing_blank_run_start(b"a\n  \n"), 1);
         assert_eq!(trailing_blank_run_start(b"a\nb"), 3);
         assert_eq!(trailing_blank_run_start(b""), 0);
+    }
+
+    /// How many arena slots a driver that releases each block it has
+    /// written leaves, after `copies` copies of `unit`: the slots a block at
+    /// the top gives back at its close, and those of the blocks the phase
+    /// dropped, are filled again (tabnas/markdown#100).
+    fn slots_after(unit: &str, copies: usize) -> usize {
+        let mut bp = BlockParser::new(Options::default());
+        bp.events = Some(Vec::new());
+        let doc: String = unit.repeat(copies);
+        let lines: Vec<&str> = doc.split_inclusive('\n').collect();
+        for (i, line) in lines.iter().enumerate() {
+            bp.incorporate_line(line.strip_suffix('\n').unwrap_or(line));
+            if i + 1 == lines.len() {
+                bp.close_all();
+            }
+            for event in bp.events.replace(Vec::new()).unwrap_or_default() {
+                if let BlockEvent::Close(id) = event {
+                    if bp.is_top_level(id) || bp.tree.get(id).parent.is_none() {
+                        bp.release_block(id);
+                    }
+                }
+            }
+            for block in std::mem::take(&mut bp.dropped) {
+                bp.release_block(block);
+            }
+        }
+        bp.tree.len()
+    }
+
+    #[test]
+    fn a_driver_that_releases_written_blocks_keeps_the_arena_bounded() {
+        for unit in [
+            "Paragraph text.\n\n",
+            "- one\n- two\n\n  more\n\npara\n\n",
+            "> quote\n> - item\n\n",
+            "Title\n=====\n\n",
+            "| a | b |\n| - | - |\n| 1 | 2 |\n\n",
+            "[x]: /url\n\n```\ncode\n```\n\n<div>\nhtml\n</div>\n\n***\n\n",
+        ] {
+            let few = slots_after(unit, 10);
+            let many = slots_after(unit, 100);
+            assert_eq!(
+                few, many,
+                "{unit:?}: {few} slots after 10 copies, {many} after 100"
+            );
+        }
     }
 }
