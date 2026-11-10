@@ -278,17 +278,30 @@ func makeInlineTn(opts Options) *parser.Tabnas {
 func parseInlinesEngine(inlineTn *parser.Tabnas, doc *MdNode, refmap RefMap, opts Options) {
 	p := &inlineParser{refmap: refmap, options: opts}
 
-	forEachInlineBlock(doc, opts, func(block *MdNode) {
-		if !p.beginBlock(block) {
-			p.finishBlock(block)
-			return
-		}
-		if _, err := inlineTn.ParseMeta(p.subject, map[string]any{
-			"md": map[string]any{"inl": p, "block": block},
-		}); err != nil {
-			// CommonMark defines an output for every input; an engine error
-			// here is an internal wiring defect, not a parse result.
-			panic(err)
-		}
-	})
+	forEachInlineBlock(doc, opts, func(block *MdNode) { scanBlock(inlineTn, p, block) })
+}
+
+// parseBlockEngine is one block's inline phase on the engine path, as the
+// block driver runs it when the block closes: the scan, then the GFM
+// autolink-literal post-pass, exactly as forEachInlineBlock runs the two
+// for each block. Mirrors ts/src/engine-inline.ts parseBlockEngine.
+func parseBlockEngine(inlineTn *parser.Tabnas, p *inlineParser, block *MdNode) {
+	scanBlock(inlineTn, p, block)
+	if p.options.GFM {
+		linkifyAutolinks(block)
+	}
+}
+
+func scanBlock(inlineTn *parser.Tabnas, p *inlineParser, block *MdNode) {
+	if !p.beginBlock(block) {
+		p.finishBlock(block)
+		return
+	}
+	if _, err := inlineTn.ParseMeta(p.subject, map[string]any{
+		"md": map[string]any{"inl": p, "block": block},
+	}); err != nil {
+		// CommonMark defines an output for every input; an engine error
+		// here is an internal wiring defect, not a parse result.
+		panic(err)
+	}
 }

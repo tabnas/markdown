@@ -13,14 +13,21 @@
 // the mdast-adjacent JSON AST this package has always returned, and `html.ts`
 // renders it for `toHtml`.
 
-// `Tabnas` is the only runtime binding needed here; the rest are types, so
-// they are imported as such. Without `import type`, Node's type stripping
-// keeps them in the emitted import and demands runtime exports that do not
-// exist.
-import type { Tabnas, Plugin } from '@tabnas/parser'
+// `Tabnas` is the only runtime binding needed here (`make` builds one); the
+// rest are types, so they are imported as such. Without `import type`,
+// Node's type stripping keeps them in the emitted import and demands runtime
+// exports that do not exist.
+import { Tabnas } from '@tabnas/parser'
+import type { Plugin } from '@tabnas/parser'
 
-import { makeMdActions, makeMdLineMatcher } from './engine-block.ts'
-import { makeInlineTn, parseInlinesEngine } from './engine-inline.ts'
+import {
+  END_TOKEN,
+  LINE_TOKEN,
+  NODE_RULES,
+  makeMdActions,
+  makeMdBlockMatcher,
+} from './engine-block.ts'
+import { makeInlineTn, parseBlockEngine, parseInlinesEngine } from './engine-inline.ts'
 import { parse } from './commonmark.ts'
 import { toAst } from './ast.ts'
 import { renderHTML } from './html.ts'
@@ -44,9 +51,10 @@ export type MarkdownOptions = {
 // ---------------------------------------------------------------------------
 // Grammar.
 //
-// The grammar is LIVE and lives in code: the `markdown`/`line` rules below,
-// the `mdLine` matcher (engine-block.ts) and the inline instance's rule and
-// matcher set (engine-inline.ts). `debug.model()` serializes it and
+// The grammar is LIVE and lives in code: the rules below (`markdown`, the
+// `children` loop, and a rule for each node of the AST), the `mdBlock`
+// matcher (engine-block.ts) and the inline instance's rule and matcher set
+// (engine-inline.ts). `debug.model()` serializes it and
 // `ts/tools/gen-railroad.mjs` draws ts/doc/grammar.{svg,txt} from a live
 // instance, so the documentation is derived from the rules the engine
 // actually parses with. The historical `markdown-grammar.jsonic` file and
@@ -56,10 +64,15 @@ export type MarkdownOptions = {
 // ---------------------------------------------------------------------------
 // Public parse API (engine-free)
 
-/** Parse Markdown to the mdast-adjacent JSON AST. */
+/**
+ * Parse Markdown to the mdast-adjacent JSON AST. References stay
+ * unresolved, as mdast keeps them: a bracketed label is a `linkReference`
+ * or an `imageReference`, and each definition a `definition` node where it
+ * stands. `resolveReferences` resolves them.
+ */
 export function parseDocument(src: string, opts?: MarkdownOptions | ParserOptions) {
   const options = resolveOptions(opts)
-  return toAst(parse(src, options), options)
+  return toAst(parse(src, options, true), options)
 }
 
 /** Parse a single run of inline Markdown to an `Inline[]`. */
@@ -83,29 +96,36 @@ export function parseTree(src: string, opts?: MarkdownOptions | ParserOptions): 
 // ---------------------------------------------------------------------------
 // Plugin wiring
 //
-// The engine parse IS the parse: the `mdLine` custom matcher (engine-block.ts)
-// lexes one `#LB` token per physical line, `parse.prepare` seeds a fresh
-// `BlockParser` on `ctx.u.md`, the `line` rule feeds each matched line to the
-// shared `incorporateLine`, and the `markdown` rule's close action on `#ZZ`
-// finalizes, runs the shared inline phase, and projects the public AST into
-// the rule's node. No recognition or block decision happens here — the
-// engine owns tokenization, dispatch and state carriage; the algorithm stays
-// in the engine-free core (the anti-drift rule, dx-report §42), which is
-// what keeps this path byte-identical to `parseDocument` (asserted by the
+// The engine parse IS the parse, and its rules open and close every block:
+// the `mdBlock` matcher (engine-block.ts) cuts one `#LB` token per physical
+// line through the lexer's window, runs the shared block algorithm over it,
+// and hands out ahead of it the tokens of the blocks that line closed and
+// opened;
+// each node of the AST is a rule that opens on its token and, for a
+// container, closes on `#EN`; and the document's children, like every
+// container's, are the `children` rule, a replace loop, so ten thousand
+// blocks run at the depth one does. The block decisions are the shared
+// engine-free core's (the anti-drift rule, dx-report §42), which is what
+// keeps this path's AST identical to `parseDocument`'s (asserted by the
 // differential gate and the engine-path conformance harness).
 
 const Markdown: Plugin = (tn: Tabnas, options?: MarkdownOptions) => {
   const opts = resolveOptions(options)
 
-  // Human descriptions for the block token, surfaced in railroad diagram
+  // Human descriptions for the block tokens, surfaced in railroad diagram
   // legends (read off the live config by @tabnas/railroad).
+  const tokenDesc: Record<string, string> = {
+    [LINE_TOKEN]: 'one physical line (the blocks it makes follow it)',
+    [END_TOKEN]: "a container's end, with the fields after its children",
+  }
+  for (const n of NODE_RULES) {
+    tokenDesc[n.token] = n.desc + (n.container ? ' opens, with its fields' : ', whole')
+  }
   tn.options({
     config: {
       modify: {
         'md-tokendesc': (cfg: any) => {
-          cfg.tokenDesc = Object.assign(cfg.tokenDesc || {}, {
-            '#LB': 'one physical line (text, blank and table-arming bits in use)',
-          })
+          cfg.tokenDesc = Object.assign(cfg.tokenDesc || {}, tokenDesc)
         },
       },
     },
@@ -123,7 +143,7 @@ const Markdown: Plugin = (tn: Tabnas, options?: MarkdownOptions) => {
 
   // Every built-in matcher is off — deliberate configuration, not defense.
   // Markdown's block alphabet is *lines*, so the one registered matcher is
-  // the complete lexical description of this phase: `mdLine`, at an order
+  // the complete lexical description of this phase: `mdBlock`, at an order
   // ahead of every built-in, consuming each physical line whole. (The
   // built-ins would misread the syntax anyway: backtick code spans lex as
   // unterminated strings, `# heading` as a comment, `1. list` as a number.)
@@ -137,44 +157,60 @@ const Markdown: Plugin = (tn: Tabnas, options?: MarkdownOptions) => {
     text: { lex: false },
     lex: {
       emptyResult: { type: 'document', children: [] },
-      match: { mdLine: { order: 1e5, make: makeMdLineMatcher } },
+      match: {
+        mdBlock: {
+          order: 1e5,
+          make: makeMdBlockMatcher(opts, (st, block) =>
+            parseBlockEngine(inlineTn, st.inline, block),
+          ),
+        },
+      },
     },
     parse: { prepare: { 'md-reset': actions.prepare } },
   })
 
+  const lineTin = tn.token(LINE_TOKEN)
+  const endTin = tn.token(END_TOKEN)
+  const slotTins = [lineTin, ...NODE_RULES.map((n) => tn.token(n.token))]
+
+  // The document: its children, then the end of the source.
   tn.rule('markdown', (rs) => {
     return rs
       .clear()
-      .open([{ p: 'line' }])
-      .close([{ s: '#ZZ', a: actions.finish }, {}])
+      .open([{ p: 'children', a: actions.begin }])
+      .close([{ s: '#ZZ', a: actions.finish }])
   })
 
-  // One `#LB` consumed per iteration, tail-recursing via `r:` until only
-  // `#ZZ` remains; the empty alts are the fall-through that hands control
-  // back to `markdown`'s close.
-  //
-  // The first alt is the GFM extension seam: tagged `g: 'gfm'`, gated on
-  // the token's `tblArm` bit, arming the shared table probe for this line.
-  // It is injected exactly the way a downstream dialect would extend this
-  // grammar — an alt ahead of the base one, subtractable by its group tag —
-  // and `gfm: false` removes it below via `rule.exclude`, so the base
-  // dialect is the grammar minus the tagged alts, visibly (`debug.model()`).
-  tn.rule('line', (rs) => {
+  // A container's children, one node or one line per iteration: a node's
+  // token pushes that node's rule, a line is consumed, and the loop goes on
+  // by replacement (`r`), never by a push chain, while the next token is
+  // either; anything else (`#EN`, `#ZZ`) ends it. The GFM nodes are the
+  // `gfm` group's alts, which `gfm: false` subtracts.
+  tn.rule('children', (rs) => {
+    const open: any[] = NODE_RULES.map((n) => {
+      const alt: any = { s: n.token, b: 1, p: n.rule }
+      if (n.gfm) alt.g = 'gfm'
+      return alt
+    })
+    open.push({ s: LINE_TOKEN }, {})
     return rs
       .clear()
-      .open([
-        {
-          s: '#LB',
-          c: (_r: any, ctx: any) => true === ctx.t0.use.tblArm,
-          r: 'line',
-          a: actions.lineGfm,
-          g: 'gfm',
-        },
-        { s: '#LB', r: 'line', a: actions.line },
-        {},
-      ])
-      .close([{}])
+      .open(open)
+      .close([{ s: [slotTins], b: 1, r: 'children' }, {}])
   })
+
+  // A rule per node: a container opens on its token, pushes its children,
+  // and closes on `#EN`; a leaf opens on its token and closes at once.
+  for (const n of NODE_RULES) {
+    tn.rule(n.rule, (rs) => {
+      rs.clear()
+      return n.container
+        ? rs
+            .open([{ s: n.token, p: 'children', a: actions.open }])
+            .close([{ s: [[endTin]], a: actions.close }])
+        : rs.open([{ s: n.token, a: actions.leaf }]).close([{}])
+    })
+  }
 
   // The GFM dialect is subtracted, not branched around: without the option,
   // the tagged alts above simply do not exist in this instance's grammar.
@@ -194,7 +230,23 @@ const Markdown: Plugin = (tn: Tabnas, options?: MarkdownOptions) => {
 
 Markdown.defaults = { gfm: true, breaks: false } as MarkdownOptions
 
-export { VERSION, Markdown }
+/**
+ * A tabnas engine with the Markdown plugin installed: the parser this
+ * package makes whole, `new Tabnas().use(Markdown, opts)`, reading a source
+ * a window at a time. The one matcher cuts a line through the lexer's
+ * window and fills it past the line's end, and nothing else reads the
+ * source, so a parse from a reader (`tn.parseReader`, admin ADR-30) holds
+ * the text of the lines it has not finished with, and not the whole text.
+ * The option is set here, on the parser this package makes, not in the
+ * plugin.
+ */
+function make(opts?: MarkdownOptions): Tabnas {
+  const tn = new Tabnas().use(Markdown, opts)
+  tn.options({ lex: { window: true } })
+  return tn
+}
+
+export { VERSION, Markdown, make }
 
 export type {
   DocumentNode,
@@ -219,7 +271,12 @@ export type {
   ImageNode,
   BreakNode,
   DeleteNode,
+  LinkReferenceNode,
+  ImageReferenceNode,
+  DefinitionNode,
 } from './ast.ts'
+
+export { resolveReferences } from './ast.ts'
 
 export { MdNode } from './node.ts'
 export type { ParserOptions } from './options.ts'

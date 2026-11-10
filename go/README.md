@@ -87,9 +87,10 @@ nothing else. There is no jsonic dependency and there are no indirect dependenci
 
 ## Specific to this runtime
 
-`Make` returns an engine with the plugin already installed, the counterpart of
-`new Tabnas().use(Markdown)` in TypeScript. Its `Parse` returns the same AST as
-`ParseDocument`.
+`Make` returns an engine with the plugin already installed and `Lex.Window` declared, the
+counterpart of `make()` in TypeScript. Its `Parse` returns the same AST as
+`ParseDocument`, and its `ParseReader` holds the lines it has not finished with rather
+than the whole source.
 
 ```go
 package main
@@ -110,6 +111,11 @@ func main() {
 ```
 
 To install the plugin on an engine you already have, use `j.Use(tabnasmarkdown.Markdown, nil)`.
+
+The AST keeps references unresolved, as mdast does: a bracketed label is a
+`linkReference` or an `imageReference`, defined or not, and each definition a
+`definition` node where it stands. `ResolveReferences` resolves them as CommonMark reads
+the document.
 
 Options are a struct, not a map: `tabnasmarkdown.Options{GFM: bool, Breaks: bool}`, with
 `DefaultOptions` being `{GFM: true, Breaks: false}`. `ResolveOptions` converts the plugin

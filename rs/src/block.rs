@@ -48,12 +48,37 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-use crate::common::{js_trim, unescape_string};
-use crate::inline::parse_references;
+use crate::common::{js_trim, normalize_reference, unescape_string};
+use crate::inline::parse_definitions;
 use crate::node::{
-    Align, ListData, ListType, MdNode, NodeId, NodeType, SourcePos, TableAlign, Tree,
+    Align, Definition, DefinitionSite, ListData, ListType, MdNode, NodeId, NodeType, SourcePos,
+    TableAlign, Tree,
 };
-use crate::options::{Options, RefMap};
+use crate::options::{Options, RefDef, RefMap};
+
+/// What the block phase did, in the order it did it, for a driver that
+/// writes blocks as they finish ([`BlockParser::events`]): a container
+/// opened (a block quote, a list, a list item or a table, whose fields at
+/// that point are read when the line's events are), a table row made
+/// (complete, with its cells), a definition read off a paragraph, and a
+/// block closed, after its finalizer ran. A closed paragraph that held
+/// nothing but definitions has been unlinked by then, and has no parent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockEvent {
+    Open(NodeId),
+    Row(NodeId),
+    Definition(Definition),
+    Close(NodeId),
+}
+
+/// The containers whose opening is an event: the ones a driver writes
+/// open.
+fn opens_event(tag: NodeType) -> bool {
+    matches!(
+        tag,
+        NodeType::BlockQuote | NodeType::List | NodeType::Item | NodeType::Table
+    )
+}
 
 /// Section 4.4: four columns of indentation open an indented code block.
 const CODE_INDENT: usize = 4;
@@ -729,8 +754,7 @@ fn can_contain(t: NodeType, child: NodeType) -> bool {
     }
 }
 
-/// Leaves that accumulate raw text: code blocks, HTML blocks, paragraphs,
-/// tables.
+/// Leaves that take lines: code blocks, HTML blocks, paragraphs, tables.
 fn accepts_lines(t: NodeType) -> bool {
     matches!(
         t,
@@ -769,14 +793,6 @@ pub struct BlockParser {
     current_line: String,
     line_number: usize,
     last_line_length: usize,
-
-    /// The GFM table probe gate. True by default: the batch driver probes
-    /// every candidate line, as it always has. The engine driver sets it
-    /// per line from the `#LB` token's `tblArm` bit (a provable superset of
-    /// "could be a delimiter row"; see `engine_block.rs`), which is what
-    /// lets the GFM alt be a genuine, subtractable extension seam without
-    /// moving any table decision out of this file.
-    pub table_armed: bool,
 
     /// The length of the line before the one `last_line_length` measures.
     ///
@@ -844,6 +860,15 @@ pub struct BlockParser {
     /// `MdNode` has no field for the HTML block type, and the tree contract
     /// is not ours to change, so open HTML blocks carry it here.
     html_block_types: HashMap<NodeId, u8>,
+
+    /// The events of the lines incorporated since the driver last took
+    /// them, or `None`, the default, when no driver asks: the batch parse
+    /// records nothing.
+    pub events: Option<Vec<BlockEvent>>,
+
+    /// The table whose delimiter row is the next line `add_line` writes:
+    /// that row opened the table and holds no data, so it makes no row.
+    table_delimiter_row: Option<NodeId>,
 }
 
 impl BlockParser {
@@ -863,7 +888,6 @@ impl BlockParser {
             current_line: String::new(),
             line_number: 0,
             last_line_length: 0,
-            table_armed: true,
             prev_line_length: 0,
             offset: 0,
             column: 0,
@@ -881,6 +905,8 @@ impl BlockParser {
             last_added_to: None,
             gfm_special: options.gfm,
             html_block_types: HashMap::new(),
+            events: None,
+            table_delimiter_row: None,
         }
     }
 
@@ -1014,9 +1040,20 @@ impl BlockParser {
         } else {
             self.current_line[self.offset..].to_string()
         };
-        let node = self.tree.get_mut(tip);
-        node.string_content.push_str(&text);
-        node.string_content.push('\n');
+        if self.node_type(tip) == NodeType::Table {
+            // A table's line is a row the moment it arrives, but for the
+            // delimiter row that opened it.
+            if self.table_delimiter_row == Some(tip) {
+                self.table_delimiter_row = None;
+            } else {
+                let cells = split_table_row(&text);
+                self.add_table_row(tip, &cells, false, self.line_number, char_count(&text));
+            }
+        } else {
+            let node = self.tree.get_mut(tip);
+            node.string_content.push_str(&text);
+            node.string_content.push('\n');
+        }
         self.last_added_line = text;
         self.last_added_column = column;
         self.last_added_to = Some(tip);
@@ -1073,10 +1110,18 @@ impl BlockParser {
         let column_number = self.source_column(offset) + 1; // offset 0 is column 1
         let mut node = MdNode::new(tag);
         node.sourcepos = [[self.line_number, column_number], [0, 0]];
+        if tag == NodeType::Paragraph {
+            node.content_line = self.line_number;
+        }
         let id = self.tree.add(node);
         let tip = self.open_tip();
         self.tree.append_child(tip, id);
         self.tip = Some(id);
+        if opens_event(tag) {
+            if let Some(events) = &mut self.events {
+                events.push(BlockEvent::Open(id));
+            }
+        }
         id
     }
 
@@ -1093,14 +1138,10 @@ impl BlockParser {
     /// opened after it.
     ///
     /// On success the table is the tip and the caller returns "leaf
-    /// started", so step 3 adds the delimiter row itself to the table's raw
-    /// content. It is skipped again by `finalize_table`; keeping it costs
-    /// nothing and makes the table's accumulated lines line up one-for-one
-    /// with the source lines.
+    /// started", so step 3 hands the delimiter row itself to `add_line`,
+    /// which skips it: the header row is made here, and every later line of
+    /// the table is a body row the moment it arrives.
     fn try_open_table(&mut self, container: NodeId) -> bool {
-        if !self.table_armed {
-            return false;
-        }
         if !self.options.gfm || self.indented || self.node_type(container) != NodeType::Paragraph {
             return false;
         }
@@ -1161,8 +1202,9 @@ impl BlockParser {
             node.sourcepos[0][1] = header_column;
             node.table_align = Some(align);
         }
+        self.table_delimiter_row = Some(table);
 
-        // The row is measured over its own text, exactly as `finalize_table`
+        // The row is measured over its own text, exactly as `add_line`
         // measures the body rows: `last_line_length` counts the whole source
         // line, container markers included, so inside a block quote it would
         // end the header row two columns past where every body row of the
@@ -1230,29 +1272,19 @@ impl BlockParser {
             let cell = self.tree.add(cell);
             self.tree.append_child(row, cell);
         }
+
+        if let Some(events) = &mut self.events {
+            events.push(BlockEvent::Row(row));
+        }
     }
 
-    /// Close a table: turn the raw lines it accumulated into body rows.
-    ///
-    /// The first accumulated line is the delimiter row that opened the
-    /// table. It carries no data (its alignments are already on the node)
-    /// so it is skipped here, which is also what keeps the source line
-    /// numbering of the rows below it straightforward: the table accepts
-    /// exactly one line per source line, and a blank line closes it, so
-    /// there are no gaps.
+    /// Close a table. Its body rows were made one per line as the lines
+    /// came (`add_line`): the table accepts exactly one line per source
+    /// line, and a blank line closes it, so each row's line is the line that
+    /// made it, and a row is finished the moment its line is, which is what
+    /// lets a driver write a table a row at a time.
     fn finalize_table(&mut self, table: NodeId) {
-        let content = std::mem::take(&mut self.tree.get_mut(table).string_content);
-        let header_line = self.tree.get(table).sourcepos[0][0];
-
-        // Line 0 is the delimiter row; the last element is the empty string
-        // after the final newline.
-        for (i, line) in content.split('\n').enumerate() {
-            if i == 0 || line.is_empty() {
-                continue;
-            }
-            let cells = split_table_row(line);
-            self.add_table_row(table, &cells, false, header_line + i + 1, char_count(line));
-        }
+        self.tree.get_mut(table).string_content.clear();
     }
 
     /// Close every block that failed its continuation condition on this
@@ -1292,6 +1324,9 @@ impl BlockParser {
         self.finalize_block(block);
         self.html_block_types.remove(&block);
         self.tip = above;
+        if let Some(events) = &mut self.events {
+            events.push(BlockEvent::Close(block));
+        }
     }
 
     /// `block.listData.tight = false` on a list, as the other runtimes see
@@ -1401,10 +1436,10 @@ impl BlockParser {
                 // Section 4.7: a paragraph may begin with link reference
                 // definitions. Consume them from the front; if nothing is
                 // left, the paragraph disappears.
-                if self.consume_reference_defs(block)
-                    && is_blank(&self.tree.get(block).string_content)
-                {
+                if self.read_definitions(block) && is_blank(&self.tree.get(block).string_content) {
                     self.tree.unlink(block);
+                } else {
+                    self.mark_task_item(block);
                 }
             }
 
@@ -1445,19 +1480,85 @@ impl BlockParser {
         false
     }
 
-    /// Strip leading link reference definitions (section 4.7) from a
-    /// block's raw content, adding each to the refmap, and report whether
-    /// any were consumed.
-    fn consume_reference_defs(&mut self, block: NodeId) -> bool {
-        let content = std::mem::take(&mut self.tree.get_mut(block).string_content);
-        let consumed = parse_references(&content, &mut self.refmap);
-        let node = self.tree.get_mut(block);
-        if consumed == 0 {
-            node.string_content = content;
+    /// Section 4.7: read the link reference definitions off the front of a
+    /// paragraph's raw content, as the paragraph finishes or a setext
+    /// underline converts it, and report whether any was read. Each is
+    /// recorded three ways: in the refmap (the first definition of a label
+    /// wins), beside the paragraph's container where it stands (after the
+    /// paragraph's previous sibling, so before the paragraph, or where it
+    /// stood once it is gone), and, for a driver, as an event. Mirrors
+    /// `ts/src/block.ts` `readDefinitions`.
+    fn read_definitions(&mut self, para: NodeId) -> bool {
+        let content = std::mem::take(&mut self.tree.get_mut(para).string_content);
+        let definitions = parse_definitions(&content);
+        let Some(consumed) = definitions.last().map(|d| d.end) else {
+            self.tree.get_mut(para).string_content = content;
             return false;
+        };
+        let parent = self.tree.get(para).parent;
+        let after = self.tree.get(para).prev;
+        let mut line = self.tree.get(para).content_line;
+        for d in definitions {
+            // Every line of a paragraph is one source line, so the
+            // definition's lines are counted from where the content begins.
+            let taken = &content[d.start..d.end];
+            let newlines = taken.bytes().filter(|&b| b == b'\n').count();
+            let last = usize::from(taken.ends_with('\n'));
+            let def = Definition {
+                label: d.label,
+                destination: d.destination,
+                title: d.title,
+                start: line,
+                end: line + newlines - last,
+            };
+            line += newlines;
+            self.refmap
+                .entry(normalize_reference(&def.label))
+                .or_insert(RefDef {
+                    destination: def.destination.clone(),
+                    title: def.title.clone(),
+                });
+            if let Some(parent) = parent {
+                self.tree.get_mut(parent).definitions.push(DefinitionSite {
+                    after,
+                    def: def.clone(),
+                });
+            }
+            if let Some(events) = &mut self.events {
+                events.push(BlockEvent::Definition(def));
+            }
         }
+        let node = self.tree.get_mut(para);
+        node.content_line = line;
         node.string_content = content[consumed..].to_string();
         true
+    }
+
+    /// GFM task list items: an item whose first block is a paragraph
+    /// beginning with a task list item marker is checked or not, and the
+    /// marker is consumed so it does not survive into the text. Decided as
+    /// the paragraph finishes, on its raw content, before the inline phase
+    /// has seen it: that is what makes the marker win over anything the
+    /// inline scanner would make of the brackets (with a `[x]: /url`
+    /// definition in the document, `- [x] foo` is still a task item rather
+    /// than a link), and what settles the item's checked state before the
+    /// item itself finishes.
+    fn mark_task_item(&mut self, para: NodeId) {
+        if !self.options.gfm {
+            return;
+        }
+        let Some(item) = self.tree.get(para).parent else {
+            return;
+        };
+        if self.node_type(item) != NodeType::Item || self.tree.get(item).first_child != Some(para) {
+            return;
+        }
+        if let Some((state, length)) = task_list_marker(&self.tree.get(para).string_content) {
+            // Whitespace between the brackets is unchecked; `x`/`X` is
+            // checked.
+            self.tree.get_mut(item).checked = Some(state != b' ' && state != b'\t');
+            self.tree.get_mut(para).string_content.drain(..length);
+        }
     }
 
     /// Can `container` absorb the current line?
@@ -1817,7 +1918,7 @@ impl BlockParser {
                 // reference definitions; only what remains becomes the
                 // heading. If nothing remains this is not a setext underline
                 // at all (it falls through to thematic break / paragraph).
-                self.consume_reference_defs(container);
+                self.read_definitions(container);
                 if self.tree.get(container).string_content.is_empty() {
                     return StartResult::None;
                 }
@@ -2126,21 +2227,22 @@ impl BlockParser {
         self.finish()
     }
 
-    /// Close every still-open block, stamp the parse-time `gfm` flag, and
-    /// run the task-list post-pass. `line_number` is the count of
-    /// incorporated lines, so an incremental driver (one that feeds
-    /// `incorporate_line` itself instead of calling `parse`) finishes with
-    /// exactly the same finalization the batch loop gets.
-    pub fn finish(mut self) -> (Tree, RefMap) {
+    /// Close every still-open block and stamp the parse-time `gfm` flag.
+    /// `line_number` is the count of incorporated lines, so an incremental
+    /// driver (one that feeds `incorporate_line` itself instead of calling
+    /// `parse`) finishes with exactly the same finalization the batch loop
+    /// gets.
+    pub fn close_all(&mut self) {
         while let Some(tip) = self.tip {
             self.finalize(tip, self.line_number);
         }
-
         self.tree.get_mut(self.doc).gfm = self.options.gfm;
-        if self.options.gfm {
-            mark_task_list_items(&mut self.tree, self.doc);
-        }
+    }
 
+    /// [`BlockParser::close_all`], then the tree and the link reference
+    /// map.
+    pub fn finish(mut self) -> (Tree, RefMap) {
+        self.close_all();
         (self.tree, self.refmap)
     }
 }
@@ -2189,54 +2291,6 @@ pub fn task_list_marker(s: &str) -> Option<(u8, usize)> {
         return None;
     }
     Some((state, i))
-}
-
-/// GFM task list items: mark every item whose first block is a paragraph
-/// beginning with a task list item marker, and consume the marker so it
-/// does not survive into the text.
-///
-/// Run at the end of the block phase, over `string_content`, before the
-/// inline phase has seen it. That is what makes the marker win over
-/// anything the inline scanner would otherwise make of the brackets: with
-/// a `[x]: /url` definition in the document, `- [x] foo` is still a task
-/// item rather than a link. It also means the item's checked state is
-/// settled before `ast.rs` or `html.rs` looks at the tree.
-///
-/// Iterative rather than recursive: container nesting depth is chosen by
-/// the input, and `"> ".repeat(20000)` is a document this parser otherwise
-/// handles.
-fn mark_task_list_items(tree: &mut Tree, doc: NodeId) {
-    let mut stack = vec![doc];
-
-    while let Some(node) = stack.pop() {
-        let t = tree.get(node).node_type;
-
-        if t == NodeType::Item {
-            if let Some(first) = tree.get(node).first_child {
-                if tree.get(first).node_type == NodeType::Paragraph {
-                    if let Some((state, length)) = task_list_marker(&tree.get(first).string_content)
-                    {
-                        // Whitespace between the brackets is unchecked;
-                        // `x`/`X` is checked.
-                        tree.get_mut(node).checked = Some(state != b' ' && state != b'\t');
-                        let content = &mut tree.get_mut(first).string_content;
-                        content.drain(..length);
-                    }
-                }
-            }
-        }
-
-        if matches!(
-            t,
-            NodeType::Document | NodeType::BlockQuote | NodeType::List | NodeType::Item
-        ) {
-            let mut c = tree.get(node).last_child;
-            while let Some(id) = c {
-                stack.push(id);
-                c = tree.get(id).prev;
-            }
-        }
-    }
 }
 
 /// Phase 1: build the block tree and collect link reference definitions.

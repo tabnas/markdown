@@ -1374,3 +1374,83 @@ What §2.1 wanted from the old arrangement — one grammar to maintain,
 diff-friendly, checkable before run — the live arrangement now provides
 strictly better: the grammar is checked by every parse, serialized by
 `debug.model()`, and drawn by the diagrams, none of which can lie.
+
+## 48. 2026-11-10 — every node a rule, references kept, and a transducer part
+
+Step 22 of alchemy's streaming plan: Markdown's block decisions reach the
+grammar's rules, the tree keeps references unresolved as mdast does, and
+the package ships a transducer part, so a host streams a Markdown
+document through the parser's rule passes instead of reading it whole.
+The conformance bar held in every runtime: CommonMark 652/652 and GFM
+24/24 before and after, in TypeScript, Go and Rust.
+
+* **The block driver hands the grammar its decisions.** `mdBlock`
+  replaces `mdLine`. It cuts one physical line through the lexer's
+  window, filled past the line's end so that no token ends at the
+  window's end (where the engine would cut it again over a wider one),
+  feeds it to the shared `incorporateLine`, and reads back what the line
+  decided: `BlockParser.events`, recorded in the order the algorithm
+  decides them (`open` for a block quote, a list, an item or a table,
+  `row` for a table row, `definition`, and `close` for every block). The
+  matcher hands them out as tokens of no width at the line's start, one
+  a call, and then the line's own `#LB`. A container's token carries its
+  head and `#EN` its tail; a leaf's carries the whole node; a paragraph,
+  a heading and a table row are parsed inline as they close, and their
+  inline nodes are tokens too. Each node type is a rule named for it,
+  `children` is a replace loop (ten thousand blocks of any kind run at
+  the rule depth one does, pinned by `repeat.test.ts` and its ports),
+  and the value the rule actions build is the AST. The block decisions
+  stay the shared core's (§42's anti-drift rule): the differential gate
+  and the engine-path conformance suites hold the plugin path to the
+  engine-free one.
+* **A table is made a row at a time.** `addLine` makes each body row as
+  its line arrives; `finalizeTable` has nothing left to split. The
+  arming bit (`tblArm`, `LineInfo`, `BlockParser.tableArmed`) is gone
+  with the `line` rule: the decision was always `tryOpenTable`'s.
+* **A task list item is decided as its first paragraph closes**
+  (`markTaskItem`), not in a pass over the finished tree, so the item's
+  `checked` is known before the item closes.
+* **References stay references.** The inline phase has a keep mode
+  (`keepReferences`): a bracketed label that could be a reference is a
+  `link_reference` or `image_reference` node, defined or not, and the
+  AST names it `linkReference` / `imageReference` with mdast's
+  `identifier`, `label` and `referenceType`. `readDefinitions` records
+  each definition beside the paragraph's container, where it stood, and
+  the AST writes it as a `definition` node there. A block's tree then
+  depends on nothing after it. `resolveReferences` gives the tree back
+  resolved; it matches the tree CommonMark reads on every example of
+  both corpora but CommonMark 512, 523, 528, 569 and 571, where a label
+  with no definition decided how the text around it nests. Those five
+  are registered in each runtime's references test, and the manifest's
+  loss says so. The engine-free `parse`, the HTML and `parseTree` resolve
+  as before. A list's `spread`, and an item's `spread` and `checked`,
+  now follow `children`, the order a stream writes them.
+* **`make()` declares `lex.window`** in every runtime (TypeScript gains
+  `make`). `reader.test.ts`, `go/reader_test.go` and
+  `rs/tests/reader_test.rs` hold a parse from a reader to the parse of
+  the text on every fixture row and corpus document, at windows of a few
+  characters in TypeScript and Rust.
+* **`alchemy/transduce.alc`** is the transducer part the manifest's
+  `translate.transduce` names; the `whole` sentence is gone. Run by
+  alchemy over the rule passes, its events are the walk of the grammar's
+  value on every fixture row and corpus document: through scratch
+  compositions of dmog's `translate`, 790 of 790 documents in
+  TypeScript, and 789 of 790 in Go, where the empty document's members
+  come in another order on the `--whole` route (`lex.emptyResult` is
+  returned before `parse.prepare` declares the member order, so the
+  walk sorts them), the same value; and in Rust, through alchemy,
+  transduce and render composed directly, 1465 of 1465 (both corpora
+  under both option sets, from a text and from a reader in pieces of
+  three bytes).
+
+Corrections to earlier sections. §44's `line` rule, `#LB` payload
+(`{text, blank, tblArm}`) and finish-time inline phase describe the
+driver this entry replaces. §46's group-tagged arming alt on `line` is
+now the GFM nodes' alternates on `children`, tagged the same way, and
+the extension recipe in both `guide.md` files follows. §47's diagram
+description (`markdown` pushing `line`) is regenerated from the live
+rules. One finding left open: `ts/tools/check-doc-examples.mjs`, the
+engine-free stand-in §44 mentions, already failed on `main` before this
+change (it cannot resolve the extensionless `./translate` import) and
+does not model the windowed matcher; `ts/test/doc-examples.test.ts`
+remains the check CI runs.

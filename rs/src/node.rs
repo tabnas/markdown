@@ -57,6 +57,13 @@ pub enum NodeType {
     Link,
     Image,
     Del,
+    // A link or an image whose destination a label names, kept unresolved:
+    // an inline parse that reads references as references (the AST's, see
+    // `ast.rs`) makes these where the resolving parse would look the label
+    // up. The HTML renderer never sees one, since the tree it renders comes
+    // from the resolving parse.
+    LinkReference,
+    ImageReference,
 }
 
 impl NodeType {
@@ -86,6 +93,8 @@ impl NodeType {
             NodeType::Link => "link",
             NodeType::Image => "image",
             NodeType::Del => "del",
+            NodeType::LinkReference => "link_reference",
+            NodeType::ImageReference => "image_reference",
         }
     }
 
@@ -107,8 +116,58 @@ impl NodeType {
                 | NodeType::Link
                 | NodeType::Image
                 | NodeType::Del
+                | NodeType::LinkReference
+                | NodeType::ImageReference
         )
     }
+}
+
+/// How a reference names its label (section 6.3): `[a][b]`, `[a][]` or
+/// `[a]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceType {
+    Full,
+    Collapsed,
+    Shortcut,
+}
+
+impl ReferenceType {
+    /// The name the AST's `referenceType` carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReferenceType::Full => "full",
+            ReferenceType::Collapsed => "collapsed",
+            ReferenceType::Shortcut => "shortcut",
+        }
+    }
+}
+
+/// A link reference definition (section 4.7) as the block phase read it
+/// from the front of a paragraph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Definition {
+    /// The label's raw source text, between its brackets.
+    pub label: String,
+    /// The destination, already entity-decoded and backslash-unescaped.
+    pub destination: String,
+    /// The title, likewise.
+    pub title: Option<String>,
+    /// The source lines the definition spans, 1-based, both included.
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Where a definition stands among a container's children: after the
+/// child `after` (`None`: before the first), in source order. Definitions
+/// are not blocks in the spec's algorithm, which reads them out of a
+/// paragraph and drops a paragraph that held nothing else, so they are
+/// kept beside the children rather than among them: the block phase's own
+/// reads of a container's children (list looseness, the blank-line flags)
+/// never see one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefinitionSite {
+    pub after: Option<NodeId>,
+    pub def: Definition,
 }
 
 /// Per-column alignment of a GFM table, from the colons in its delimiter
@@ -251,6 +310,19 @@ pub struct MdNode {
     /// A block whose last line was blank cannot be lazily continued.
     pub last_line_blank: bool,
     pub last_line_checked: bool,
+    /// A paragraph's source line where `string_content` begins: its first
+    /// line, moved on past each definition read off the front, so a
+    /// definition read later knows its lines.
+    pub content_line: usize,
+
+    /// A `link_reference`'s or `image_reference`'s label (its raw source
+    /// text, between its brackets) and the form that named it.
+    pub label: String,
+    pub reference_type: Option<ReferenceType>,
+
+    /// A container's link reference definitions, read from paragraphs
+    /// among its children, each with where it stands.
+    pub definitions: Vec<DefinitionSite>,
 }
 
 impl MdNode {
@@ -282,6 +354,10 @@ impl MdNode {
             string_content: String::new(),
             last_line_blank: false,
             last_line_checked: false,
+            content_line: 0,
+            label: String::new(),
+            reference_type: None,
+            definitions: Vec::new(),
         }
     }
 

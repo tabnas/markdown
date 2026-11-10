@@ -449,39 +449,70 @@ pub fn parse_inlines_engine(
     let mut parser = InlineParser::new(refmap, *options);
 
     for block in inline_content_blocks(&tree) {
-        if !parser.begin_block(&tree, block) {
-            parser.finish_block(&mut tree, block);
-        } else {
-            let subject = parser.subject.clone();
-            let slot = inline_slot_insert(InlineState {
-                parser,
-                tree,
-                block,
-            });
-
-            let mut md = IndexMap::with_capacity(1);
-            md.insert(INLINE_STATE_KEY.to_string(), Value::Number(slot as f64));
-            let mut meta = IndexMap::with_capacity(1);
-            meta.insert("md".to_string(), Value::object(md));
-
-            let result = inline_tn.parse_with_meta(&subject, Value::object(meta));
-
-            let state = inline_slot_take(slot)
-                .expect("the inline state slot is released only here, after its parse");
-            parser = state.parser;
-            tree = state.tree;
-
-            if let Err(error) = result {
-                // CommonMark defines an output for every input; an engine
-                // error here is an internal wiring defect, not a parse
-                // result.
-                panic!("markdown: the inline engine rejected a block's content: {error}");
-            }
-        }
+        (parser, tree) = scan_block(inline_tn, parser, tree, block);
         if options.gfm {
             linkify_autolinks(&mut tree, block);
         }
     }
 
     tree
+}
+
+/// One block's inline phase on the engine path, as the block driver runs
+/// it when the block closes: the scan, then the GFM autolink-literal
+/// post-pass, exactly as [`parse_inlines_engine`] runs the two for each
+/// block. Takes and returns the parser and the tree by value, for the
+/// reason that function gives. Mirrors `ts/src/engine-inline.ts`
+/// `parseBlockEngine`.
+pub fn parse_block_engine(
+    inline_tn: &Tabnas,
+    parser: InlineParser,
+    tree: Tree,
+    block: NodeId,
+) -> (InlineParser, Tree) {
+    let gfm = parser.options.gfm;
+    let (parser, mut tree) = scan_block(inline_tn, parser, tree, block);
+    if gfm {
+        linkify_autolinks(&mut tree, block);
+    }
+    (parser, tree)
+}
+
+/// One block's scan through the inline engine instance: an empty subject
+/// never reaches the engine (its empty-source path returns before the
+/// rules run), and finishes the block directly, a no-op resolve, exactly
+/// as the hand scanner's `parse` does.
+fn scan_block(
+    inline_tn: &Tabnas,
+    mut parser: InlineParser,
+    mut tree: Tree,
+    block: NodeId,
+) -> (InlineParser, Tree) {
+    if !parser.begin_block(&tree, block) {
+        parser.finish_block(&mut tree, block);
+        return (parser, tree);
+    }
+    let subject = parser.subject.clone();
+    let slot = inline_slot_insert(InlineState {
+        parser,
+        tree,
+        block,
+    });
+
+    let mut md = IndexMap::with_capacity(1);
+    md.insert(INLINE_STATE_KEY.to_string(), Value::Number(slot as f64));
+    let mut meta = IndexMap::with_capacity(1);
+    meta.insert("md".to_string(), Value::object(md));
+
+    let result = inline_tn.parse_with_meta(&subject, Value::object(meta));
+
+    let state = inline_slot_take(slot)
+        .expect("the inline state slot is released only here, after its parse");
+
+    if let Err(error) = result {
+        // CommonMark defines an output for every input; an engine error
+        // here is an internal wiring defect, not a parse result.
+        panic!("markdown: the inline engine rejected a block's content: {error}");
+    }
+    (state.parser, state.tree)
 }

@@ -137,8 +137,9 @@ the same placement (the Rust file is the Go file's name with `.rs`, and
   line (which is where cmark-gfm reaches its extensions from, and is what
   keeps `foo` over `---` an `<h2>` and `- | -` a list item). `tryOpenTable`
   reads the delimiter row, matches its cell count against the last line of
-  the open paragraph, and splits that paragraph; body rows accumulate raw and
-  are split at finalize. Three node types (`table`/`table_row`/`table_cell`),
+  the open paragraph, and splits that paragraph; each body row is made as its
+  line arrives (`addLine`), so a table is finished a row at a time and a
+  driver can write it so. Three node types (`table`/`table_row`/`table_cell`),
   `tableAlign` (Go: `TableAlign`) and `isHeaderRow` (Go: `IsHeaderRow`) on the
   node, and a `table_cell` entry in the inline phase's content-block set.
   `\|` becomes a literal `|` at *split* time, before inline parsing, which is
@@ -162,16 +163,17 @@ the same placement (the Rust file is the Go file's name with `.rs`, and
   (longer runs stay literal), opener and closer runs must be equal length,
   and the pair produces a `del` node. It is the one extension the inline
   scanner owns, and predates the other four.
-* **Task list items** — `block.ts` / `block.go` (`markTaskListItems`, at
-  the end of the block phase, over `stringContent` / `StringContent`),
+* **Task list items** — `block.ts` / `block.go` (`markTaskItem`, as an
+  item's first paragraph closes, over `stringContent` / `StringContent`),
   plus `MdNode.checked` (Go: `Checked` + `HasChecked`), plus a branch in
   the `paragraph` case of `html.*` and one field in `ast.*`.
-  Deciding it on raw text, before the inline phase, is what makes the
-  marker win over the *reference link* a `[x]: /url` definition would
-  otherwise produce: with that definition in the document, `- [x] foo`
-  is a task item, while `- [x]foo` (no space, so no marker) is the link.
+  Deciding it on raw text, before the paragraph's inline content is
+  parsed, is what makes the marker win over the *reference* `[x]` would
+  otherwise be: `- [x] foo` is a task item whether or not the document
+  defines `x`, while `- [x]foo` (no space, so no marker) is a
+  `linkReference`, and a link where a `[x]: /url` definition resolves it.
   It does not outrank the definition itself — `- [x]: /url` is a
-  reference definition, and the item is empty.
+  reference definition, and the item holds only the `definition` node.
 * **Autolink literals** — `inline.ts` / `inline.go` (`linkifyAutolinks`),
   a post-pass over the *finished* inline tree, exactly as cmark-gfm does
   it. The inline scanner is not touched, which is what keeps 652/652
@@ -205,7 +207,21 @@ There are three public outputs, in all three runtimes:
 | Native CommonMark node tree | `parseTree(src, opts)` / `renderHTML(tree)` | `ParseTree(src, opts)` / `RenderHTML(tree, opts)` | `parse_tree(src, &opts)` / `render_html(&tree, opts)` |
 
 The AST is what the plugin's `.parse()` / `.Parse()` returns, and asking
-for it runs no renderer. The HTML emitter is not incidental: the spec
+for it runs no renderer. **It keeps references unresolved, as mdast
+does**: a bracketed label is a `linkReference` or an `imageReference`
+(`identifier`, `label`, `referenceType`: `full`, `collapsed` or
+`shortcut`) whether or not the document defines it, and each link
+reference definition is a `definition` node (`identifier`, `label`,
+`url`, `title`) where it stands, so a block's AST depends on nothing
+after it. `resolveReferences(doc)` (Go `ResolveReferences`, Rust
+`resolve_references`) gives the tree back resolved, as CommonMark reads
+a document: a defined reference as its `link` or `image`, the first
+definition of a label winning, an undefined one as its source text,
+and the definitions gone. Where a label with no definition decided how
+the text around it nests, the resolved tree is not CommonMark's: five
+CommonMark examples (512, 523, 528, 569 and 571), registered in each
+runtime's references test and declared in the manifest's loss. The HTML
+and the native tree resolve as CommonMark does and are unchanged. The HTML emitter is not incidental: the spec
 suite scores HTML output, so the renderer is the instrument that makes
 the conformance claim measurable. **The HTML is not sanitized** — CommonMark
 passes raw HTML through verbatim by specification. Every document that
@@ -231,9 +247,9 @@ There are three implementations that must behave identically: TypeScript
 | [`ts/`](ts/) | **Canonical** TypeScript implementation — the `@tabnas/markdown` package. Depends on `@tabnas/parser` only, and only in `src/markdown.ts`. |
 | [`go/`](go/) | Go port — `github.com/tabnas/markdown/go`, package `tabnasmarkdown`. |
 | [`rs/`](rs/) | Rust port: the `tabnas-markdown` crate (library `tabnas_markdown`). Same file split as `go/` under `rs/src/`, plugin wiring in `src/lib.rs`, both HTML-corpus graders under `rs/tests/`. Depends on the `tabnas` crate via a `path` dependency (sibling checkout) and, dev-only, on `tabnas-support` for the fixture runner. Library only: no CLI. See [`rs/AGENTS.md`](rs/AGENTS.md). |
-| [`alchemy/`](alchemy/) | **Markdown's translation parts**, two [alchemy](https://github.com/tabnas/alchemy) libraries that a host which translates between formats (aless's `--render`, the design in tabnas/transduce's `docs/translation.md`) links with its own program: [`lift.alc`](alchemy/lift.alc), whose entry point `markdown-lift` reads a document's events as a table's records (the first row's cells as the column labels, every later row as a record, every cell a string; the document's first table, the tables after it not read, and the empty table, of no columns and no rows, for a document with none), and [`render.alc`](alchemy/render.alc), whose entry point `markdown-render` writes records as one GFM pipe table (a number cell that is not finite as its word, `Infinity`, `-Infinity` or `NaN`, and a table of no columns as the empty document, which the lift reads back as the empty table). Both fail with `PROTOCOL_ORDER_ERROR` on events no tree or table has. Every definition is named `markdown-...`, and no name is defined in both files. The manifest's `translate` object names them, with the shapes (`reads` records through the lift, then tree; `writes` records), the root whose elements are the records (`root`, `array`: a host makes any other root the one element of an array first), the tree the events carry (`schema`, `mdast`, not a plain one), the loss lines the host prints, and the `whole` sentence, which says why a host reads a document whole and has no transducer part to stream it through: a link or an image may name a reference definition that comes later, so the inline phase runs once the last line is in, and the tree is complete only at the document's end. `npm run embed` in `ts/` (which `npm run build` runs) writes byte-identical copies into every runtime (`ts/src/translate.ts`, `go/translate/` and `rs/translate/`, which the Rust crate also serves as `manifest_text()`, `lift_text()` and `render_text()`), and each runtime's translation test holds the copies to the files: **change a part at the root, then run the embed**, never a copy by hand. Running a part needs alchemy, which this repository does not depend on, so the round trip (a table read, written through the parts and read back) is aless's to run once it composes a lift and a records render (tabnas/transduce#10); until then it runs by hand with the alchemy command over the reader's JSON. |
+| [`alchemy/`](alchemy/) | **Markdown's translation parts**, three [alchemy](https://github.com/tabnas/alchemy) libraries that a host which translates between formats (dmog's `translate`, the design in tabnas/transduce's `docs/translation.md`) links with its own program: [`transduce.alc`](alchemy/transduce.alc), whose entry point `markdown-transduce` turns the grammar's rule passes into the document's JSON events, a block at a time (a container's head as its rule opens and its tail as it closes, a leaf whole; the events the walk of the grammar's value gives, in its order, so no document is read whole), [`lift.alc`](alchemy/lift.alc), whose entry point `markdown-lift` reads a document's events as a table's records (the first row's cells as the column labels, every later row as a record, every cell a string; the document's first table, the tables after it not read, and the empty table, of no columns and no rows, for a document with none), and [`render.alc`](alchemy/render.alc), whose entry point `markdown-render` writes records as one GFM pipe table (a number cell that is not finite as its word, `Infinity`, `-Infinity` or `NaN`, and a table of no columns as the empty document, which the lift reads back as the empty table). The lift and the render fail with `PROTOCOL_ORDER_ERROR` on events no tree or table has. Every definition is named `markdown-...`, and no name is defined in two files. The manifest's `translate` object names them (`transduce`, `lift`, `render`), with the shapes (`reads` records through the lift, then tree; `writes` records), the root whose elements are the records (`root`, `array`: a host makes any other root the one element of an array first), the tree the events carry (`schema`, `mdast`, not a plain one), and the loss lines the host prints, among them the references the tree keeps unresolved. It has no `whole` sentence: the tree keeps references unresolved, so a block's inline content is parsed as the block closes and the part streams every document. `npm run embed` in `ts/` (which `npm run build` runs) writes byte-identical copies into every runtime (`ts/src/translate.ts`, `go/translate/` and `rs/translate/`, which the Rust crate also serves as `manifest_text()`, `transduce_text()`, `lift_text()` and `render_text()`), and each runtime's translation test holds the copies to the files: **change a part at the root, then run the embed**, never a copy by hand. Running a part needs alchemy, which this repository does not depend on, so the parts run in dmog, which composes them with the readers: there the transducer's events are held to the walk of the value `--whole` reads, on every fixture and corpus document. |
 | [`ci/`](ci/) | `ci/rust/run.sh`, the whole Rust gate, run by CI and runnable locally. The Rust and prose gates once staged under `ci/workflows/` were promoted to `.github/workflows/{rust,docs}.yml`, and that directory is not in the tree. To change CI, edit `.github/workflows/` in a reviewed pull request and mirror the edit in the workflow's admin template where it has one (admin `DECISIONS.md` ADR-8, as amended 2026-09-24). See [`ci/README.md`](ci/README.md). |
-| [`test/spec/`](test/spec/) | 83 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) across 10 `*.tsv` files, auto-discovered and run by all three runtimes. The TS/Go/Rust parity contract. See `test/AGENTS.md`. |
+| [`test/spec/`](test/spec/) | 111 shared **AST** fixtures (`input → expected` JSON, `opts` JSON) across 11 `*.tsv` files, auto-discovered and run by all three runtimes. The TS/Go/Rust parity contract. See `test/AGENTS.md`. |
 | [`test/spec/tree/`](test/spec/tree/) | Golden native-tree snapshots (`sourcepos` included), one per fixture file, generated from the canonical TypeScript and asserted by `ts/test/tree-golden.test.ts`, `go/tree_golden_test.go` and `rs/tests/tree_golden_test.rs`. |
 | [`test/commonmark/spec.json`](test/commonmark/) | Vendored CommonMark 0.31.2 suite, 652 examples of Markdown → expected **HTML**. The conformance contract for all three runtimes. See `test/AGENTS.md`. |
 | [`test/gfm/spec.json`](test/gfm/) | Vendored GFM extension corpus, 24 examples of Markdown → expected **HTML**, run with `gfm:true`. The extension contract for all three runtimes. See `test/AGENTS.md`. |
@@ -258,7 +274,7 @@ Source files, mirrored name for name across the two runtimes:
 | `ts/src/ast.ts` | `go/ast.go` | Projection from the native tree to the public JSON AST. |
 | `ts/src/html.ts` | `go/html.go` | HTML renderer over the native tree. |
 | `ts/src/markdown.ts` | `go/markdown.go` | Plugin wiring and the public surface. With the drivers below, one of the only files that import the engine. |
-| `ts/src/engine-block.ts` | `go/engineblock.go` | The engine-facing block driver: the `mdLine` matcher and the rule actions (see "Architecture notes"). Engine-facing modules (`markdown.*`, `engine-*`) are the ONLY files that may import the engine; nothing reachable from `commonmark.ts` / `commonmark.go` does, which is what keeps the conformance suite runnable engine-free. |
+| `ts/src/engine-block.ts` | `go/engineblock.go` | The engine-facing block driver: the `mdBlock` matcher and the rule actions (see "Architecture notes"). Engine-facing modules (`markdown.*`, `engine-*`) are the ONLY files that may import the engine; nothing reachable from `commonmark.ts` / `commonmark.go` does, which is what keeps the conformance suite runnable engine-free. |
 | `ts/src/entities.ts` | — | Generated HTML5 named character references (2125 semicolon-terminated entries). Go uses the standard library's table instead, gated to reject the legacy semicolon-less forms §6.2 does not allow. |
 
 The Rust port keeps the same split under `rs/src/`: `node.rs`,
@@ -392,8 +408,9 @@ it. When you touch anything positional, compare the native trees too.
 ## The grammar is live — and derived documentation stays derived
 
 There is no grammar file. The grammar is the code the engine parses with:
-the `markdown`/`line` rules and the `mdLine` matcher on the plugin
-instance (`markdown.ts` / `markdown.go`, `engine-block.*`), and the
+the `markdown` rule, the `children` loop and a rule for each node of the
+AST, with the `mdBlock` matcher, on the plugin instance (`markdown.ts` /
+`markdown.go`, `engine-block.*`), and the
 `inline` rule with its twelve-matcher alphabet on the nested inline
 instance (`engine-inline.*`). `debug.model()` serializes it, and the
 railroad diagrams are drawn from LIVE instances:
@@ -803,11 +820,16 @@ node's text as hostile.
 
 ## Architecture notes
 
-* **Two phases, per spec 0.31.2 Appendix A.** Block structure over the
-  whole document first, then inlines inside each leaf block. The order is
-  forced: block syntax is line-oriented and inline syntax is not, so
-  deciding blocks first makes block-beats-inline precedence structural
-  rather than something the inline scanner has to remember.
+* **Two phases, per spec 0.31.2 Appendix A.** Block structure first, then
+  inlines inside each leaf block. The order is forced: block syntax is
+  line-oriented and inline syntax is not, so deciding blocks first makes
+  block-beats-inline precedence structural rather than something the
+  inline scanner has to remember. The engine-free path (`commonmark.ts`)
+  runs the inline phase over the whole tree once the last line is in, so
+  a reference resolves against a definition after it; the AST's parse
+  keeps references unresolved, so a leaf block's inline content depends
+  on nothing after the block, and the plugin parses it as the block
+  closes.
 * **Block phase** (`block.ts` / `block.go`) keeps a spine of open blocks.
   For each line it walks the spine consuming continuation markers, looks
   for new block starts at the offset the walk reached, and puts the
@@ -821,8 +843,12 @@ node's text as hostile.
   Code spans, autolinks, raw HTML, entities, escapes and breaks are
   decided locally. Two constructs cannot be: emphasis needs a delimiter
   stack (flanking rules, the rule of three) and links need a bracket
-  stack. Link reference definitions are collected during paragraph
-  finalization in the block phase and resolved here.
+  stack. Link reference definitions are read as a paragraph closes, in
+  the block phase (`readDefinitions`), into the reference map and, for the
+  AST, as `definition` nodes where they stood. A bracketed label is
+  resolved here against the map, or, when references are kept (the AST),
+  made a `link_reference` / `image_reference` node whatever the map
+  holds.
 * **Native tree, then projection.** The parse result is a linked
   CommonMark node tree (`node.ts` / `node.go`) — linked rather than
   children-arrays because both phases splice nodes mid-walk, which an
@@ -839,19 +865,36 @@ node's text as hostile.
   behalf of a neighbour or child. Changing that breaks conformance
   examples.
 * **Plugin wiring** (`markdown.ts` / `markdown.go`, with the driver in
-  `engine-block.ts` / `engineblock.go`): the engine parse IS the parse.
-  A custom `mdLine` lexer matcher (registered ahead of every built-in;
-  all built-ins disabled) emits one `#LB` token per physical line via the
-  shared `segmentNextLine`; `parse.prepare` seeds a fresh `BlockParser`
-  on `ctx.u.md`; the `line` rule consumes one `#LB` per iteration,
-  feeding the shared `incorporateLine`; the `markdown` rule's close
-  action on `#ZZ` finalizes, runs the shared inline phase, and projects
-  the AST into the rule's node. No block decision happens engine-side —
-  recognition and algorithm stay in the engine-free core (the anti-drift
-  rule, dx-report §42), asserted byte-for-byte by the differential gate
-  and the engine-path conformance suites. `lex.emptyResult` returns an
-  empty document for `""`. `rule.clear()` is required before defining
-  `markdown`, or inherited `val` alts try to match a leading `#`.
+  `engine-block.ts` / `engineblock.go`): the engine parse IS the parse,
+  and its rules open and close every node. The custom `mdBlock` lexer
+  matcher (registered ahead of every built-in; all built-ins disabled)
+  cuts one physical line through the lexer's window, filling it past the
+  line's end, and feeds it to the shared `incorporateLine` on the
+  `BlockParser` that `parse.prepare` seeds on `ctx.u.md`. The blocks the
+  line closed and opened come back as the parser's events, in the order
+  it decided them, and the matcher hands them out as tokens of no width
+  at the line's start, one a call, before the line's own `#LB`: a
+  container's token (`#BQ`, `#LS`, `#LI`, `#TB`, ...) carries its head
+  (the fields before `children`) and `#EN` its tail; a leaf's (`#HR`,
+  `#CD`, `#HT`, `#DF`) carries the whole node; a paragraph, a heading and
+  a table row are parsed inline as they close, and their inline nodes are
+  tokens too. Each node type is a rule named for it that opens on its
+  token and, for a container, pushes the `children` loop and closes on
+  `#EN`; `children` takes a node or a line an iteration and goes on by
+  replacement (`r`), so ten thousand blocks run at the depth one needs
+  (`repeat.test.ts` and its ports). The rule actions build the AST from
+  the token values. The last line's events close every block still
+  open; `#ZZ` ends the `markdown` rule. No block decision happens
+  engine-side: recognition and algorithm stay in the engine-free core
+  (the anti-drift rule, dx-report §42), asserted by the differential gate
+  and the engine-path conformance suites. Nothing but the matcher reads
+  the source, so the parser this package makes (`make()`, Go `Make()`)
+  declares `lex.window`, and a parse from a reader holds a window of the
+  source, not the whole of it (`reader.test.ts` and its ports, at windows
+  of a few characters in TypeScript and Rust).
+  `lex.emptyResult` returns an empty document for `""`. `rule.clear()` is
+  required before defining `markdown`, or inherited `val` alts try to
+  match a leading `#`.
 * **Options**: `gfm` (default `true`; gates all five GFM extensions at
   once) and `breaks` (default `false`). `Markdown.defaults` / `Defaults`
   carry the same pair. `gfm` is the only option besides `breaks` that the

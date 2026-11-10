@@ -1661,7 +1661,9 @@ fn gfm_disabled() {
         "parse_tree with GFM on: gfm = false"
     );
 
-    // The AST carries no GFM shapes either.
+    // The AST carries no GFM shapes either: no task item and no autolink
+    // literals. `[x]` is a bracketed label, so the AST reads it as a
+    // reference, as it reads every one.
     let doc = to_json(&parse_document("- [x] www.a.com and a@b.co\n", &CM_OPTS));
     let item = &doc["children"][0]["children"][0];
     assert_eq!(item["checked"], json!(null));
@@ -1669,7 +1671,16 @@ fn gfm_disabled() {
         item["children"],
         json!([{
             "type": "paragraph",
-            "children": [{"type": "text", "value": "[x] www.a.com and a@b.co"}]
+            "children": [
+                {
+                    "type": "linkReference",
+                    "identifier": "x",
+                    "label": "x",
+                    "referenceType": "shortcut",
+                    "children": [{"type": "text", "value": "x"}]
+                },
+                {"type": "text", "value": " www.a.com and a@b.co"}
+            ]
         }])
     );
 }

@@ -410,8 +410,9 @@ conformant to anything.
 
 There is no grammar file. The grammar is the code the engine parses with,
 and the plugin registers it the way any tabnas grammar plugin does: the
-`markdown`/`line` rules and the `mdLine` line matcher on the plugin
-instance (`markdown.go`, `engineblock.go`), and the `inline` rule with its
+`markdown` rule, the `children` loop and a rule for each node of the AST,
+with the `mdBlock` line matcher, on the plugin instance (`markdown.go`,
+`engineblock.go`), and the `inline` rule with its
 twelve-matcher token alphabet on the nested inline instance
 (`engineinline.go`). The railroad diagrams in `ts/doc/grammar.svg` and
 `ts/doc/grammar-inline.svg` are drawn from live TypeScript instances, and
@@ -420,8 +421,9 @@ all three runtimes register the same rules, name for name.
 An earlier revision shipped an inert `markdown-grammar.jsonic` file whose
 single rule merely drained the token stream while a `BO` action bypassed
 the engine entirely. That file, its embed step, and the bypass are gone
-(the engine parse is the parse, over one `#LB` token per physical line and
-one inline token per construct) and the division of labor is deliberate:
+(the engine parse is the parse: one `#LB` token per physical line, a token
+for each block the line opens or closes, and one inline token per
+construct) and the division of labor is deliberate:
 the engine owns tokenization, dispatch, state carriage and observability,
 while the spec's Appendix A algorithms stay in the shared engine-free
 core that both the plugin path and the direct API run.

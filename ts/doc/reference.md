@@ -86,7 +86,7 @@ therefore all engine-free.
 ## Exports of `@tabnas/markdown`
 
 ```ts
-import { Markdown, parseDocument, parseInline, toHtml, parseTree, MdNode, VERSION } from '@tabnas/markdown'
+import { Markdown, make, parseDocument, parseInline, resolveReferences, toHtml, parseTree, MdNode, VERSION } from '@tabnas/markdown'
 import type { MarkdownOptions, ParserOptions, DocumentNode, Block, Inline } from '@tabnas/markdown'
 ```
 
@@ -94,7 +94,9 @@ import type { MarkdownOptions, ParserOptions, DocumentNode, Block, Inline } from
 |---|---|---|
 | `Markdown` | `Plugin` | `(tn: Tabnas, options?: MarkdownOptions) => void` |
 | `Markdown.defaults` | `MarkdownOptions` | `{ gfm: true, breaks: false }` |
+| `make` | function | `(opts?: MarkdownOptions) => Tabnas`, an engine with the plugin installed and `lex.window` declared. |
 | `parseDocument` | function | `(src: string, opts?: MarkdownOptions \| ParserOptions) => DocumentNode` |
+| `resolveReferences` | function | `(doc: DocumentNode) => DocumentNode`, the tree with its references resolved. |
 | `parseInline` | function | `(text: string, opts?: MarkdownOptions \| ParserOptions) => Inline[]` |
 | `toHtml` | function | `(src: string, opts?: MarkdownOptions \| ParserOptions) => string` |
 | `parseTree` | function | `(src: string, opts?: MarkdownOptions \| ParserOptions) => MdNode` |
@@ -102,14 +104,38 @@ import type { MarkdownOptions, ParserOptions, DocumentNode, Block, Inline } from
 | `VERSION` | `string` | This package's version, kept equal to `package.json` "version" by `test/version.test.ts`. Mirrors `VERSION` in `go/markdown.go`. |
 | `MarkdownOptions` | type | See [Options](#options). |
 | `ParserOptions` | type | Re-export of `src/options.ts`. See [Options](#options). |
-| `DocumentNode`, `Block`, `HeadingNode`, `ParagraphNode`, `BlockquoteNode`, `ListNode`, `ListItemNode`, `CodeNode`, `HtmlNode`, `ThematicBreakNode`, `TableNode`, `TableRowNode`, `TableCellNode` | types | See [Block nodes](#block-nodes) and [Table nodes](#table-nodes). |
-| `Inline`, `TextNode`, `EmphasisNode`, `StrongNode`, `InlineCodeNode`, `LinkNode`, `ImageNode`, `BreakNode`, `DeleteNode` | types | See [Inline nodes](#inline-nodes). |
+| `DocumentNode`, `Block`, `HeadingNode`, `ParagraphNode`, `BlockquoteNode`, `ListNode`, `ListItemNode`, `CodeNode`, `HtmlNode`, `ThematicBreakNode`, `DefinitionNode`, `TableNode`, `TableRowNode`, `TableCellNode` | types | See [Block nodes](#block-nodes) and [Table nodes](#table-nodes). |
+| `Inline`, `TextNode`, `EmphasisNode`, `StrongNode`, `InlineCodeNode`, `LinkNode`, `ImageNode`, `LinkReferenceNode`, `ImageReferenceNode`, `BreakNode`, `DeleteNode` | types | See [Inline nodes](#inline-nodes). |
 
 ### `parseDocument(src, opts?)`
 
 Runs both parse phases and projects the result to the public AST. Returns
 `{ type: 'document', children: Block[] }`. For `''` the `children` array is empty. Never
-throws on Markdown input.
+throws on Markdown input. References stay unresolved: a bracketed label is a
+`linkReference` or an `imageReference`, and each link reference definition is a
+`definition` node where it stands. See [References](#references).
+
+### `resolveReferences(doc)`
+
+Returns a new tree with the references of `doc` resolved, as CommonMark reads the
+document: a `linkReference` whose identifier a `definition` names becomes a `link`, an
+`imageReference` an `image`, with the first definition of an identifier winning; one
+with no definition becomes its source text, merged with the text beside it; and the
+`definition` nodes are gone. `doc` is left as it was. Iterative over the tree's depth.
+
+```js
+import { parseDocument, resolveReferences } from '@tabnas/markdown'
+
+const doc = parseDocument('[a] [b]\n\n[a]: /u')
+
+resolveReferences(doc).children // => [ { type: 'paragraph', children: [ { type: 'link', url: '/u', title: null, children: [ { type: 'text', value: 'a' } ] }, { type: 'text', value: ' [b]' } ] } ]
+```
+
+### `make(opts?)`
+
+Returns `new Tabnas().use(Markdown, opts)` with `lex.window` declared, so a parse from a
+reader (`tn.parseReader`) holds the lines it has not finished with rather than the whole
+source. The plugin itself leaves the option to the parser that installs it.
 
 ### `parseInline(text, opts?)`
 
@@ -140,19 +166,30 @@ projecting or rendering. See [Native tree](#native-tree).
 | Setting | Value |
 |---|---|
 | `rule.start` | `'markdown'` |
-| `string.lex` | `false` |
-| `comment.lex` | `false` |
-| `number.lex` | `false` |
-| `value.lex` | `false` |
+| `space.lex`, `line.lex`, `string.lex`, `comment.lex`, `number.lex`, `value.lex`, `text.lex` | `false` |
+| `lex.match.mdBlock` | The one matcher: cuts a physical line through the window of source the lexer holds and hands out the tokens of the blocks it decides. |
 | `lex.emptyResult` | `{ type: 'document', children: [] }` |
+| `parse.prepare['md-reset']` | Seeds a fresh block parser for each parse. |
+| `rule.exclude` | `'gfm'` when `gfm` is `false`. |
 
-It defines one rule, `markdown`, whose `bo` action reads the whole source with
-`ctx.src()` and sets `r.node = parseDocument(src, opts)`. Its `open` alts are
-`[{ s: '#AA', r: 'markdown' }, {}]` and its `close` alts are `[{ s: '#ZZ' }, {}]`; these
-consume the token stream so the engine's trailing-content check passes. The token stream
-itself is not read by the parser.
+The `mdBlock` matcher runs the block algorithm over each line. The blocks the line closes
+and opens come back as tokens of no width at the line's start, ahead of the line's own
+`#LB` token: a container's token (`#BQ` block quote, `#LS` list, `#LI` list item, `#PA`
+paragraph, `#HD` heading, `#TB` table, `#TR` table row, `#TC` table cell, and the inline
+containers) carries the fields before its `children`, and `#EN` the fields after them; a
+leaf's token (`#HR`, `#CD`, `#HT`, `#DF`, and the inline leaves) carries the whole node.
+A paragraph, a heading, and a table row are parsed inline as they close.
 
-`tn.parse(src)` therefore returns the same `DocumentNode` as `parseDocument(src, opts)`.
+The rules are `markdown` (pushes `children`, closes on `#ZZ`), `children` (one node or
+one `#LB` an iteration, going on by replacement, so a repetition adds no rule depth), and
+one rule per node type, named for it (`blockquote`, `list`, `listItem`, `paragraph`,
+`heading`, `table`, `tableRow`, `tableCell`, `emphasis`, `strong`, `delete`, `link`,
+`linkReference`, `thematicBreak`, `code`, `html`, `definition`, `text`, `inlineCode`,
+`break`, `image`, `imageReference`). A container's rule opens on its token, pushes
+`children` and closes on `#EN`; a leaf's opens on its token and closes at once. The GFM
+node rules' alternates on `children` carry the group `gfm`.
+
+`tn.parse(src)` returns the same `DocumentNode` as `parseDocument(src, opts)`.
 
 ```js
 import { Tabnas } from '@tabnas/parser'
@@ -183,10 +220,10 @@ import type { ParserOptions, RefMap, RefDef } from '@tabnas/markdown/dist/common
 
 | Export | Kind | Signature / value |
 |---|---|---|
-| `parse` | function | `(input: string, opts?: Partial<ParserOptions>) => MdNode`, both phases, returns the native tree. |
+| `parse` | function | `(input: string, opts?: Partial<ParserOptions>, keepReferences?: boolean) => MdNode`, both phases, returns the native tree. With `keepReferences`, a bracketed label is a `link_reference` or `image_reference` node and each definition is kept, as `parseDocument` reads them. |
 | `renderHTML` | function | `(doc: MdNode, options?: Partial<ParserOptions>) => string` |
 | `parseBlocks` | function | `(input: string, options: ParserOptions) => { doc: MdNode, refmap: RefMap }`, phase 1 only. Paragraph and heading text is left raw in `stringContent`. |
-| `parseInlines` | function | `(doc: MdNode, refmap: RefMap, options: ParserOptions) => void`, phase 2, in place. |
+| `parseInlines` | function | `(doc: MdNode, refmap: RefMap, options: ParserOptions, keepReferences?: boolean) => void`, phase 2, in place. |
 | `resolveOptions` | function | `(opts?: Partial<ParserOptions>) => ParserOptions`, fills omitted keys from `DEFAULT_OPTIONS`. |
 | `DEFAULT_OPTIONS` | `ParserOptions` | `{ gfm: true, breaks: false }` |
 | `MdNode` | class | The native tree node. |
@@ -233,12 +270,16 @@ type DocumentNode = { type: 'document'; children: Block[] }
 type Block =
   | HeadingNode | ParagraphNode | BlockquoteNode | ListNode
   | ListItemNode | CodeNode | HtmlNode | ThematicBreakNode
-  | TableNode
+  | TableNode | DefinitionNode
 
 type Inline =
   | TextNode | EmphasisNode | StrongNode | InlineCodeNode
-  | LinkNode | ImageNode | BreakNode | DeleteNode | HtmlNode
+  | LinkNode | ImageNode | LinkReferenceNode | ImageReferenceNode
+  | BreakNode | DeleteNode | HtmlNode
 ```
+
+Fields are listed in the order the AST holds them, which is the order a stream writes
+them: a field known only once a node's children are read follows `children`.
 
 ### Block nodes
 
@@ -271,17 +312,17 @@ type Inline =
 | `type` | `'list'` | |
 | `ordered` | `boolean` | |
 | `start` | `number \| null` | The start number for ordered lists; `null` for bullet lists. |
-| `spread` | `boolean` | `true` when the list is loose, that is, any item is followed by a blank line or directly contains two blocks separated by one. mdast semantics. |
 | `children` | `ListItemNode[]` | |
+| `spread` | `boolean` | `true` when the list is loose, that is, any item is followed by a blank line or directly contains two blocks separated by one. mdast semantics. |
 
 **`listItem`**
 
 | Field | Type | Notes |
 |---|---|---|
 | `type` | `'listItem'` | |
+| `children` | `Block[]` | |
 | `spread` | `boolean` | `true` when two of the item's own children are separated by a blank line. Derived from the block phase's `sourcepos` line ranges. |
 | `checked` | `boolean \| null` | GFM task list item state: `true` for `- [x]`, `false` for `- [ ]`, `null` for an ordinary item, and so `null` on every item when `gfm` is off. mdast's field. |
-| `children` | `Block[]` | |
 
 **`code`**. Fenced and indented code blocks.
 
@@ -291,6 +332,18 @@ type Inline =
 | `lang` | `string \| null` | First word of the info string; `null` for indented code and for an empty info string. |
 | `meta` | `string \| null` | Remainder of the info string after the first word, trimmed; `null` when empty. |
 | `value` | `string` | Content with exactly one trailing newline removed, if present. |
+
+**`definition`**. A link reference definition, where it stands among the blocks: in a
+paragraph's place, or ahead of the paragraph or setext heading whose leading lines it
+took. Every definition is a node, a label's second one too.
+
+| Field | Type | Notes |
+|---|---|---|
+| `type` | `'definition'` | |
+| `identifier` | `string` | The label normalized as CommonMark matches labels (white space collapsed and trimmed, case folded), in lower case. A reference with the same identifier names it. |
+| `label` | `string` | The label's text after its escapes and character references are read. |
+| `url` | `string` | As for `link`. |
+| `title` | `string \| null` | `null` when absent. |
 
 **`html`**. An HTML block. The same node type is also an inline node, described below.
 
@@ -388,7 +441,8 @@ Recognition rules:
 | `type` | `'inlineCode'` | |
 | `value` | `string` | Line endings converted to spaces; one leading and one trailing space stripped when the content is not all spaces. Escapes and entities are *not* resolved inside a code span. |
 
-**`link`**. Inline, reference, collapsed, shortcut and autolink forms all produce this node.
+**`link`**. Inline links and autolinks produce this node; a full, collapsed, or shortcut
+reference is a `linkReference`, and `resolveReferences` makes it a `link`.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -405,6 +459,34 @@ Recognition rules:
 | `url` | `string` | As for `link`. |
 | `title` | `string \| null` | |
 | `alt` | `string` | The description flattened to plain text: text, code-span and raw-HTML literals kept, markup wrappers dropped, line breaks as `\n`. There are no `children`. |
+
+**`linkReference`** (`[text][label]`, `[label][]`, `[label]`). Whether or not the document
+defines the label.
+
+| Field | Type | Notes |
+|---|---|---|
+| `type` | `'linkReference'` | |
+| `identifier` | `string` | As for `definition`. |
+| `label` | `string` | The label's text: the second bracket's for a full reference, and the link text's for the others. |
+| `referenceType` | `'full' \| 'collapsed' \| 'shortcut'` | |
+| `children` | `Inline[]` | |
+
+**`imageReference`** (`![alt][label]`, `![label][]`, `![label]`)
+
+| Field | Type | Notes |
+|---|---|---|
+| `type` | `'imageReference'` | |
+| `identifier` | `string` | As for `definition`. |
+| `label` | `string` | As for `linkReference`. |
+| `referenceType` | `'full' \| 'collapsed' \| 'shortcut'` | |
+| `alt` | `string` | As for `image`. |
+
+```js
+import { parseDocument } from '@tabnas/markdown'
+
+parseDocument('![a *b*][Foo  Bar] [x][]').children[0].children[0] // => { type: 'imageReference', identifier: 'foo bar', label: 'Foo  Bar', referenceType: 'full', alt: 'a b' }
+parseDocument('![a *b*][Foo  Bar] [x][]').children[0].children[2] // => { type: 'linkReference', identifier: 'x', label: 'x', referenceType: 'collapsed', children: [ { type: 'text', value: 'x' } ] }
+```
 
 **`break`**. A hard line break, or a soft one when `breaks: true`.
 
@@ -432,6 +514,19 @@ import { parseDocument } from '@tabnas/markdown'
 
 parseDocument('Hello <b>bold</b>') // => { type: 'document', children: [ { type: 'paragraph', children: [ { type: 'text', value: 'Hello ' }, { type: 'html', value: '<b>' }, { type: 'text', value: 'bold' }, { type: 'html', value: '</b>' } ] } ] }
 ```
+
+### References
+
+The AST keeps references unresolved, as mdast does, so a block's tree depends on nothing
+after it: a bracketed label that could be a reference is a `linkReference` or an
+`imageReference`, and a definition is a `definition` node. `resolveReferences` gives the
+tree CommonMark reads for every example of both corpora but five CommonMark examples
+(512, 523, 528, 569, and 571), where a label with no definition decided how the text
+around it nests: the label reads as a reference, so emphasis cannot cross it, a link's
+text that holds it is no link, and `[foo][bar][baz]` reads as `[foo][bar]` and then
+`[baz]`. Under `gfm: true` a task list marker is read before the paragraph is parsed, so
+`- [x] done` is a task item whether or not `x` is defined. The HTML output and the native
+tree from `parseTree` resolve as CommonMark does.
 
 ### What the AST does not carry
 
@@ -771,9 +866,9 @@ highlight, sub/superscript. Each would need its own opt-in option.
 ## Grammar
 
 The grammar is registered in code, not loaded from a file. The plugin instance
-carries the `markdown` rule (pushes `line`; closes on `#ZZ`, where the finish
-action projects the AST) and the `line` rule (one `#LB` token per physical
-line, tail-recursing; a `g:'gfm'`-tagged arming alt ahead of the base one).
+carries the `markdown` rule (pushes `children`; closes on `#ZZ`), the `children` rule
+(one node or one `#LB` line an iteration, a replace loop; the GFM nodes' alternates
+tagged `g:'gfm'`) and a rule for each node type. See [`Markdown`](#markdown-plugin).
 The nested inline instance carries the `inline` rule over a twelve-token
 alphabet produced by its matcher set (`engine-inline.ts`). The railroad
 diagrams `ts/doc/grammar.svg` and `ts/doc/grammar-inline.svg` are generated

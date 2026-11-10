@@ -45,6 +45,13 @@ export type NodeType =
   | 'link'
   | 'image'
   | 'del'
+  // A link or an image whose destination a label names, kept unresolved: an
+  // inline parse that reads references as references (the AST's, see
+  // ast.ts) makes these where the resolving parse would look the label up.
+  // The HTML renderer never sees one, since the tree it renders comes from
+  // the resolving parse.
+  | 'link_reference'
+  | 'image_reference'
 
 const CONTAINER_TYPES: Record<string, true> = {
   document: true,
@@ -61,6 +68,8 @@ const CONTAINER_TYPES: Record<string, true> = {
   link: true,
   image: true,
   del: true,
+  link_reference: true,
+  image_reference: true,
 }
 
 /**
@@ -70,6 +79,35 @@ const CONTAINER_TYPES: Record<string, true> = {
 export type TableAlign = 'left' | 'right' | 'center' | null
 
 export type ListType = 'bullet' | 'ordered'
+
+/** How a reference names its label (§6.3): `[a][b]`, `[a][]` or `[a]`. */
+export type ReferenceType = 'full' | 'collapsed' | 'shortcut'
+
+/**
+ * A link reference definition (§4.7) as the block phase read it from the
+ * front of a paragraph.
+ */
+export type Definition = {
+  /** The label's raw source text, between its brackets. */
+  label: string
+  /** The destination, already entity-decoded and backslash-unescaped. */
+  destination: string
+  /** The title, likewise, or null when there is none. */
+  title: string | null
+  /** The source lines the definition spans, 1-based, both included. */
+  start: number
+  end: number
+}
+
+/**
+ * Where a definition stands among a container's children: after the child
+ * `after` (null: before the first), in source order. Definitions are not
+ * blocks in the spec's algorithm, which reads them out of a paragraph and
+ * drops a paragraph that held nothing else, so they are kept beside the
+ * children rather than among them: the block phase's own reads of a
+ * container's children (list looseness, the blank-line flags) never see one.
+ */
+export type DefinitionSite = { after: MdNode | null; def: Definition }
 
 export type ListData = {
   type: ListType
@@ -148,6 +186,19 @@ export class MdNode {
   checked: boolean | null = null
 
   /**
+   * `link_reference` and `image_reference`: the label's raw source text,
+   * between its brackets, and the form that named it.
+   */
+  label: string | null = null
+  referenceType: ReferenceType | null = null
+
+  /**
+   * Containers: the link reference definitions read from paragraphs among
+   * the children, each with where it stands. Null until the first.
+   */
+  definitions: DefinitionSite[] | null = null
+
+  /**
    * The `gfm` parse option, recorded on the **document** node by the block
    * phase and meaningless anywhere else.
    *
@@ -168,6 +219,12 @@ export class MdNode {
   /** A paragraph/heading whose last line was blank cannot be lazily continued. */
   lastLineBlank = false
   lastLineChecked = false
+  /**
+   * A paragraph's source line where `stringContent` begins: its first line,
+   * moved on past each definition read off the front, so a definition read
+   * later knows its lines.
+   */
+  contentLine = 0
 
   constructor(type: NodeType, sourcepos?: SourcePos) {
     this.type = type

@@ -1,0 +1,102 @@
+; Markdown's transducer part: a document's JSON events from the markdown
+; grammar's rule passes, for a host that reads parser events (dmog's
+; `translate` and `run --grammar markdown`). Every event is the one the walk
+; of the grammar's value gives, in its order, a block at a time: a container
+; begins as its rule opens and ends as it closes, and a leaf is written whole.
+; This is a library of definitions, each named `markdown-transduce...`, which
+; a host links with its own program; its entry point is `markdown-transduce`.
+;
+; The grammar's rules open and close every node of the tree. `markdown` is
+; the document: its open pass begins the document's object and its
+; `children`, and its close pass, at the end of the source, ends them. Each
+; node of the tree is a rule named for its type. A container's rule
+; (`blockquote`, `list`, `listItem`, `paragraph`, `heading`, `table`,
+; `tableRow`, `tableCell`, `emphasis`, `strong`, `delete`, `link`,
+; `linkReference`) opens on a token whose value is the node's head, the
+; members before its `children` (`type` first, then `ordered` and `start`, a
+; heading's `depth`, a table's `align`, a link's `url` and `title`, a
+; reference's `identifier`, `label` and `referenceType`), and closes on the
+; `#EN` token, whose value is the members after them (a list's `spread`, a
+; list item's `spread` and `checked`). A leaf's rule (`thematicBreak`,
+; `code`, `html`, `definition`, `text`, `inlineCode`, `break`, `image`,
+; `imageReference`) opens on a token whose value is the whole node, and
+; closes at once. `children`, the loop of a container's children, and the
+; lines it reads (`#LB`) write nothing. A member's value is a scalar, or a
+; vector of scalars (a table's `align`), written as an array.
+;
+; The grammar finishes a block's inline content as the block closes, since
+; the block bounds it, and keeps references unresolved, so a block's events
+; depend on nothing after it: no document is refused. The state is whether
+; any pass came: a source that makes none, the empty document, is the empty
+; document at finish. Nothing grows with the document.
+
+; What a rule is: the document, a container, a leaf, or none of them.
+def markdown-transduce-kind [name]
+  match name
+    case "markdown" :document
+    case "blockquote" :container
+    case "list" :container
+    case "listItem" :container
+    case "paragraph" :container
+    case "heading" :container
+    case "table" :container
+    case "tableRow" :container
+    case "tableCell" :container
+    case "emphasis" :container
+    case "strong" :container
+    case "delete" :container
+    case "link" :container
+    case "linkReference" :container
+    case "thematicBreak" :leaf
+    case "code" :leaf
+    case "html" :leaf
+    case "definition" :leaf
+    case "text" :leaf
+    case "inlineCode" :leaf
+    case "break" :leaf
+    case "image" :leaf
+    case "imageReference" :leaf
+    case _ :none
+
+; The value of the token a pass consumed: a head, a tail or a whole node.
+def markdown-transduce-value [rule]
+  get :val (transduce-token 0 rule)
+
+; One member of a record as its events: a vector as an array of scalars.
+def markdown-transduce-member [record name]
+  let [value (get name record)]
+    match (kind value)
+      case :vector (push-all [array-end] (push-all (map (fn [item] (scalar item)) value) [(key name) array-start]))
+      case _ [(key name) (scalar value)]
+
+; Every member of a record as its events, in the record's order.
+def markdown-transduce-members [record]
+  flatten (map (partial markdown-transduce-member record) (keys record))
+
+def markdown-transduce-open [rule]
+  match (markdown-transduce-kind (get :name rule))
+    case :document [object-start (key "type") (scalar "document") (key "children") array-start]
+    case :container (push-all [(key "children") array-start] (push-all (markdown-transduce-members (markdown-transduce-value rule)) [object-start]))
+    case :leaf (push object-end (push-all (markdown-transduce-members (markdown-transduce-value rule)) [object-start]))
+    case _ []
+
+def markdown-transduce-close [rule]
+  match (markdown-transduce-kind (get :name rule))
+    case :document [array-end object-end]
+    case :container (push object-end (push-all (markdown-transduce-members (markdown-transduce-value rule)) [array-end]))
+    case _ []
+
+def markdown-transduce-step [started pass]
+  match pass
+    case (open rule) (transition true (markdown-transduce-open rule))
+    case (close rule) (transition true (markdown-transduce-close rule))
+
+; A source that made no pass is the empty document.
+def markdown-transduce-finish [started]
+  match started
+    case true []
+    case _ [object-start (key "type") (scalar "document") (key "children") array-start array-end object-end]
+
+; The part: the rule passes in, the document's events out.
+def markdown-transduce [input]
+  as-events (scan-emit false markdown-transduce-step markdown-transduce-finish (parser-events input))

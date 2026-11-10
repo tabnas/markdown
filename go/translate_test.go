@@ -81,6 +81,41 @@ func TestTranslationEmbed(t *testing.T) {
 	}
 }
 
+// TestTranslationTransduce holds the transducer part the manifest names to
+// the one the package carries, and the manifest to giving no `whole`
+// sentence beside it: a document streams through the part, a block at a
+// time.
+func TestTranslationTransduce(t *testing.T) {
+	inCheckout(t)
+	var spec struct {
+		Translate struct {
+			Transduce string  `json:"transduce"`
+			Whole     *string `json:"whole"`
+		} `json:"translate"`
+	}
+	manifest, err := os.ReadFile("../tabnas.plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(manifest, &spec); err != nil {
+		t.Fatal(err)
+	}
+	if spec.Translate.Transduce != "alchemy/transduce.alc" || spec.Translate.Whole != nil {
+		t.Fatalf("translate names transduce %q and whole %v", spec.Translate.Transduce, spec.Translate.Whole)
+	}
+	parts := Translate()
+	if parts.Transduce == nil || parts.Transduce.Entry != "markdown-transduce" {
+		t.Fatalf("transduce entry is %#v", parts.Transduce)
+	}
+	transduce, err := os.ReadFile("../" + spec.Translate.Transduce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parts.Transduce.Source != string(transduce) {
+		t.Fatalf("embedded transducer differs from %s: run npm run embed in ts", spec.Translate.Transduce)
+	}
+}
+
 // Every call hands back parts of its own: a caller that changes what it
 // was given, the parts or a part they point to, changes nothing the next
 // caller reads, and callers on several goroutines share nothing to race on.

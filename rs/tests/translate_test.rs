@@ -117,6 +117,27 @@ fn the_structural_interface_names_both_entries() {
     let render = parts.render.expect("Markdown carries a render");
     assert_eq!(render.entry, "markdown-render");
     assert_eq!(render.source, Some(tabnas_markdown::render_text()));
+    let transduce = parts.transduce.expect("Markdown carries a transducer");
+    assert_eq!(transduce.entry, "markdown-transduce");
+    assert_eq!(transduce.source, Some(tabnas_markdown::transduce_text()));
+}
+
+/// The transducer part the manifest names is the one the crate embeds, and
+/// the manifest gives no `whole` sentence beside it: a document streams
+/// through the part, a block at a time.
+#[test]
+fn the_transducer_the_manifest_names_is_the_one_the_crate_embeds() {
+    let translate = translate();
+    assert_eq!(translate["transduce"], "alchemy/transduce.alc");
+    assert!(
+        translate.get("whole").is_none(),
+        "the manifest still says whole"
+    );
+    assert_eq!(
+        part_on_disk("transduce"),
+        tabnas_markdown::transduce_text(),
+        "translate.transduce names another text than the crate embeds: run npm run embed in ts"
+    );
 }
 
 /// A Markdown table is read as records first, through the lift, and as
@@ -166,10 +187,12 @@ fn the_loss_is_a_list_of_sentences() {
 fn the_parts_are_libraries_named_for_markdown() {
     let lift = names(tabnas_markdown::lift_text());
     let render = names(tabnas_markdown::render_text());
+    let transduce = names(tabnas_markdown::transduce_text());
     assert!(lift.contains(&"markdown-lift"), "{lift:?}");
     assert!(render.contains(&"markdown-render"), "{render:?}");
+    assert!(transduce.contains(&"markdown-transduce"), "{transduce:?}");
     let mut seen = HashSet::new();
-    for name in lift.iter().chain(render.iter()) {
+    for name in lift.iter().chain(render.iter()).chain(transduce.iter()) {
         assert!(
             name.starts_with("markdown-"),
             "{name} is not named for Markdown"

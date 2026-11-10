@@ -40,6 +40,7 @@
     "schema": "markdown-ast",
     "lift": "alchemy/lift.alc",
     "render": "alchemy/render.alc",
+    "transduce": "alchemy/transduce.alc",
     "loss": [
       "The rows are the elements of the root array, and a root of another kind is written as one row.",
       "The columns are the first row's, an object's keys or an array's positions labelled 0, 1 and so on, so a member or position of a later row that the first row lacks is not written, and one the first row has and a later row lacks is an empty cell.",
@@ -55,8 +56,9 @@
       "Column alignment is not kept.",
       "A line break in a cell is written as a space.",
       "Whitespace at either end of a cell is not kept, as the reader trims it: the space, the tab, U+00A0, U+FEFF, U+2028, U+2029 and the other Unicode space separators, though not U+0085.",
-      "A U+0000 in a cell is written as U+FFFD, the character a Markdown reader puts in its place, so it reads back as U+FFFD."
-    ],
-    "whole": "A link or an image may name a link reference definition that comes later in the document, so a document's tree is complete only at its end: it is read whole before anything is written."
+      "A U+0000 in a cell is written as U+FFFD, the character a Markdown reader puts in its place, so it reads back as U+FFFD.",
+      "Read as a tree, a bracketed label is a linkReference or an imageReference whether or not the document defines it, as mdast keeps references unresolved, so one with no definition, which CommonMark reads as literal text, is a reference, and emphasis or a link around it nests as it would around a reference.",
+      "Read as records, a cell's reference is its text, without the brackets."
+    ]
   }
 }

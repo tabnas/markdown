@@ -1,17 +1,33 @@
 /* Copyright (c) 2026 Richard Rodger, MIT License */
 
-//! The engine-facing block driver: a custom lexer matcher that turns the
-//! engine's scan into one `#LB` token per physical line, and the actions
-//! that feed those lines to the shared [`BlockParser`]. Port of
-//! `ts/src/engine-block.ts` and `go/engineblock.go`.
+//! The engine-facing block driver: a custom lexer matcher that cuts the
+//! source one physical line at a time, runs the shared block algorithm over
+//! each line, and hands the engine the blocks that line opened and closed
+//! as tokens; and the rule actions that build the AST from those tokens.
+//! Port of `ts/src/engine-block.ts` and `go/engineblock.go`.
 //!
-//! This is the seam of the anti-drift rule (dx-report §42): nothing here
-//! recognizes anything. Line cutting and NUL replacement come from
-//! [`segment_next_line`], blank detection from [`is_blank`], and every
-//! block decision (continuation, starts, lazy continuation, finalization)
-//! from the same [`BlockParser`] the engine-free path runs. The engine
-//! owns tokenization, dispatch, per-parse state carriage and
-//! observability; the algorithm stays in the shared core.
+//! The grammar's rules open and close every block (`lib.rs`): a
+//! container's rule opens on the token that opens it (`#BQ` for a block
+//! quote, `#LS` for a list, ...) and closes on `#EN`, and a leaf's rule
+//! opens and closes on its one token (`#HR`, `#CD`, `#DF`, ...). A block's
+//! inline content is parsed when the block closes, since the block bounds
+//! it, and its inline nodes are tokens and rules too, so the rule passes
+//! carry the whole tree, a block at a time, and the value the rules build
+//! is that tree.
+//!
+//! The block decisions themselves are the shared [`BlockParser`]'s, the
+//! same code the engine-free path runs (the anti-drift rule, dx-report
+//! §42). This driver turns what it decided into tokens in the order it
+//! decided it ([`BlockParser::events`]), and nothing here recognizes any
+//! Markdown of its own.
+//!
+//! Each line is one `#LB` token, cut through the lexer's window, so a
+//! grammar that declares `lex.window` is read a window at a time. The
+//! tokens of the blocks the line closed and opened come first, of no
+//! width, where the line starts, one each time the lexer asks, and then the
+//! line itself: the tokens are in source order, and the last line's tokens
+//! also close every block still open, since no token follows the last line
+//! but the end.
 //!
 //! # State carriage
 //!
@@ -40,94 +56,126 @@
 //! holds (see AGENTS.md).
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use tabnas::{Context, Lexer, Rule, Tin, Token, Value};
+use tabnas::{Context, Lexer, Rule, Tabnas, Tin, Token, Value};
 
-use crate::ast::to_ast;
-use crate::block::{is_blank, segment_next_line, BlockParser};
-use crate::node::Tree;
-use crate::options::{Options, RefMap};
+use crate::ast::{block_head, block_tail, definition_node, inline_children, leaf_block, object};
+use crate::block::{BlockEvent, BlockParser};
+use crate::engine_inline::{parse_block_engine, parse_inlines_engine};
+use crate::inline::InlineParser;
+use crate::node::{NodeId, NodeType, Tree};
+use crate::options::Options;
 
-/// The block phase's one token: a physical line.
+/// One physical line, read: the blocks it made precede it.
 pub const LINE_TOKEN: &str = "#LB";
 
-/// The `mdLine` matcher's name in `options.lex.matchers`.
-pub const MD_LINE_MATCHER: &str = "mdLine";
+/// A container's end: its value is the fields that follow its children.
+pub const END_TOKEN: &str = "#EN";
 
-/// The `mdLine` matcher's order: ahead of every built-in, so a line is
+/// The `mdBlock` matcher's name in `options.lex.matchers`.
+pub const MD_BLOCK_MATCHER: &str = "mdBlock";
+
+/// The `mdBlock` matcher's order: ahead of every built-in, so a line is
 /// consumed whole before any built-in matcher sees its first character.
-pub const MD_LINE_ORDER: f64 = 100_000.0;
+pub const MD_BLOCK_ORDER: f64 = 100_000.0;
 
 /// The `parse.prepare` hook's name.
 pub const MD_PREPARE: &str = "md-reset";
 
-/// The key under `ctx.u` that carries the block state's slot index, and
-/// the key under a `#LB` token's `use_data` that carries its [`LineInfo`].
+/// The key under `ctx.u` that carries the block state's slot index.
 pub const MD_STATE_KEY: &str = "md";
 
-/// The `#LB` token's payload: one physical line, pre-classified. A
-/// downstream dialect's alt conditions can read it back from the token
-/// with [`LineInfo::from_token`] (see the extension recipe in
-/// `doc/guide.md`).
-///
-/// On the token, the text is the token's `val` and the two flags sit
-/// under `use_data["md"]`, so a line costs one string, not two.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LineInfo<'a> {
-    /// The line's text, terminator excluded, NULs already replaced.
-    pub text: &'a str,
-    /// True when the line holds nothing but spaces and tabs.
-    pub blank: bool,
-    /// GFM table arming: true when the line contains a `|` or a `-`
-    /// anywhere. A deliberate, *provable* superset of "could be a
-    /// delimiter row": every delimiter cell requires at least one `-`
-    /// (`:-:` rows open pipe-less single-column tables), and multi-column
-    /// rows carry `|`. The real decision needs the container-adjusted
-    /// offset only the block algorithm knows (a delimiter row nested in a
-    /// block quote matches after the `>` marker), so the `gfm`-tagged alt
-    /// reading this bit only *arms* the probe, and `try_open_table`
-    /// re-verifies (see test/spec/mixed.tsv).
-    pub tbl_arm: bool,
+/// A node of the AST, its rule and the token its rule opens on. A
+/// container's token carries its head (the fields before its `children`,
+/// `type` first), and its `#EN` its tail; a leaf's token carries the whole
+/// node. The rule is named for the node's type. The GFM nodes are the
+/// `gfm` group's.
+#[derive(Debug, Clone, Copy)]
+pub struct NodeRule {
+    pub rule: &'static str,
+    pub token: &'static str,
+    pub container: bool,
+    pub gfm: bool,
+    pub desc: &'static str,
 }
 
-impl<'a> LineInfo<'a> {
-    /// Classify one line of text.
-    pub fn of(text: &'a str) -> LineInfo<'a> {
-        LineInfo {
-            text,
-            blank: is_blank(text),
-            tbl_arm: text.contains('|') || text.contains('-'),
-        }
-    }
-
-    /// Read the payload back off a `#LB` token. `None` for any other
-    /// token.
-    pub fn from_token(token: &'a Token) -> Option<LineInfo<'a>> {
-        let text = match &token.val {
-            Value::String(s) => s.as_str(),
-            Value::Text(t) => t.string.as_str(),
-            _ => return None,
-        };
-        let flags = token.use_data().get(MD_STATE_KEY)?;
-        let blank = matches!(value_get(flags, "blank"), Some(Value::Bool(true)));
-        let tbl_arm = matches!(value_get(flags, "tblArm"), Some(Value::Bool(true)));
-        Some(LineInfo {
-            text,
-            blank,
-            tbl_arm,
-        })
-    }
-
-    fn flags_value(&self) -> Value {
-        let mut map = IndexMap::with_capacity(2);
-        map.insert("blank".to_string(), Value::Bool(self.blank));
-        map.insert("tblArm".to_string(), Value::Bool(self.tbl_arm));
-        Value::object(map)
+const fn node_rule(
+    rule: &'static str,
+    token: &'static str,
+    container: bool,
+    gfm: bool,
+    desc: &'static str,
+) -> NodeRule {
+    NodeRule {
+        rule,
+        token,
+        container,
+        gfm,
+        desc,
     }
 }
+
+/// Every node's rule, as `ts/src/engine-block.ts` lists them.
+pub const NODE_RULES: &[NodeRule] = &[
+    node_rule("blockquote", "#BQ", true, false, "block quote"),
+    node_rule("list", "#LS", true, false, "list"),
+    node_rule("listItem", "#LI", true, false, "list item"),
+    node_rule("paragraph", "#PA", true, false, "paragraph"),
+    node_rule("heading", "#HD", true, false, "ATX or setext heading"),
+    node_rule("table", "#TB", true, true, "GFM table"),
+    node_rule("tableRow", "#TR", true, true, "table row"),
+    node_rule("tableCell", "#TC", true, true, "table cell"),
+    node_rule("emphasis", "#EM", true, false, "emphasis"),
+    node_rule("strong", "#SG", true, false, "strong emphasis"),
+    node_rule("delete", "#DL", true, true, "strikethrough"),
+    node_rule("link", "#LK", true, false, "link"),
+    node_rule("linkReference", "#LR", true, false, "link reference"),
+    node_rule("thematicBreak", "#HR", false, false, "thematic break"),
+    node_rule("code", "#CD", false, false, "fenced or indented code"),
+    node_rule("html", "#HT", false, false, "HTML block or raw HTML"),
+    node_rule(
+        "definition",
+        "#DF",
+        false,
+        false,
+        "link reference definition",
+    ),
+    node_rule("text", "#TT", false, false, "text"),
+    node_rule("inlineCode", "#IC", false, false, "code span"),
+    node_rule("break", "#BR", false, false, "hard line break"),
+    node_rule("image", "#IM", false, false, "image"),
+    node_rule("imageReference", "#IR", false, false, "image reference"),
+];
+
+/// The token a node of each AST type opens with.
+fn token_of(node_type: &str) -> &'static str {
+    NODE_RULES
+        .iter()
+        .find(|n| n.rule == node_type)
+        .map_or(LINE_TOKEN, |n| n.token)
+}
+
+/// The `type` of an AST node's fields, or of an AST node.
+fn type_of<'v>(fields: &'v [(&'static str, Value)]) -> &'v str {
+    match fields.iter().find(|(k, _)| *k == "type") {
+        Some((_, Value::String(t))) => t,
+        _ => "",
+    }
+}
+
+fn node_type_of(node: &Value) -> &str {
+    match value_get(node, "type") {
+        Some(Value::String(t)) => t,
+        _ => "",
+    }
+}
+
+/// A token the line matcher makes: its name and its value.
+type Made = (&'static str, Value);
 
 /// One key of an object value. Both object spellings the engine has.
 pub(crate) fn value_get<'v>(value: &'v Value, key: &str) -> Option<&'v Value> {
@@ -155,11 +203,21 @@ pub(crate) fn slot_of(ctx: &Context, key: &str) -> Option<usize> {
 
 // --- the per-parse state ----------------------------------------------------
 
-/// What `ctx.u["md"]` points at: the live block parser and the keepTree
-/// request read off the parse meta.
+/// What `ctx.u["md"]` points at: the live block parser, the keepTree
+/// request read off the parse meta, and the line matcher's own state.
 struct BlockState {
     bp: BlockParser,
     keep_tree: bool,
+    /// The inline parse a block's AST is made with: references kept. Held
+    /// in an option so that it can travel with the nested inline parse.
+    inline: Option<InlineParser>,
+    /// The tokens the line at the cursor made, handed out one a call
+    /// before the line's own token (`next` the one due), and whether that
+    /// line has been read: its blocks are decided, and its `#LB` is what is
+    /// left.
+    made: Vec<Made>,
+    next: usize,
+    read: bool,
     /// The array `ctx.u["md"]` holds, shared with the context. While the
     /// context lives the count is at least two; once the engine has
     /// dropped it, this is the last holder and the slot is stale.
@@ -184,7 +242,7 @@ thread_local! {
 /// carry. Slots whose parse has ended without the finish action (see the
 /// module docs) are freed first, so the slab never grows past the parses
 /// that are actually live on this thread.
-fn block_slot_insert(bp: BlockParser, keep_tree: bool) -> (usize, Value) {
+fn block_slot_insert(bp: BlockParser, keep_tree: bool, options: Options) -> (usize, Value) {
     BLOCK_STATES.with(|cell| {
         let mut slab = cell.borrow_mut();
         for entry in slab.iter_mut() {
@@ -200,6 +258,10 @@ fn block_slot_insert(bp: BlockParser, keep_tree: bool) -> (usize, Value) {
         slab[slot] = Some(BlockState {
             bp,
             keep_tree,
+            inline: Some(InlineParser::keeping_references(options)),
+            made: Vec::new(),
+            next: 0,
+            read: false,
             lease: Arc::clone(&lease),
         });
         (slot, Value::Array(lease))
@@ -242,35 +304,293 @@ fn keep_tree_requested(meta: &Value) -> bool {
 
 // --- the lexer matcher ------------------------------------------------------
 
-/// Build the `mdLine` matcher: each invocation consumes one physical line,
-/// terminator included, and emits a single `#LB` token carrying the line
-/// as a [`LineInfo`]. The matcher owns the engine's point: the byte offset
-/// advances past the terminator, the row counts line endings, and the
-/// column resets per line. (The engine's column is not used for
-/// indentation: the shared [`BlockParser`] computes spec §2.2
-/// tab-expanded columns itself.)
-///
-/// Row and column bookkeeping is observability data (`#ZZ` position,
-/// traces) and is left to the lexer's own `advance_chars`, which counts
-/// CHARACTERS and resets the column on a consumed `\n`. That is the
-/// arithmetic the Go port spells out by hand; `tests/engine_columns_test.rs`
-/// pins the resulting positions.
-pub fn make_md_line_matcher(
-    lb: Tin,
+/// One physical line at the cursor.
+struct Line {
+    text: String,
+    src: String,
+    /// The characters the line takes, its terminator included.
+    chars: usize,
+    last: bool,
+}
+
+/// One physical line at the cursor, read through the lexer's window: up to
+/// (not including) the next `\n`, `\r` or `\r\n`, with section 2.3's NUL
+/// replacement. `last` says whether the source ends after it (which is why
+/// a final line ending does not make a trailing blank line). The window is
+/// filled past the line's end, so a token never ends at the window's end,
+/// where the lexer would cut it again over a wider one, and a line longer
+/// than the window is read on in doubling steps. A line is read twice, once
+/// to decide its blocks and once for its own token, and gives the same both
+/// times. Every byte compared is ASCII; [`Lexer::fill`] counts characters.
+fn cut_line(lexer: &mut Lexer<'_>) -> Option<Line> {
+    if lexer.window().is_empty() && !lexer.fill(1) {
+        return None;
+    }
+
+    let mut i = 0;
+    loop {
+        let w = lexer.window().as_bytes();
+        while i < w.len() && w[i] != b'\n' && w[i] != b'\r' {
+            i += 1;
+        }
+        if i < w.len() {
+            break;
+        }
+        let had = w.len();
+        let chars = lexer.window().chars().count();
+        lexer.fill(2 * chars + 1);
+        if lexer.window().len() == had {
+            break;
+        }
+    }
+
+    let text_chars = lexer.window()[..i].chars().count();
+    let mut next = i;
+    if i < lexer.window().len() {
+        if lexer.window().as_bytes()[i] == b'\r' {
+            if i + 1 >= lexer.window().len() {
+                lexer.fill(text_chars + 2);
+            }
+            let w = lexer.window().as_bytes();
+            next = if i + 1 < w.len() && w[i + 1] == b'\n' {
+                i + 2
+            } else {
+                i + 1
+            };
+        } else {
+            next = i + 1;
+        }
+    }
+
+    let chars = text_chars + (next - i);
+    let last = !lexer.fill(chars + 1);
+    let w = lexer.window();
+    let mut text = w[..i].to_string();
+    if text.contains('\0') {
+        text = text.replace('\0', "\u{FFFD}");
+    }
+    Some(Line {
+        text,
+        src: w[..next].to_string(),
+        chars,
+        last,
+    })
+}
+
+/// What one invocation of the matcher hands out.
+enum Out {
+    /// A token of a block, of no width.
+    Block(Made),
+    /// The line itself.
+    Line,
+}
+
+/// Build the `mdBlock` matcher. Each invocation returns one token. At a
+/// line not yet read, it reads the line, feeds it to the shared
+/// [`BlockParser`] (and, for the last line, closes every block still
+/// open), and gathers the tokens of the blocks the line closed and opened;
+/// those are handed out first, of no width, where the line starts, and then
+/// the line itself as a `#LB` token. Row and column bookkeeping is left to
+/// the lexer's own `advance_chars`, which counts CHARACTERS and resets the
+/// column on a consumed `\n`; `tests/engine_columns_test.rs` pins the
+/// resulting positions. Nothing reads the source but [`cut_line`], through
+/// the window.
+pub fn make_md_block_matcher(
+    opts: Options,
+    tins: HashMap<&'static str, Tin>,
+    inline_tn: Arc<Tabnas>,
 ) -> impl for<'s> Fn(&mut Lexer<'s>, &mut Rule, &mut Context) -> Option<Token> + Send + Sync + 'static
 {
-    move |lexer, _rule, _ctx| {
+    move |lexer, _rule, ctx| {
+        let tin = |name: &str| tins.get(name).copied().unwrap_or_default();
+
+        let pending = with_block_state(ctx, |state| {
+            if state.next < state.made.len() {
+                let made = state.made[state.next].clone();
+                state.next += 1;
+                Some(made)
+            } else {
+                None
+            }
+        })?;
+        if let Some((name, value)) = pending {
+            let point = lexer.point();
+            return Some(lexer.token(name, tin(name), value, "", point));
+        }
+
+        let line = cut_line(lexer)?;
+
+        let out = with_block_state(ctx, |state| {
+            if !state.read {
+                state.bp.incorporate_line(&line.text);
+                if line.last {
+                    state.bp.close_all();
+                }
+                let events = state.bp.events.take().unwrap_or_default();
+                state.bp.events = Some(Vec::new());
+                let mut made = Vec::new();
+                for event in events {
+                    event_tokens(state, &opts, &inline_tn, event, &mut made);
+                }
+                if let Some(first) = made.first().cloned() {
+                    state.made = made;
+                    state.next = 1;
+                    state.read = true;
+                    return Out::Block(first);
+                }
+            }
+            state.made.clear();
+            state.next = 0;
+            state.read = false;
+            Out::Line
+        })?;
+
         let point = lexer.point();
-        let src = lexer.source();
-        let seg = segment_next_line(src, point.site.si)?;
-        let raw = &src[point.site.si..seg.next];
-        let raw_chars = raw.chars().count();
-        let flags = LineInfo::of(&seg.text).flags_value();
-        let mut token = lexer.token(LINE_TOKEN, lb, Value::String(seg.text), raw, point);
-        token.use_data_mut().insert(MD_STATE_KEY.to_string(), flags);
-        lexer.advance_chars(raw_chars);
-        Some(token)
+        match out {
+            Out::Block((name, value)) => Some(lexer.token(name, tin(name), value, "", point)),
+            Out::Line => {
+                let token = lexer.token(
+                    LINE_TOKEN,
+                    tin(LINE_TOKEN),
+                    Value::Undefined,
+                    line.src.as_str(),
+                    point,
+                );
+                lexer.advance_chars(line.chars);
+                Some(token)
+            }
+        }
     }
+}
+
+/// The tokens one block event makes, appended to `out`.
+fn event_tokens(
+    state: &mut BlockState,
+    opts: &Options,
+    inline_tn: &Tabnas,
+    event: BlockEvent,
+    out: &mut Vec<Made>,
+) {
+    match event {
+        BlockEvent::Open(id) => {
+            let head = block_head(&state.bp.tree, id);
+            out.push((token_of(type_of(&head)), object(head)));
+        }
+
+        BlockEvent::Row(row) => {
+            out.push(("#TR", object(block_head(&state.bp.tree, row))));
+            let mut cell = state.bp.tree.get(row).first_child;
+            while let Some(c) = cell {
+                inline_block_tokens(state, opts, inline_tn, c, out);
+                cell = state.bp.tree.get(c).next;
+            }
+            out.push((END_TOKEN, object(block_tail(&state.bp.tree, row))));
+        }
+
+        BlockEvent::Definition(def) => out.push(("#DF", definition_node(&def))),
+
+        BlockEvent::Close(id) => match state.bp.tree.get(id).node_type {
+            NodeType::BlockQuote | NodeType::List | NodeType::Item | NodeType::Table => {
+                out.push((END_TOKEN, object(block_tail(&state.bp.tree, id))));
+            }
+
+            NodeType::Paragraph | NodeType::Heading => {
+                // A paragraph that held nothing but definitions is gone:
+                // its definitions were written as they were read.
+                if state.bp.tree.get(id).parent.is_some() {
+                    inline_block_tokens(state, opts, inline_tn, id, out);
+                }
+            }
+
+            NodeType::ThematicBreak | NodeType::CodeBlock | NodeType::HtmlBlock => {
+                if let Some(leaf) = leaf_block(&state.bp.tree, id) {
+                    out.push((token_of(node_type_of(&leaf)), leaf));
+                }
+                if !state.keep_tree {
+                    release(&mut state.bp.tree, id);
+                }
+            }
+
+            _ => {}
+        },
+    }
+}
+
+/// A block whose content is inline nodes (a paragraph, a heading, a table
+/// cell), parsed now: its head, its inline nodes, its end. The block's raw
+/// text is parsed in a tree of its own, so the native tree keeps it when
+/// the caller wants that tree back, which is parsed again, references
+/// resolved, once the document ends.
+fn inline_block_tokens(
+    state: &mut BlockState,
+    opts: &Options,
+    inline_tn: &Tabnas,
+    node: NodeId,
+    out: &mut Vec<Made>,
+) {
+    let head = block_head(&state.bp.tree, node);
+    let tail = block_tail(&state.bp.tree, node);
+
+    let mut scratch = Tree::new(state.bp.tree.get(node).node_type);
+    let root = scratch.root();
+    scratch.get_mut(root).string_content = state.bp.tree.get(node).string_content.clone();
+    let parser = state
+        .inline
+        .take()
+        .unwrap_or_else(|| InlineParser::keeping_references(*opts));
+    let (parser, scratch) = parse_block_engine(inline_tn, parser, scratch, root);
+    state.inline = Some(parser);
+
+    out.push((token_of(type_of(&head)), object(head)));
+    inline_tokens(inline_children(&scratch, root, opts), out);
+    out.push((END_TOKEN, object(tail)));
+    if !state.keep_tree {
+        release(&mut state.bp.tree, node);
+    }
+}
+
+/// The tokens of a run of inline nodes, in document order: a container's
+/// head, its children's, its end; a leaf whole. Iterative, since inline
+/// nesting is the input's to choose.
+fn inline_tokens(nodes: Vec<Value>, out: &mut Vec<Made>) {
+    let mut stack: Vec<std::vec::IntoIter<Value>> = vec![nodes.into_iter()];
+    while let Some(top) = stack.last_mut() {
+        let Some(node) = top.next() else {
+            stack.pop();
+            if !stack.is_empty() {
+                out.push((END_TOKEN, object(Vec::new())));
+            }
+            continue;
+        };
+        let token = token_of(node_type_of(&node));
+        match value_get(&node, "children") {
+            Some(Value::Array(children)) => {
+                let children = children.as_ref().clone();
+                let mut head = IndexMap::new();
+                if let Value::Object(fields) = &node {
+                    for (k, v) in fields.iter() {
+                        if k != "children" {
+                            head.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+                out.push((token, Value::object(head)));
+                stack.push(children.into_iter());
+            }
+            _ => out.push((token, node)),
+        }
+    }
+}
+
+/// Drop what a written block holds that nothing reads again: its raw text,
+/// its literal and its inline nodes. The block itself stays in the native
+/// tree, whose later lines still read its flags.
+fn release(tree: &mut Tree, node: NodeId) {
+    let n = tree.get_mut(node);
+    n.string_content = String::new();
+    n.literal = String::new();
+    n.first_child = None;
+    n.last_child = None;
 }
 
 // --- the actions ------------------------------------------------------------
@@ -278,82 +598,91 @@ pub fn make_md_line_matcher(
 /// The `parse.prepare` hook: fresh block-parser state for every parse,
 /// with the keepTree request captured from the parse meta.
 ///
-/// An empty source is skipped on purpose. The engine runs this hook
-/// before it short-circuits `""` through `lex.empty_result`, so the finish
-/// action that would release the slot never runs for one.
+/// The engine runs this hook before it short-circuits an empty source
+/// through `lex.empty_result`, and in a parse from a reader before it knows
+/// whether the source is empty (`ctx.source` is empty in every such
+/// parse), so a slot is claimed for an empty source too. Its finish action
+/// never runs, and the next prepare on the thread reclaims the slot by its
+/// lease (see the module docs).
 pub fn make_md_prepare(opts: Options) -> impl Fn(&mut Context) + Send + Sync + 'static {
     move |ctx| {
-        if ctx.source.is_empty() {
-            return;
-        }
-        let (_, lease) = block_slot_insert(BlockParser::new(opts), keep_tree_requested(&ctx.meta));
+        let mut bp = BlockParser::new(opts);
+        bp.events = Some(Vec::new());
+        let (_, lease) = block_slot_insert(bp, keep_tree_requested(&ctx.meta), opts);
         ctx.u.insert(MD_STATE_KEY.to_string(), lease);
     }
 }
 
-/// The `line` GFM open alt's condition (tagged `g: "gfm"`): the lookahead
-/// `#LB` token's `tblArm` bit.
-pub fn md_line_gfm_condition(_rule: &mut Rule, ctx: &mut Context) -> bool {
-    ctx.t0()
-        .and_then(LineInfo::from_token)
-        .is_some_and(|info| info.tbl_arm)
+/// A list value with `item` added at its end.
+fn list_push(list: &mut Value, item: Value) {
+    if let Value::Array(items) = list {
+        Arc::make_mut(items).push(item);
+    }
 }
 
-fn feed_line(rule: &Rule, ctx: &Context, table_armed: bool) {
-    let Some(info) = rule.o0().and_then(LineInfo::from_token) else {
-        return;
-    };
-    with_block_state(ctx, |state| {
-        state.bp.table_armed = table_armed;
-        state.bp.incorporate_line(info.text);
-    });
+/// `markdown` open: the document's children gather here, in a cell of the
+/// rule's own, which the children's rules share.
+pub fn md_begin(rule: &mut Rule, _ctx: &mut Context) {
+    rule.node = Rc::new(RefCell::new(Value::array(Vec::new())));
 }
 
-/// The `line` base open alt's action: disarm the table probe and feed the
-/// matched `#LB` line to the shared algorithm. Reaching this alt means
-/// the `gfm`-tagged alt ahead of it did not match (the line cannot
-/// contain a delimiter row), or GFM is off entirely (`rule.exclude`
-/// removed the tagged alt, and `try_open_table` is closed by the option
-/// anyway).
-pub fn md_line_action(rule: &mut Rule, ctx: &mut Context) {
-    feed_line(rule, ctx, false);
-}
-
-/// The `line` GFM open alt's action (tagged `g: "gfm"`, condition on the
-/// token's `tblArm` bit): arm the table probe for this line, then feed it
-/// to the same shared algorithm. This is the extension seam a downstream
-/// dialect would use: an alt injected ahead of the base one, gated on a
-/// group tag so `gfm: false` can subtract it wholesale.
-pub fn md_line_gfm_action(rule: &mut Rule, ctx: &mut Context) {
-    feed_line(rule, ctx, true);
-}
-
-/// The `markdown` close alt's action on `#ZZ`: finalize blocks, run the
-/// phase-2 driver, and project the public AST into the rule's node.
-/// `run_inlines` is the engine inline path from `engine_inline.rs`,
-/// injected so this module stays a block-phase concern. When the caller
-/// passed `meta.md.keepTree`, the native tree is parked for
-/// [`take_kept_tree`]: the engine-path conformance harness renders it.
-pub fn make_md_finish_action(
+/// `markdown` close (`#ZZ`): the document. When the caller passed
+/// `meta.md.keepTree`, the native tree, with its references resolved, is
+/// parked for [`take_kept_tree`]: the engine-path conformance harness
+/// renders it.
+pub fn make_md_finish(
     opts: Options,
-    run_inlines: impl Fn(Tree, RefMap) -> Tree + Send + Sync + 'static,
+    inline_tn: Arc<Tabnas>,
 ) -> impl Fn(&mut Rule, &mut Context) + Send + Sync + 'static {
     move |rule, ctx| {
-        let Some(state) = slot_of(ctx, MD_STATE_KEY).and_then(block_slot_take) else {
-            return;
-        };
-        let (tree, refmap) = state.bp.finish();
-        let tree = run_inlines(tree, refmap);
-
-        let ast = to_ast(&tree, &opts);
-        if state.keep_tree {
-            KEPT_TREE.with(|cell| *cell.borrow_mut() = Some(tree));
+        if let Some(state) = slot_of(ctx, MD_STATE_KEY).and_then(block_slot_take) {
+            if state.keep_tree {
+                let tree = parse_inlines_engine(&inline_tn, state.bp.tree, state.bp.refmap, &opts);
+                KEPT_TREE.with(|cell| *cell.borrow_mut() = Some(tree));
+            }
         }
-
+        let children = rule.node.borrow().clone();
         // A fresh cell, never a write through the inherited one: the
         // engine shares node cells between a rule and its parent.
-        rule.node = Rc::new(RefCell::new(ast));
+        rule.node = Rc::new(RefCell::new(object(vec![
+            ("type", Value::String("document".to_string())),
+            ("children", children),
+        ])));
     }
+}
+
+/// A container node's open action: its children gather in a cell of its
+/// own, and its head waits in `u` for its close.
+pub fn md_open(rule: &mut Rule, _ctx: &mut Context) {
+    let head = rule.o0().map_or(Value::Undefined, |t| t.val.clone());
+    rule.u_mut().insert("head".to_string(), head);
+    rule.node = Rc::new(RefCell::new(Value::array(Vec::new())));
+}
+
+/// A container node's close action on `#EN`: its node is its head, its
+/// children and its tail, in that order, added to its parent's children.
+pub fn md_close(rule: &mut Rule, _ctx: &mut Context) {
+    let mut node = IndexMap::new();
+    if let Some(Value::Object(head)) = rule.u.get("head") {
+        for (k, v) in head.iter() {
+            node.insert(k.clone(), v.clone());
+        }
+    }
+    node.insert("children".to_string(), rule.node.borrow().clone());
+    if let Some(Value::Object(tail)) = rule.c0().map(|t| &t.val) {
+        for (k, v) in tail.iter() {
+            node.insert(k.clone(), v.clone());
+        }
+    }
+    if let Some(parent) = &rule.parent_node {
+        list_push(&mut parent.borrow_mut(), Value::object(node));
+    }
+}
+
+/// A leaf node's open action: the token's value is the node.
+pub fn md_leaf(rule: &mut Rule, _ctx: &mut Context) {
+    let value = rule.o0().map_or(Value::Undefined, |t| t.val.clone());
+    list_push(&mut rule.node.borrow_mut(), value);
 }
 
 #[cfg(test)]
@@ -361,26 +690,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn line_info_flags() {
-        let info = LineInfo::of("a | b");
-        assert!(!info.blank);
-        assert!(info.tbl_arm);
-        let info = LineInfo::of(" \t");
-        assert!(info.blank);
-        assert!(!info.tbl_arm);
-        let info = LineInfo::of(":-:");
-        assert!(info.tbl_arm);
-    }
-
-    #[test]
     fn slots_are_reused() {
         // The leases stand in for the contexts that would hold them.
-        let (a, lease_a) = block_slot_insert(BlockParser::new(Options::default()), false);
-        let (b, lease_b) = block_slot_insert(BlockParser::new(Options::default()), false);
+        let (a, lease_a) = block_slot_insert(
+            BlockParser::new(Options::default()),
+            false,
+            Options::default(),
+        );
+        let (b, lease_b) = block_slot_insert(
+            BlockParser::new(Options::default()),
+            false,
+            Options::default(),
+        );
         assert_ne!(a, b);
         assert!(block_slot_take(a).is_some());
         assert!(block_slot_take(a).is_none());
-        let (c, lease_c) = block_slot_insert(BlockParser::new(Options::default()), true);
+        let (c, lease_c) = block_slot_insert(
+            BlockParser::new(Options::default()),
+            true,
+            Options::default(),
+        );
         assert_eq!(a, c);
         assert!(block_slot_take(b).is_some());
         assert!(block_slot_take(c).is_some_and(|s| s.keep_tree));
@@ -391,10 +720,22 @@ mod tests {
     /// whose context still lives is not.
     #[test]
     fn stale_slots_are_reclaimed_by_the_next_insert() {
-        let (a, lease_a) = block_slot_insert(BlockParser::new(Options::default()), false);
-        let (b, lease_b) = block_slot_insert(BlockParser::new(Options::default()), false);
+        let (a, lease_a) = block_slot_insert(
+            BlockParser::new(Options::default()),
+            false,
+            Options::default(),
+        );
+        let (b, lease_b) = block_slot_insert(
+            BlockParser::new(Options::default()),
+            false,
+            Options::default(),
+        );
         drop(lease_a); // the engine dropped that parse's context
-        let (c, lease_c) = block_slot_insert(BlockParser::new(Options::default()), false);
+        let (c, lease_c) = block_slot_insert(
+            BlockParser::new(Options::default()),
+            false,
+            Options::default(),
+        );
         assert_eq!(c, a, "the stale slot is the one reused");
         assert_ne!(c, b, "the live slot is left alone");
         assert!(block_slot_take(b).is_some());

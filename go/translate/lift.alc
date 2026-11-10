@@ -9,9 +9,12 @@
 ; The reader's tree is mdast's shape: a `document` whose `children` are
 ; blocks, a `table` among them whose `children` are `tableRow`s of
 ; `tableCell`s, and each cell's `children` the inline nodes of its text:
-; `text`, `inlineCode` and `html` with a `value`, `image` with an `alt`,
-; and `emphasis`, `strong`, `link` and the rest with `children` of their
-; own. `type` is each node's first member. The lift takes the first
+; `text`, `inlineCode` and `html` with a `value`, `image` and
+; `imageReference` with an `alt`, and `emphasis`, `strong`, `link`,
+; `linkReference` and the rest with `children` of their own. `type` is
+; each node's first member. The tree keeps references unresolved, so a
+; cell's `[a]` is a `linkReference` whether or not the document defines
+; `a`, and its text is `a`, without the brackets. The lift takes the first
 ; row's cells as the column labels and every later row as a record, and
 ; reads nothing else of the document: not the blocks around the table,
 ; and not the table's `align`. A cell is the text under it, every

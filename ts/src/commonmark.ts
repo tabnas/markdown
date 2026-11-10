@@ -18,11 +18,21 @@ import type { ParserOptions } from './options.ts'
  * Full two-phase parse (spec Appendix A): block structure first, then inlines
  * over the accumulated string content of each leaf, using the link reference
  * map the block phase collected.
+ *
+ * With `keepReferences`, the inline phase reads every bracketed label a
+ * definition could name as a reference, left unresolved, and the map is not
+ * consulted: the tree the AST is projected from (see ast.ts). Without it,
+ * references resolve as CommonMark says, which is the tree the HTML renderer
+ * needs.
  */
-export function parse(input: string, opts?: Partial<ParserOptions>): MdNode {
+export function parse(
+  input: string,
+  opts?: Partial<ParserOptions>,
+  keepReferences = false,
+): MdNode {
   const options = resolveOptions(opts)
   const { doc, refmap } = parseBlocks(input, options)
-  parseInlines(doc, refmap, options)
+  parseInlines(doc, refmap, options, keepReferences)
   return doc
 }
 

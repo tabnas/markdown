@@ -624,7 +624,7 @@ func TestGFMTableSplitParagraphEndsOnItsOwnLine(t *testing.T) {
 
 // TestGFMTableRowsShareOneBasis covers rows spanning their own text, so that
 // two rows of one table on equally indented lines report the same end column.
-// The header row is built in tryOpenTable and the body rows in finalizeTable;
+// The header row is built in tryOpenTable and the body rows in addLine;
 // measuring the header against the whole source line would put it two columns
 // past the body rows inside a block quote.
 func TestGFMTableRowsShareOneBasis(t *testing.T) {
@@ -1300,7 +1300,9 @@ func TestGFMDisabled(t *testing.T) {
 		t.Errorf("ParseTree with GFM on: doc.GFM = false")
 	}
 
-	// The AST carries no GFM shapes either.
+	// The AST carries no GFM shapes either: no task item and no autolink
+	// literals. `[x]` is a bracketed label, so the AST reads it as a
+	// reference, as it reads every one.
 	doc := jsonRoundMD(ParseDocument("- [x] www.a.com and a@b.co\n", cmOpts)).(map[string]any)
 	item := doc["children"].([]any)[0].(map[string]any)["children"].([]any)[0].(map[string]any)
 	if nil != item["checked"] {
@@ -1309,7 +1311,14 @@ func TestGFMDisabled(t *testing.T) {
 	want := []any{map[string]any{
 		"type": "paragraph",
 		"children": []any{
-			map[string]any{"type": "text", "value": "[x] www.a.com and a@b.co"},
+			map[string]any{
+				"type":          "linkReference",
+				"identifier":    "x",
+				"label":         "x",
+				"referenceType": "shortcut",
+				"children":      []any{map[string]any{"type": "text", "value": "x"}},
+			},
+			map[string]any{"type": "text", "value": " www.a.com and a@b.co"},
 		},
 	}}
 	if got := item["children"]; !reflect.DeepEqual(got, want) {

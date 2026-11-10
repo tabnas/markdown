@@ -45,6 +45,28 @@ function lexColumns(lex: any): string {
   return out.join(' ')
 }
 
+// blockColumns parses `src` and renders its line tokens and its end as
+// `name@row:col`, as the lexer made them. The block matcher runs the block
+// algorithm as it cuts each line, so it needs a parse's state and is
+// observed through one; the tokens of the blocks a line makes have no
+// width and stand where the next line starts, so the lines and the end are
+// where the column arithmetic shows.
+function blockColumns(src: string): string {
+  const out: string[] = []
+  let end = false
+  const j: any = new Tabnas().use(Markdown)
+  j.sub({
+    lex: (t: any) => {
+      // The end is handed to every rule that asks, so it is seen once.
+      if (end) return
+      if ('#LB' === t.name || '#ZZ' === t.name) out.push(t.name + '@' + t.rI + ':' + t.cI)
+      end = '#ZZ' === t.name
+    },
+  })
+  j.parse(src)
+  return out.join(' ')
+}
+
 test('block columns count characters, not bytes', () => {
   // Every case omits the trailing newline on purpose. A source that ends in
   // one takes the terminated branch, which resets cI to 1 and hides the
@@ -75,9 +97,7 @@ test('block columns count characters, not bytes', () => {
     ['astral', '# \u{1F600}', '#LB@1:1 #ZZ@1:5'],
   ]
   for (const [label, src, want] of cases) {
-    const j: any = new Tabnas().use(Markdown)
-    const lex = makeLex({ src: () => src, cfg: j.internal().config, opts: j.options, sub: {} } as any)
-    assert.equal(lexColumns(lex), want, label + ': ' + JSON.stringify(src))
+    assert.equal(blockColumns(src), want, label + ': ' + JSON.stringify(src))
   }
 })
 

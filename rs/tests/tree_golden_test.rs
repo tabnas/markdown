@@ -185,9 +185,9 @@ fn every_fixture_has_a_golden() {
     let dir = find_spec_dir(Some(Path::new(env!("CARGO_MANIFEST_DIR"))))
         .expect("test/spec is found above rs/");
     let files = load_spec_dir(&dir, &SpecOptions::default()).expect("the fixtures load");
-    assert_eq!(files.len(), 10, "the corpus holds ten fixture files");
+    assert_eq!(files.len(), 11, "the corpus holds eleven fixture files");
     let rows: usize = files.iter().map(|f| f.rows.len()).sum();
-    assert_eq!(rows, 83, "the corpus holds 83 rows");
+    assert_eq!(rows, 111, "the corpus holds 111 rows");
     for spec in &files {
         let stem = spec.file.strip_suffix(".tsv").unwrap_or(&spec.file);
         assert!(

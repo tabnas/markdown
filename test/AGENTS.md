@@ -5,7 +5,7 @@ change belongs in before you add to any of them.
 
 | Directory | Contents | Compares | Canonical for | Add to it? |
 |---|---|---|---|---|
-| [`spec/`](spec/) | 83 hand-written cases across 10 `*.tsv` files | the **JSON AST**, through the engine | TS ↔ Go ↔ Rust parity, and the shape of the public AST | **yes**, this is where cases of our own go |
+| [`spec/`](spec/) | 111 hand-written cases across 11 `*.tsv` files | the **JSON AST**, through the engine | TS ↔ Go ↔ Rust parity, and the shape of the public AST | **yes**, this is where cases of our own go |
 | [`spec/tree/`](spec/tree/) | one golden native-tree file per fixture file | the **native tree**, `sourcepos` included, engine-free | positional parity the AST projection cannot see | only by regenerating from the canonical TypeScript (`MD_TREE_GOLDEN=write npm test`) |
 | [`commonmark/`](commonmark/) | the vendored CommonMark 0.31.2 suite, 652 examples in `spec.json` | the **HTML** output, byte for byte | spec conformance | no — upstream data |
 | [`gfm/`](gfm/) | the extension sections of the GFM spec, 24 examples in `spec.json` | the **HTML** output, byte for byte | the GFM extensions | no — upstream data |
@@ -33,17 +33,28 @@ job: they score HTML, and the AST is a lossy projection of the tree the
 renderer walks, so a projection change can leave 652/652 and 24/24 both
 untouched.
 
-83 cases in 10 files, one construct each — except `mixed.tsv`, which owns
+111 cases in 11 files, one construct each — except `mixed.tsv`, which owns
 the cross-construct cases: `autolink.tsv` (23), `blockquote.tsv` (2),
 `code.tsv` (4), `heading.tsv` (7), `inline.tsv` (13), `list.tsv` (6),
-`mixed.tsv` (8), `paragraph.tsv` (4), `table.tsv` (11), `thematic.tsv`
-(5). Seven of `mixed.tsv`'s rows are the corpus-blind interaction cases
+`mixed.tsv` (8), `paragraph.tsv` (4), `reference.tsv` (28), `table.tsv`
+(11), `thematic.tsv` (5). Seven of `mixed.tsv`'s rows are the corpus-blind interaction cases
 (dx-report §43): link tails holding backticks against code spans, tables
 nested under block quotes (with a `gfm:false` twin), and trailing-space
 line breaks — behaviours no HTML corpus example exercises. Eight of those rows carry `listItem.checked`
 (six in `list.tsv`, one each in `blockquote.tsv` and `mixed.tsv`), which
 is the task-list extension's AST surface; if they fail, the fixtures are
 right and the runtime is wrong.
+
+The references the AST keeps unresolved are pinned by `reference.tsv`:
+`linkReference` and `imageReference` (`identifier`, `label`,
+`referenceType` of `full`, `collapsed` or `shortcut`) whether or not the
+document defines the label, each `definition` node where it stands (in a
+paragraph's place, in a list item, in a block quote, before a setext
+heading's text, several from one paragraph, a later duplicate kept), and
+the identifier's case folding (Unicode, a final sigma included) and
+whitespace collapsing. A row's value is what the tree keeps; what a
+reference resolves to is each runtime's references test's, over both
+HTML corpora.
 
 The table node types — `table` (with `align`), `tableRow` and
 `tableCell` — are pinned here too, by `table.tsv`: delimiter-row forms,

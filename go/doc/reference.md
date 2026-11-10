@@ -114,6 +114,7 @@ the `Parse`, `ParseDocument`, `ParseInline`, `ToHTML`, `ParseTree`, `ToAST` or
 | `DefaultOptions` | var | `Options{GFM: true, Breaks: false}` |
 | `ResolveOptions` | func | `func(opts map[string]any) Options` |
 | `ParseDocument` | func | `func(src string, opts Options) map[string]any` |
+| `ResolveReferences` | func | `func(doc map[string]any) map[string]any` |
 | `ParseInline` | func | `func(text string, opts Options) []any` |
 | `ToHTML` | func | `func(src string, opts Options) string` |
 | `ParseTree` | func | `func(src string, opts Options) *MdNode` |
@@ -140,7 +141,23 @@ the `Parse`, `ParseDocument`, `ParseInline`, `ToHTML`, `ParseTree`, `ToAST` or
 
 Runs both parse phases and projects the result to the map-based AST. Returns
 `map[string]any{"type": "document", "children": []any{…}}`. For `""` the `children` slice
-is empty and non-nil. Never panics on Markdown input.
+is empty and non-nil. Never panics on Markdown input. References stay unresolved: a
+bracketed label is a `linkReference` or an `imageReference`, and each link reference
+definition is a `definition` node where it stands. See [References](#references).
+
+### `ResolveReferences(doc)`
+
+Returns a new tree with the references of `doc` resolved, as CommonMark reads the
+document: a `linkReference` whose identifier a `definition` names becomes a `link`, an
+`imageReference` an `image`, with the first definition of an identifier winning; one
+with no definition becomes its source text, merged with the text beside it; and the
+`definition` nodes are gone. `doc` is left as it was. Iterative over the tree's depth.
+
+```go
+doc := tabnasmarkdown.ParseDocument("[a] [b]\n\n[a]: /u", opts)
+fmt.Println(tabnasmarkdown.ResolveReferences(doc)["children"])
+// [map[children:[map[children:[map[type:text value:a]] title:<nil> type:link url:/u] map[type:text value: [b]]] type:paragraph]]
+```
 
 ### `ParseInline(text, opts)`
 
@@ -168,12 +185,14 @@ projecting or rendering. Identical to `Parse`. See [Native tree](#native-tree).
 ### `Parse(input, opts)`
 
 The engine-free entry point. Runs `parseBlocks` then `parseInlines` and returns the root
-`*MdNode`.
+`*MdNode`, with its references resolved as CommonMark reads them.
 
 ### `ToAST(doc, opts)`
 
-Projects a tree that has been through both phases into the map-based AST.
-`ToAST(Parse(src, opts), opts)` is exactly what `ParseDocument(src, opts)` does.
+Projects a tree that has been through both phases into the map-based AST, with a
+`definition` node for each link reference definition where it stood.
+`ToAST(Parse(src, opts), opts)` projects the tree CommonMark reads, its references
+resolved; `ParseDocument(src, opts)` projects a tree whose inline phase kept them.
 
 ### `RenderHTML(doc, opts)`
 
@@ -193,18 +212,29 @@ to the engine instance:
 | Setting | Value |
 |---|---|
 | `Rule.Start` | `"markdown"` |
-| `String.Lex` | `false` |
-| `Comment.Lex` | `false` |
-| `Number.Lex` | `false` |
-| `Value.Lex` | `false` |
+| `Space.Lex`, `Line.Lex`, `String.Lex`, `Comment.Lex`, `Number.Lex`, `Value.Lex`, `Text.Lex` | `false` |
+| `Lex.Match["mdBlock"]` | The one matcher: cuts a physical line through the window of source the lexer holds and hands out the tokens of the blocks it decides. |
 | `Lex.EmptyResult` | `map[string]any{"type": "document", "children": []any{}}` |
+| `Parse.Prepare["md-reset"]` | Seeds a fresh block parser for each parse. |
+| `Rule.Exclude` | `"gfm"` when `gfm` is `false`. |
 
-It defines one rule, `markdown`. The rule spec is cleared with `rs.Clear()` first, so
-inherited `val` alts do not try to match a leading `#`. Its `BO` action reads the whole
-source from `ctx.Src` and sets `r.Node = ParseDocument(src, opts)`. Its open alts are
-`[{S: {{TinAA}}, R: "markdown"}, {}]` and its close alts are `[{S: {{TinZZ}}}, {}]`; these
-consume the token stream so the engine's trailing-content check passes. The token stream
-itself is not read by the parser.
+The `mdBlock` matcher runs the block algorithm over each line. The blocks the line closes
+and opens come back as tokens of no width at the line's start, ahead of the line's own
+`#LB` token: a container's token (`#BQ` block quote, `#LS` list, `#LI` list item, `#PA`
+paragraph, `#HD` heading, `#TB` table, `#TR` table row, `#TC` table cell, and the inline
+containers) carries the fields before its `children`, and `#EN` the fields after them; a
+leaf's token (`#HR`, `#CD`, `#HT`, `#DF`, and the inline leaves) carries the whole node.
+A paragraph, a heading, and a table row are parsed inline as they close.
+
+The rules are `markdown` (pushes `children`, closes on `#ZZ`), `children` (one node or
+one `#LB` an iteration, going on by replacement, so a repetition adds no rule depth), and
+one rule per node type, named for it (`blockquote`, `list`, `listItem`, `paragraph`,
+`heading`, `table`, `tableRow`, `tableCell`, `emphasis`, `strong`, `delete`, `link`,
+`linkReference`, `thematicBreak`, `code`, `html`, `definition`, `text`, `inlineCode`,
+`break`, `image`, `imageReference`). Each rule spec is cleared with `rs.Clear()` first,
+so inherited `val` alts do not try to match a leading `#`. A container's rule opens on
+its token, pushes `children` and closes on `#EN`; a leaf's opens on its token and closes
+at once. The GFM node rules' alternates on `children` carry `G: "gfm"`.
 
 The options map is passed through `ResolveOptions`, so `Use` and `UseDefaults` both fill
 omitted keys from `DefaultOptions`. The return value is always `nil`.
@@ -214,8 +244,11 @@ document node, identical to `ParseDocument(src, opts)`.
 
 ### `Make(options...)`
 
-Returns `parser.Make()` with `Markdown` installed, the counterpart of
-`new Tabnas().use(Markdown)` in TypeScript. At most the first `options` map is used.
+Returns `parser.Make()` with `Markdown` installed and `Lex.Window` declared, the
+counterpart of `make()` in TypeScript. At most the first `options` map is used. The one
+matcher reads the source through the window the lexer holds, so a parse from a reader
+(`ParseReader`) holds the lines it has not finished with rather than the whole source.
+The plugin itself leaves the option to the parser that installs it.
 
 ```go
 j := tabnasmarkdown.Make()
@@ -339,17 +372,29 @@ neither carries meaning.
 | `type` | `string` | `"list"` |
 | `ordered` | `bool` | |
 | `start` | `int` or `nil` | The start number for ordered lists; `nil` for bullet lists, marshalling to `null`. |
-| `spread` | `bool` | `true` when the list is loose, that is, any item is followed by a blank line or directly contains two blocks separated by one. mdast semantics. |
 | `children` | `[]any` | `listItem` nodes only. Non-nil. |
+| `spread` | `bool` | `true` when the list is loose, that is, any item is followed by a blank line or directly contains two blocks separated by one. mdast semantics. |
 
 **`listItem`**
 
 | Key | Go type | Notes |
 |---|---|---|
 | `type` | `string` | `"listItem"` |
+| `children` | `[]any` | Block nodes. Non-nil. |
 | `spread` | `bool` | `true` when two of the item's own children are separated by a blank line. Derived from the block phase's `SourcePos` line ranges. |
 | `checked` | `bool` or `nil` | GFM task list item state: `true` for `- [x]`, `false` for `- [ ]`, `nil` for an ordinary item, and so `nil` on every item when `GFM` is off. mdast's field. On the native tree it is the `Checked` + `HasChecked` pair. |
-| `children` | `[]any` | Block nodes. Non-nil. |
+
+**`definition`**. A link reference definition, where it stands among the blocks: in a
+paragraph's place, or ahead of the paragraph or setext heading whose leading lines it
+took. Every definition is a node, a label's second one too.
+
+| Key | Go type | Notes |
+|---|---|---|
+| `type` | `string` | `"definition"` |
+| `identifier` | `string` | The label normalized as CommonMark matches labels (white space collapsed and trimmed, case folded), in lower case. A reference with the same identifier names it. |
+| `label` | `string` | The label's text after its escapes and character references are read. |
+| `url` | `string` | As for `link`. |
+| `title` | `string` or `nil` | `nil` when absent. |
 
 **`code`**. Fenced and indented code blocks.
 
@@ -436,8 +481,8 @@ fmt.Println(string(b))
 | `type` | `string` | `"inlineCode"` |
 | `value` | `string` | Line endings converted to spaces; one leading and one trailing space stripped when the content is not all spaces. Escapes and entities are *not* resolved inside a code span. |
 
-**`link`**. Inline, reference, collapsed, shortcut, and autolink forms all produce this
-node.
+**`link`**. Inline links and autolinks produce this node; a full, collapsed, or shortcut
+reference is a `linkReference`, and `ResolveReferences` makes it a `link`.
 
 | Key | Go type | Notes |
 |---|---|---|
@@ -454,6 +499,27 @@ node.
 | `url` | `string` | As for `link`. |
 | `title` | `string` or `nil` | |
 | `alt` | `string` | The description flattened to plain text: text, code-span and raw-HTML literals kept, markup wrappers dropped, line breaks as `\n`. There is no `children` key. |
+
+**`linkReference`** (`[text][label]`, `[label][]`, `[label]`). Whether or not the document
+defines the label.
+
+| Key | Go type | Notes |
+|---|---|---|
+| `type` | `string` | `"linkReference"` |
+| `identifier` | `string` | As for `definition`. |
+| `label` | `string` | The label's text: the second bracket's for a full reference, and the link text's for the others. |
+| `referenceType` | `string` | `"full"`, `"collapsed"` or `"shortcut"`. |
+| `children` | `[]any` | Non-nil. |
+
+**`imageReference`** (`![alt][label]`, `![label][]`, `![label]`)
+
+| Key | Go type | Notes |
+|---|---|---|
+| `type` | `string` | `"imageReference"` |
+| `identifier` | `string` | As for `definition`. |
+| `label` | `string` | As for `linkReference`. |
+| `referenceType` | `string` | `"full"`, `"collapsed"` or `"shortcut"`. |
+| `alt` | `string` | As for `image`. |
 
 **`break`**. A hard line break, or a soft one when `Breaks: true`.
 
@@ -480,6 +546,19 @@ section. One node per tag, not per element.
 fmt.Println(tabnasmarkdown.ParseDocument("Hello <b>bold</b>", opts))
 // map[children:[map[children:[map[type:text value:Hello ] map[type:html value:<b>] map[type:text value:bold] map[type:html value:</b>]] type:paragraph]] type:document]
 ```
+
+### References
+
+The AST keeps references unresolved, as mdast does, so a block's tree depends on nothing
+after it: a bracketed label that could be a reference is a `linkReference` or an
+`imageReference`, and a definition is a `definition` node. `ResolveReferences` gives the
+tree CommonMark reads for every example of both corpora but five CommonMark examples
+(512, 523, 528, 569, and 571), where a label with no definition decided how the text
+around it nests: the label reads as a reference, so emphasis cannot cross it, a link's
+text that holds it is no link, and `[foo][bar][baz]` reads as `[foo][bar]` and then
+`[baz]`. Under `GFM: true` a task list marker is read before the paragraph is parsed, so
+`- [x] done` is a task item whether or not `x` is defined. The HTML output and the native
+tree from `ParseTree` resolve as CommonMark does.
 
 ### What the AST does not carry
 
@@ -865,12 +944,9 @@ fmt.Printf("%q\n", tabnasmarkdown.ToHTML("H~2~O\n", tabnasmarkdown.Options{GFM: 
 ## Grammar
 
 The grammar is registered in code, not loaded from a file. The plugin instance
-carries the `markdown` rule (pushes `line`; closes on `#ZZ`, where the finish
-action projects the AST) and the `line` rule (one `#LB` token per physical
-line, tail-recursing; a G-"gfm"-tagged arming alt ahead of the base one). The
-`#LB` token's `Use["md"]` carries an exported `*LineInfo` (`Text`, `Blank`,
-`TblArm`) so downstream alt conditions can read the line without private
-access.
+carries the `markdown` rule (pushes `children`; closes on `#ZZ`), the `children` rule
+(one node or one `#LB` line an iteration, a replace loop; the GFM nodes' alternates
+tagged `G: "gfm"`) and a rule for each node type. See [`Markdown`](#markdown-plugin).
 The nested inline instance carries the `inline` rule over a twelve-token
 alphabet produced by its matcher set (`engineinline.go`). The railroad
 diagrams `ts/doc/grammar.svg` and `ts/doc/grammar-inline.svg` are generated
