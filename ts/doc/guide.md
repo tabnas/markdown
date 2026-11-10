@@ -459,7 +459,7 @@ go test -run TestCommonMarkSpec -v ./...
 go test -run TestGFMSpec -v ./...
 ```
 
-The 75 shared AST fixtures in `test/spec/*.tsv` are asserted by every runtime:
+The 111 shared AST fixtures in `test/spec/*.tsv` are asserted by every runtime:
 `npm test` (after `npm run build`) on the TypeScript side, `go test ./...` on
 the Go side, and `cargo test` on the Rust side. They pin the AST through the
 plugin path; they are a regression
@@ -476,23 +476,20 @@ drops and the HTML does not encode.
 The GFM dialect reaches this plugin's grammar through public engine seams,
 and a downstream dialect extends it the same three ways:
 
-* **Inject a group-tagged alt.** The `line` rule's table-arming alt is
-  prepended ahead of the base alt, tagged `g: 'gfm'`, and gated by a
-  condition on the `#LB` token's `use` payload. Your own block construct
-  follows the pattern:
+* **Inject a group-tagged alt.** Each node of the AST is a rule named for
+  its type, and the `children` rule pushes it on its token. The GFM nodes'
+  alternates on `children` (a table, its rows and cells, a deletion) are
+  tagged `g: 'gfm'`. A node of your own dialect, whose token a matcher you
+  register ahead of `mdBlock` makes, follows the pattern: a rule for the
+  node, an alternate on `children` that pushes it, and one on the close of
+  `children` that goes on past it:
 
 ```js ignore
-tn.rule('line', (rs) =>
-  rs.open(
-    [{
-      s: '#LB',
-      c: (_r, ctx) => myConstructCouldStartHere(ctx.t0.use.text),
-      r: 'line',
-      a: myArmingAction,
-      g: 'mydialect',
-    }],
-    { prepend: true },
-  ),
+tn.rule('myNode', (rs) => rs.clear().open([{ s: '#MY', a: myLeafAction }]).close([{}]))
+tn.rule('children', (rs) =>
+  rs
+    .open([{ s: '#MY', b: 1, p: 'myNode', g: 'mydialect' }], { prepend: true })
+    .close([{ s: '#MY', b: 1, r: 'children', g: 'mydialect' }], { prepend: true }),
 )
 ```
 

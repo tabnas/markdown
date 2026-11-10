@@ -57,6 +57,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 reading the tree. Numbers in the AST are `f64`, so a heading's `depth`
 reads as `1.0` there; the section on differences below has the detail.
 
+The AST keeps references unresolved, as mdast does. A bracketed label is
+a `linkReference` or an `imageReference` naming it, even where the
+document does not define it, and each link reference definition is a
+`definition` node where it stands, so the tree of a block depends on
+nothing after it. `resolve_references` gives the tree back with the
+references resolved, as CommonMark reads the document: a defined
+reference as its link or image, the first definition of a label
+winning, an undefined one as its source text, and the definitions gone.
+
+```rust
+use tabnas_markdown::{parse_document, resolve_references, Options};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let doc = parse_document("[a]\n\n[a]: /u", &Options::default());
+    let json = doc.to_json();
+    assert_eq!(json["children"][0]["children"][0]["type"], "linkReference");
+    assert_eq!(json["children"][0]["children"][0]["referenceType"], "shortcut");
+    assert_eq!(json["children"][1]["type"], "definition");
+
+    let resolved = resolve_references(&doc).to_json();
+    assert_eq!(resolved["children"][0]["children"][0]["type"], "link");
+    assert_eq!(resolved["children"][0]["children"][0]["url"], "/u");
+    Ok(())
+}
+```
+
+Where a label with no definition decided how the text around it nests,
+the resolved tree is not the one CommonMark reads: five of the 652
+CommonMark examples (512, 523, 528, 569, and 571). The HTML output
+resolves as CommonMark does.
+
 HTML is opt-in, through `to_html`. The CommonMark suite scores HTML
 output, so the renderer is what makes the 652/652 claim measurable; that
 it is useful to callers is a consequence:
@@ -120,16 +151,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### On an engine instance
 
 The plugin path is what `tabnas` callers use, and the engine parse is
-the parse: a custom matcher lexes one token per physical line and the
-rules feed the same block algorithm. `make` builds an instance with the
-plugin installed under the defaults, and its `parse` returns the same
-AST:
+the parse: a custom matcher cuts the source a line at a time and feeds
+each line to the same block algorithm, and the grammar's rules open and
+close every node of the AST as the lines decide it. `make` builds an
+instance with the plugin installed under the defaults, and its `parse`
+returns the same AST:
 
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let parser = tabnas_markdown::make();
     let doc = parser.parse("- [x] done")?;
     assert_eq!(doc.to_json()["children"][0]["children"][0]["checked"], true);
+    Ok(())
+}
+```
+
+Nothing but that matcher reads the source, so `make` declares
+`lex.window`, and a parse from a reader holds the lines it has not
+finished with rather than the whole text:
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let parser = tabnas_markdown::make();
+    let doc = parser.parse_reader("# Hello\n\nHello *world*".as_bytes())?;
+    assert_eq!(doc.to_json()["children"][0]["type"], "heading");
     Ok(())
 }
 ```
@@ -302,14 +347,16 @@ Or, from the repository root, `make test-rs`, which adds `cargo clippy`.
 For what CI would say, including formatting and the lockfile check, run
 `ci/rust/run.sh`.
 
-The suite runs the shared `../test/spec/*.tsv` AST fixtures (83 rows in
-10 files, through the same `tabnas-support` runner the TypeScript and Go
+The suite runs the shared `../test/spec/*.tsv` AST fixtures (111 rows in
+11 files, through the same `tabnas-support` runner the TypeScript and Go
 suites use), the native-tree goldens in `../test/spec/tree/`, the
 652-example CommonMark corpus and the 24-example GFM corpus, each graded
 twice (engine-free and through the plugin), the differential gate
 between those two paths, and the in-language tests: the plugin surface,
 the pure recognisers, the entity table, adversarial input, token
-columns, the inline driver's contract, scaling, and the version sites.
+columns, the inline driver's contract, scaling, a parse from a reader
+at windows of a few characters, the rule depth of ten thousand repeated
+blocks, the references and their resolution, and the version sites.
 The Rust examples on this page run as doctests.
 
 ## License

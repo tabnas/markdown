@@ -93,11 +93,58 @@ const tn = new Tabnas().use(Markdown)
 tn.parse('# Hello') // => { type: 'document', children: [ { type: 'heading', depth: 1, children: [ { type: 'text', value: 'Hello' } ] } ] }
 ```
 
+**The AST keeps references unresolved, as mdast does.** A bracketed label is a
+`linkReference` or an `imageReference` naming it, whether or not the document defines it,
+and each link reference definition is a `definition` node where it stands, so the tree
+of a block depends on nothing after it. `resolveReferences()` gives the tree back with
+the references resolved, as CommonMark reads the document: a defined reference as its
+link or image, the first definition of a label winning, an undefined one as its source
+text, and the definitions gone.
+
+```js
+import { parseDocument, resolveReferences } from '@tabnas/markdown'
+
+const doc = parseDocument('[a]\n\n[a]: /u')
+
+doc.children[0].children[0] // => { type: 'linkReference', identifier: 'a', label: 'a', referenceType: 'shortcut', children: [ { type: 'text', value: 'a' } ] }
+doc.children[1] // => { type: 'definition', identifier: 'a', label: 'a', url: '/u', title: null }
+resolveReferences(doc).children[0].children[0] // => { type: 'link', url: '/u', title: null, children: [ { type: 'text', value: 'a' } ] }
+```
+
+In Go it is `ResolveReferences()`, and in Rust `resolve_references()`. A label with no
+definition still reads as a reference while the text around it nests, so in five of the
+652 CommonMark examples (512, 523, 528, 569, and 571) the resolved tree differs from the
+tree CommonMark reads: emphasis that would have crossed the label, or a link whose text
+holds it. The HTML output resolves as CommonMark does, and is unchanged.
+
 There is a third output for callers who want to walk or mutate before rendering:
 `parseTree()` / `ParseTree()` returns the native CommonMark node tree, which keeps
 `sourcepos` / `SourcePos` on block nodes. `renderHTML()` / `RenderHTML()` renders a tree
 back to HTML, so parse, transform and render are three separate steps when you need them
 to be. See the reference for each runtime.
+
+## A window at a time
+
+The engine parse decides each block as its lines arrive, and the grammar's rules open and
+close every node of the AST: a container's rule opens on the line that starts it and
+closes on the line that ends it, and a leaf is complete when it closes. Nothing but the
+one line matcher reads the source, so the parser `make()` returns (Go `Make()`, Rust
+`make()`) declares `lex.window`, and a parse from a reader (`parseReader`) holds the lines
+it has not finished with rather than the whole text:
+
+```js
+import { make } from '@tabnas/markdown'
+
+const tn = make()
+
+tn.parse('# Hello').children[0].type // => 'heading'
+```
+
+The package's manifest, `tabnas.plugin.json`, names three translation parts written in
+[alchemy](https://github.com/tabnas/alchemy): `alchemy/transduce.alc`, which turns the
+grammar's rule passes into the document's events a block at a time, so a host such as
+`dmog translate` streams a Markdown document rather than reading it whole, and the lift
+and render that read and write a table's records.
 
 ## Install
 
@@ -234,11 +281,22 @@ All three report 24/24.
 
 Parity between the runtimes is checked separately: 676 examples (652 CommonMark + 24 GFM)
 across 4 option combinations (`gfm` x `breaks`) is 2704 records, with 0 differing ASTs and
-0 differing HTML outputs. The 83 shared AST fixtures in [`test/spec/`](test/spec/) also run
+0 differing HTML outputs. The 111 shared AST fixtures in [`test/spec/`](test/spec/) also run
 in all three, and so do the golden native-tree snapshots in `test/spec/tree/`.
 
 ## Changes you may notice
 
+* References stay unresolved in the AST, as mdast keeps them. `[a]` is a `linkReference`
+  and `![a]` an `imageReference` (`identifier`, `label`, `referenceType`) even where the
+  document does not define `a`, and each definition is a `definition` node where it
+  stands. A defined reference was a `link` or an `image` and an undefined one was text;
+  `resolveReferences()` gives that tree back. Under `gfm: false`, `- [x] done` is a list
+  item whose paragraph holds a `linkReference`, where it held the text `[x] done`.
+* A list's `spread` follows its `children`, and a list item's `spread` and `checked`
+  follow its `children`, in the order a stream writes them: each is known only once the
+  children are read. The values are the same.
+* TypeScript has `make()`, as Go has `Make()` and Rust `make()`: the parser this package
+  makes, which reads a source a window at a time.
 * `spread` on lists and list items now follows mdast semantics. It was previously latched
   by whether the file ended in a newline, so `- a\n- b\n` and `- a\n\n- b\n` produced
   identical output and the field carried no information. It now does.
@@ -247,7 +305,8 @@ in all three, and so do the golden native-tree snapshots in `test/spec/tree/`.
 * Tables add three public AST node types: `table`, `tableRow` and `tableCell`. Input that
   previously came back as a paragraph of pipe characters is now a `table` node under the
   default `gfm:true`.
-* Otherwise the AST is unchanged: the `test/spec/*.tsv` fixtures pass untouched.
+* Otherwise the AST is unchanged: the `test/spec/*.tsv` fixtures pass untouched, but for
+  the one row whose bracketed label is now a reference.
 
 ## Documentation
 
@@ -272,10 +331,10 @@ README covers use, install, and the differences from the TypeScript.
 | [`ts/`](ts/) | TypeScript / JavaScript implementation (canonical). |
 | [`go/`](go/) | Go port. |
 | [`rs/`](rs/) | Rust port, the `tabnas-markdown` crate. Library only. |
-| [`test/spec/`](test/spec/) | 83 shared AST fixtures, run by all three runtimes. |
+| [`test/spec/`](test/spec/) | 111 shared AST fixtures, run by all three runtimes. |
 | [`test/commonmark/`](test/commonmark/) | Vendored CommonMark 0.31.2 spec suite (652 examples). |
 | [`test/gfm/`](test/gfm/) | Vendored GFM extension corpus (24 examples), run by all three runtimes. |
-| [`ts/doc/grammar.svg`](ts/doc/grammar.svg), [`ts/doc/grammar-inline.svg`](ts/doc/grammar-inline.svg) | Railroad diagrams of the LIVE grammar (the block instance's `markdown`/`line` rules and the inline instance's twelve-token alphabet), drawn from real plugin instances by [`ts/tools/gen-railroad.mjs`](ts/tools/gen-railroad.mjs). |
+| [`ts/doc/grammar.svg`](ts/doc/grammar.svg), [`ts/doc/grammar-inline.svg`](ts/doc/grammar-inline.svg) | Railroad diagrams of the LIVE grammar (the block instance's `markdown` and `children` rules and a rule for each node, and the inline instance's twelve-token alphabet), drawn from real plugin instances by [`ts/tools/gen-railroad.mjs`](ts/tools/gen-railroad.mjs). |
 
 > **Rescope note:** this package was previously a CSV-family record parser (copied from
 > `@tabnas/csv`). It now parses prose Markdown; record parsing is available via

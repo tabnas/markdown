@@ -92,25 +92,25 @@ needs a special printer:
       "type": "list",
       "ordered": false,
       "start": null,
-      "spread": false,
       "children": [
         {
           "type": "listItem",
-          "spread": false,
-          "checked": null,
           "children": [
             { "type": "paragraph", "children": [{ "type": "text", "value": "one" }] }
-          ]
+          ],
+          "spread": false,
+          "checked": null
         },
         {
           "type": "listItem",
-          "spread": false,
-          "checked": null,
           "children": [
             { "type": "paragraph", "children": [{ "type": "text", "value": "two" }] }
-          ]
+          ],
+          "spread": false,
+          "checked": null
         }
-      ]
+      ],
+      "spread": false
     }
   ]
 }

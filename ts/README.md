@@ -73,6 +73,23 @@ const tn = new Tabnas().use(Markdown)
 tn.parse('# Hello') // => { type: 'document', children: [ { type: 'heading', depth: 1, children: [ { type: 'text', value: 'Hello' } ] } ] }
 ```
 
+`make()` returns that engine, with `lex.window` declared, so `tn.parseReader()` holds the
+lines it has not finished with rather than the whole source.
+
+The AST keeps references unresolved, as mdast does: a bracketed label is a
+`linkReference` or an `imageReference`, defined or not, and each definition a
+`definition` node where it stands. `resolveReferences()` resolves them as CommonMark
+reads the document.
+
+```js
+import { parseDocument, resolveReferences } from '@tabnas/markdown'
+
+const doc = parseDocument('[a]\n\n[a]: /u')
+
+doc.children[0].children[0].type // => 'linkReference'
+resolveReferences(doc).children // => [ { type: 'paragraph', children: [ { type: 'link', url: '/u', title: null, children: [ { type: 'text', value: 'a' } ] } ] } ]
+```
+
 `parseTree()` returns the native CommonMark node tree instead. It keeps `sourcepos` on
 block nodes, and can be walked or mutated and then rendered. See the
 [reference](doc/reference.md).

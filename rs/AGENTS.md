@@ -10,11 +10,11 @@ this crate.
 
 | Path | |
 |---|---|
-| `src/lib.rs` | plugin wiring and the public surface (the `markdown.ts` role): `VERSION`, `markdown()`, `plugin()`, `make()`, `make_with()`, `parse()`, `parse_keep_tree()`, and the engine-free `parse_document()` / `to_html()` / `parse_tree()` / `parse_inline()`; also the `#[cfg(doctest)]` include of `README.md` |
+| `src/lib.rs` | plugin wiring and the public surface (the `markdown.ts` role): `VERSION`, `markdown()`, `plugin()`, `make()`, `make_with()`, `parse()`, `parse_keep_tree()`, the engine-free `parse_document()` / `to_html()` / `parse_tree()` / `parse_inline()`, and `resolve_references()` (from `ast.rs`); also the `#[cfg(doctest)]` include of `README.md` |
 | `src/commonmark.rs` | engine-free entry: block phase, then inline phase |
 | `src/block.rs`, `src/inline.rs`, `src/ast.rs`, `src/html.rs`, `src/node.rs`, `src/common.rs`, `src/options.rs` | the same split as `go/`, name for name |
 | `src/entities.rs` | GENERATED from `ts/src/entities.ts` (2125 entries, sorted for binary search); `tests/entities_test.rs` pins it entry for entry |
-| `src/engine_block.rs` | the `mdLine` matcher, the `parse.prepare` hook, the `line` rule actions, the finish action, and the thread-local block-state slab |
+| `src/engine_block.rs` | the `mdBlock` matcher, which cuts a line through the lexer's window and hands out the tokens of the blocks it decides; the `parse.prepare` hook; the node rules' actions (begin, open, close, leaf) and the finish action; and the thread-local block-state slab |
 | `src/engine_inline.rs` | the inline engine instance: twelve matchers over the shared `InlineParser`, plus `inlTilde` under `gfm`, one instance per install |
 | `tests/parity_test.rs` | every `../test/spec/*.tsv` through `tabnas_support::Runner`, a fresh `make_with(&opts)` per row; no file is exempt |
 | `tests/tree_golden_test.rs` | `../test/spec/tree/*.json`, the native tree with `sourcepos`; fails when a fixture file has no golden |
@@ -24,7 +24,10 @@ this crate.
 | `tests/markdown_test.rs` | the plugin surface end to end, and the shared default instance across threads |
 | `tests/recognizer_test.rs`, `tests/entities_test.rs`, `tests/robust_test.rs`, `tests/engine_columns_test.rs`, `tests/engine_inline_test.rs`, `tests/perf_test.rs`, `tests/version_test.rs` | the Go test files of the same names, ported |
 | `tests/layering_test.rs` | the layering rule below, asserted over `src/*.rs` with comments stripped |
-| `translate/`, `tests/translate_test.rs` | the crate's copies of `../tabnas.plugin.json`, `../alchemy/lift.alc` and `../alchemy/render.alc`, written by `npm run embed` in `../ts` and embedded by `src/lib.rs` as `manifest_text()`, `lift_text()` and `render_text()` (a packaged crate holds nothing outside `rs/`); the test holds each copy to its file, the embed the manifest names to the one `translate()` carries (none, for Markdown), the manifest's `translate` object to its shape, root and schema, and every definition of the two parts to the `markdown-` prefix, with no name defined in both |
+| `tests/reader_test.rs` | a parse from a reader against the parse of the same text, on every fixture row and corpus document, in pieces of 1, 3 and 64 bytes and at windows of a few characters (`parse_reader_with_sizes`), with long lines, code blocks and tables, and in time linear in the length |
+| `tests/repeat_test.rs` | ten thousand of each repeated construct at the rule depth one needs, and real nesting still deepening it |
+| `tests/references_test.rs` | `resolve_references` against the tree CommonMark reads, over both corpora, with the five CommonMark examples it resolves otherwise registered |
+| `translate/`, `tests/translate_test.rs` | the crate's copies of `../tabnas.plugin.json`, `../alchemy/transduce.alc`, `../alchemy/lift.alc` and `../alchemy/render.alc`, written by `npm run embed` in `../ts` and embedded by `src/lib.rs` as `manifest_text()`, `transduce_text()`, `lift_text()` and `render_text()` (a packaged crate holds nothing outside `rs/`); the test holds each copy to its file, the embed the manifest names to the one `translate()` carries (none, for Markdown), the manifest's `translate` object to its shape, root and schema, the transducer it names to the one the crate embeds, and every definition of the parts to the `markdown-` prefix, with no name defined in two |
 | `tests/common/mod.rs` | the corpus loaders (which FAIL on a missing or short corpus), the `to_json` number normaliser, the fuzz generator |
 | `README.md` | the crate front page, doctested |
 
@@ -102,9 +105,9 @@ alphabet alone; the matcher counts are a Rust-side addition.
 
 ## `gfm` is subtracted, not branched
 
-The GFM alt on the `line` rule carries `g: "gfm"` and `markdown()` sets
-`rule.exclude = "gfm"` when the option is off, so the base dialect is the
-grammar minus the tagged alts. The block algorithm still reads
+The GFM nodes' alternates on the `children` rule carry `g: "gfm"` and
+`markdown()` sets `rule.exclude = "gfm"` when the option is off, so the
+base dialect is the grammar minus the tagged alts. The block algorithm still reads
 `opts.gfm` for the table and task-list decisions and the renderer reads
 it for the tag filter; the tag is the ENGINE-visible seam.
 `tests/engine_inline_test.rs` and `tests/gfm_test.rs::gfm_disabled` pin
@@ -127,7 +130,8 @@ absence reads as a decision rather than an oversight.
 
 **Token descriptions.** `ts/src/markdown.ts` and
 `ts/src/engine-inline.ts` register a `config.modify` hook that hangs a
-human description on `#LB` and on the inline tokens, which
+human description on `#LB`, `#EN`, the node tokens and the inline
+tokens, which
 `@tabnas/railroad` reads off a live instance to label the diagrams in
 `ts/doc/`. There is no counterpart here, and none is available: the Rust
 engine has a `config_modify` hook but no `token_desc` field for one to
@@ -226,7 +230,7 @@ a paragraph from here to a published page does not fail the gate.
 ```bash
 cd rs
 cargo build --all-targets
-cargo test --all-targets          # 16 binaries: fixtures, goldens, both graders twice, the rest
+cargo test --all-targets          # 19 binaries: fixtures, goldens, both graders twice, the rest
 cargo test --doc                  # crate docs plus the README fences
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --test commonmark_test -- --nocapture     # the 652/652 table

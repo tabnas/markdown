@@ -671,7 +671,7 @@ cd ts
 npm run conformance
 ```
 
-The 75 fixtures pin the AST through the plugin path in every runtime; they are a
+The 111 fixtures pin the AST through the plugin path in every runtime; they are a
 regression net, not a proof that the runtimes agree. The claim that they agree
 rests on a wider comparison: all 652 spec inputs under all four `GFM` × `Breaks`
 combinations (2608 records) with both the AST and the HTML compared on each,
@@ -683,23 +683,23 @@ drops and the HTML does not encode.
 The GFM dialect reaches this plugin's grammar through public engine seams,
 and a downstream dialect extends it the same three ways:
 
-* **Inject a group-tagged alt.** The `line` rule's table-arming alt is
-  prepended ahead of the base alt, tagged `G: "gfm"`, and gated by a
-  condition on the `#LB` token's `use` payload. Your own block construct
-  follows the pattern:
+* **Inject a group-tagged alt.** Each node of the AST is a rule named for
+  its type, and the `children` rule pushes it on its token. The GFM nodes'
+  alternates on `children` (a table, its rows and cells, a deletion) are
+  tagged `G: "gfm"`. A node of your own dialect, whose token a matcher you
+  register ahead of `mdBlock` makes, follows the pattern: a rule for the
+  node, an alternate on `children` that pushes it, and one on the close of
+  `children` that goes on past it:
 
 ```go ignore
-j.Rule("line", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
-	rs.AddOpen(&tabnas.AltSpec{
-		S: [][]tabnas.Tin{{lbTin}},
-		C: func(_ *tabnas.Rule, ctx *tabnas.Context) bool {
-			info := ctx.T0.Use["md"].(*tabnasmarkdown.LineInfo)
-			return myConstructCouldStartHere(info.Text)
-		},
-		R: "line",
-		A: myArmingAction,
-		G: "mydialect",
-	})
+j.Rule("myNode", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+	rs.Clear()
+	rs.AddOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{myTin}}, A: myLeafAction})
+	rs.AddClose(&tabnas.AltSpec{})
+})
+j.Rule("children", func(rs *tabnas.RuleSpec, _ *tabnas.Parser) {
+	rs.PrependOpen(&tabnas.AltSpec{S: [][]tabnas.Tin{{myTin}}, B: 1, P: "myNode", G: "mydialect"})
+	rs.PrependClose(&tabnas.AltSpec{S: [][]tabnas.Tin{{myTin}}, B: 1, R: "children", G: "mydialect"})
 })
 ```
 
